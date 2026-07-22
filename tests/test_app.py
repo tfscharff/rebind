@@ -20,3 +20,16 @@ def test_health_reports_the_rendering_backend():
 
     assert body["renderer"] == "weasyprint"
     assert body["renderer_available"] is True
+
+
+def test_render_smoke_endpoint_renders_a_real_pdf():
+    """A bare import (see /health) doesn't prove rendering works; this exercises the real path,
+    including an embedded raster image -- the path most likely to need an un-vendored library."""
+    client = TestClient(create_app())
+
+    body = client.post("/render-smoke").json()
+
+    assert body["success"] is True
+    assert body["error"] is None
+    assert isinstance(body["size_bytes"], int)
+    assert body["size_bytes"] > 0

@@ -33,7 +33,10 @@ packages = ["src/rebind"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v"
+addopts = "-v -m \"not packaging\""
+markers = [
+    "packaging: slow, opt-in tests that build the frozen PyInstaller bundle and exercise it. Run with `uv run pytest -m packaging`.",
+]
 
 [tool.ruff]
 line-length = 100
