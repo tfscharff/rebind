@@ -2,7 +2,25 @@ from pathlib import Path
 
 import pytest
 
+from rebind.render import render_html_to_pdf
 from rebind.validate import ValidationResult, _parse_validation_report, validate_pdf_ua
+
+
+def test_conformant_pdf_is_compliant(tmp_path: Path, verapdf_exe: Path):
+    """The wrapper must also report True on a genuinely conformant document.
+
+    Every prior test here only exercised non-compliant PDFs, so a wrapper with an
+    inverted check would have passed all of them. This closes that blind spot.
+    """
+    target = tmp_path / "conformant.pdf"
+    render_html_to_pdf(
+        "<h1>Title</h1><p>Body text.</p>", target, title="Conformance Check", lang="en"
+    )
+
+    result = validate_pdf_ua(target, verapdf_exe=verapdf_exe)
+
+    assert result.compliant is True
+    assert result.failed_rules == []
 
 
 def test_untagged_pdf_is_not_compliant(untagged_pdf: Path, verapdf_exe: Path):
