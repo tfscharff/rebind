@@ -20,7 +20,9 @@ def pin_document_metadata(pdf_path: Path, *, title: str, lang: str) -> None:
     """Make the file byte-reproducible and set the metadata PDF/UA requires.
 
     The document ID is derived from the title so it stays stable across runs while
-    still differing between documents.
+    still differing between documents. Note this makes the ID a determinism knob, not a
+    content identifier: two different documents that happen to share a title get the same
+    /ID even though their bodies differ.
     """
     with pikepdf.open(pdf_path, allow_overwriting_input=True) as pdf:
         with pdf.open_metadata(set_pikepdf_as_editor=False) as meta:
@@ -40,9 +42,17 @@ def pin_document_metadata(pdf_path: Path, *, title: str, lang: str) -> None:
         pdf.docinfo["/ModDate"] = FIXED_TIMESTAMP
         pdf.Root["/Lang"] = pikepdf.String(lang)
 
+        # Pass the raw bytes straight to pikepdf.String rather than round-tripping through
+        # `str` (e.g. via latin-1 decode/encode): pikepdf's text-string encoding path applies
+        # PDFDocEncoding/UTF-16 heuristics to `str` input, which is wrong for an opaque binary
+        # hash and can silently mutate bytes that happen to look like text.
         digest = hashlib.sha256(title.encode("utf-8")).digest()[:16]
         pdf.trailer["/ID"] = pikepdf.Array(
-            [pikepdf.String(digest.decode("latin-1")), pikepdf.String(digest.decode("latin-1"))]
+            [pikepdf.String(digest), pikepdf.String(digest)]
         )
 
-        pdf.save(deterministic_id=False, preserve_pdfa=True)
+        # deterministic_id=True: without it, qpdf regenerates the trailer's *second* /ID
+        # element from wall-clock time and PID on every save, silently overriding the fixed
+        # value we just assigned above and breaking byte-reproducibility across processes
+        # (caught by test_two_runs_produce_identical_bytes_across_processes_and_hash_seeds).
+        pdf.save(deterministic_id=True, preserve_pdfa=True)

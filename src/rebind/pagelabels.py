@@ -16,7 +16,11 @@ import pikepdf
 
 
 def set_page_labels(pdf_path: Path, labels: list[str]) -> None:
-    """Replace the document's page labels. One label per page, in order."""
+    """Replace the document's page labels. One label per page, in order.
+
+    Deliberately requires exactly one label per page (a `ValueError` otherwise), so partial
+    labeling of only some pages is impossible by construction.
+    """
     with pikepdf.open(pdf_path, allow_overwriting_input=True) as pdf:
         if len(labels) != len(pdf.pages):
             raise ValueError(

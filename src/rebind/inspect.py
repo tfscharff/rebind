@@ -64,11 +64,26 @@ def is_descendant_of(ancestor: StructElement, struct_type: str) -> bool:
 
 
 def page_labels(pdf_path: Path) -> list[str]:
-    """Read back the per-page labels written by rebind.pagelabels.set_page_labels."""
+    """Read back the per-page labels written by rebind.pagelabels.set_page_labels.
+
+    LIMITATION: this only reads a flat /Nums array directly off /PageLabels. PDF number
+    trees are allowed to be hierarchical (a /Kids array of intermediate nodes, each with its
+    own /Nums or /Kids), and this function does not walk /Kids. That is correct for
+    round-tripping rebind's own output, which always writes a flat tree (see
+    `rebind.pagelabels.set_page_labels`), but this module is also used to inspect arbitrary
+    third-party PDFs, where a hierarchical /PageLabels tree is legal and would otherwise be
+    silently misread as empty/partial. Rather than return a wrong answer quietly, this raises
+    `StructureTreeError` so the caller sees a loud, explicit failure instead of bad data.
+    """
     with pikepdf.open(pdf_path) as pdf:
         tree = pdf.Root.get("/PageLabels")
         if tree is None:
             return []
+        if "/Kids" in tree:
+            raise StructureTreeError(
+                "/PageLabels uses a hierarchical number tree (/Kids); page_labels() only "
+                "supports the flat /Nums form that rebind itself writes"
+            )
         nums = tree.get("/Nums")
         if nums is None:
             return []
