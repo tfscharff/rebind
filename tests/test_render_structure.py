@@ -1,6 +1,14 @@
 from pathlib import Path
 
-from rebind.inspect import structure_element_types
+import pikepdf
+import pytest
+
+from rebind.inspect import (
+    StructureTreeError,
+    structure_element_types,
+    structure_tree,
+    table_header_associations,
+)
 from rebind.render import render_html_to_pdf
 from rebind.validate import validate_pdf_ua
 
@@ -48,3 +56,80 @@ def test_expected_structure_elements_are_present(tmp_path: Path):
 
     for expected in {"H1", "H2", "P", "L", "LI", "Table", "TR", "TH", "TD", "Figure"}:
         assert expected in types, f"{expected} missing from structure tree; found {sorted(types)}"
+
+
+def test_table_headers_resolve_to_the_correct_header_cells(tmp_path: Path):
+    """Data cells must reference the *correct* header cells, not merely have /Headers at all.
+
+    WeasyPrint wires this up via /Headers arrays on TD elements pointing at /ID values on
+    TH elements (it does not emit /Scope). A regression that silently misassigned headers
+    -- e.g. always pointing at the first row header, or dropping the column header -- would
+    pass every other test in this file. This asserts the actual resolved text.
+    """
+    target = tmp_path / "structured.pdf"
+    render_html_to_pdf(STRUCTURED_HTML, target, title="Thermodynamics", lang="en")
+
+    associations = table_header_associations(target)
+    by_data_text = {data: headers for data, headers in associations}
+
+    assert "4.18" in by_data_text, f"no /Headers resolved for '4.18'; found {associations}"
+    assert set(by_data_text["4.18"]) >= {"Water", "c (J/g·K)"}
+
+    assert "0.385" in by_data_text, f"no /Headers resolved for '0.385'; found {associations}"
+    assert set(by_data_text["0.385"]) >= {"Copper", "c (J/g·K)"}
+
+
+def test_th_and_td_are_descendants_of_table_and_li_of_l(tmp_path: Path):
+    """A flat type-vocabulary check would pass even if TH/TD lived outside any Table, or LI
+    outside any L. Assert actual containment in the tree, not just presence somewhere in it.
+    """
+    target = tmp_path / "structured.pdf"
+    render_html_to_pdf(STRUCTURED_HTML, target, title="Thermodynamics", lang="en")
+
+    tree = structure_tree(target)
+
+    def descendants(elements):
+        for element in elements:
+            yield element
+            yield from descendants(element.children)
+
+    all_elements = list(descendants(tree))
+    tables = [e for e in all_elements if e.type == "Table"]
+    lists = [e for e in all_elements if e.type == "L"]
+    assert tables, "no Table element found in structure tree"
+    assert lists, "no L element found in structure tree"
+
+    th_and_td_in_tables = {e.type for table in tables for e in descendants(table.children)}
+    li_in_lists = {e.type for lst in lists for e in descendants(lst.children)}
+
+    for element in all_elements:
+        if element.type in ("TH", "TD"):
+            assert element.type in th_and_td_in_tables, (
+                f"a {element.type} exists outside of any Table"
+            )
+        if element.type == "LI":
+            assert "LI" in li_in_lists, "an LI exists outside of any L"
+
+
+def test_cyclic_structure_tree_raises_instead_of_hanging(tmp_path: Path):
+    """A self-referential /K (an element whose child is one of its own ancestors) must be
+    rejected with a clear error, not recurse until the stack overflows -- rebind will later
+    be pointed at arbitrary third-party scanned PDFs, not just its own generated output.
+    """
+    target = tmp_path / "cyclic.pdf"
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(612, 792))
+
+    elem_a = pdf.make_indirect(pikepdf.Dictionary(S=pikepdf.Name("/Sect")))
+    elem_b = pdf.make_indirect(pikepdf.Dictionary(S=pikepdf.Name("/P")))
+    elem_a.K = elem_b
+    elem_b.K = elem_a  # cycle: b's child is a, one of b's own ancestors
+
+    struct_root = pdf.make_indirect(
+        pikepdf.Dictionary(Type=pikepdf.Name("/StructTreeRoot"), K=elem_a)
+    )
+    pdf.Root.StructTreeRoot = struct_root
+    pdf.save(target)
+
+    with pytest.raises(StructureTreeError):
+        structure_element_types(target)
