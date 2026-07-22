@@ -694,14 +694,18 @@ git push origin main
 
 ---
 
-### Task 5: Original page labels
+### Task 5: Original page labels and deterministic output
 
-Citation depends on this. A reconstructed document whose page 12 was the source's page 47 must present
-itself as page 47.
+Two pieces of pikepdf post-processing. Citation depends on the first: a reconstructed document whose
+page 12 was the source's page 47 must present itself as page 47. The Global Constraints depend on the
+second: PDFs embed a creation timestamp and a random document ID by default, so two runs over identical
+input produce different bytes unless we pin them.
 
 **Files:**
 - Create: `src/rebind/pagelabels.py`
+- Create: `src/rebind/reproducible.py`
 - Create: `tests/test_pagelabels.py`
+- Create: `tests/test_reproducible.py`
 - Modify: `src/rebind/inspect.py` (add `page_labels`)
 
 **Interfaces:**
@@ -709,6 +713,10 @@ itself as page 47.
 - Produces:
   - `set_page_labels(pdf_path: Path, labels: list[str]) -> None` — writes a `/PageLabels` number tree.
   - `page_labels(pdf_path: Path) -> list[str]` in `inspect.py` — reads them back.
+  - `FIXED_TIMESTAMP: str` — the pinned PDF date string constant.
+  - `pin_document_metadata(pdf_path: Path, *, title: str, lang: str) -> None` — pins creation and
+    modification dates and the document ID, and sets the title and language, making output
+    byte-reproducible.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -827,11 +835,119 @@ uv run pytest tests/test_pagelabels.py -v
 ```
 Expected: `3 passed`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Write the failing determinism test**
+
+`tests/test_reproducible.py`:
+```python
+from pathlib import Path
+
+from rebind.render import render_html_to_pdf
+from rebind.reproducible import pin_document_metadata
+from rebind.validate import validate_pdf_ua
+
+HTML = "<h1>Determinism</h1><p>Two runs must produce identical bytes.</p>"
+
+
+def _build(target: Path) -> bytes:
+    render_html_to_pdf(HTML, target, title="Determinism", lang="en")
+    pin_document_metadata(target, title="Determinism", lang="en")
+    return target.read_bytes()
+
+
+def test_two_runs_produce_identical_bytes(tmp_path: Path):
+    """Global constraint: same input at same version yields the same output."""
+    first = _build(tmp_path / "one.pdf")
+    second = _build(tmp_path / "two.pdf")
+
+    assert first == second, "PDF output is not byte-reproducible"
+
+
+def test_pinned_metadata_preserves_conformance(tmp_path: Path, verapdf_exe: Path):
+    target = tmp_path / "pinned.pdf"
+    _build(target)
+
+    result = validate_pdf_ua(target, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
+```
+
+- [ ] **Step 6: Run the test to verify it fails**
 
 ```bash
-git add src/rebind/pagelabels.py src/rebind/inspect.py tests/test_pagelabels.py
-git commit -m "Preserve original pagination as PDF page labels"
+uv run pytest tests/test_reproducible.py -v
+```
+Expected: FAIL with `ModuleNotFoundError: No module named 'rebind.reproducible'`.
+
+- [ ] **Step 7: Write the implementation**
+
+`src/rebind/reproducible.py`:
+```python
+"""Pin the parts of a PDF that would otherwise differ between identical runs.
+
+PDFs record a creation timestamp and a random document ID. Both make byte comparison
+useless, which breaks the golden-file testing Phase 1 depends on. See the design spec's
+determinism invariant.
+"""
+
+from __future__ import annotations
+
+import hashlib
+from pathlib import Path
+
+import pikepdf
+
+# An arbitrary fixed instant. The value does not matter; only that it never varies.
+FIXED_TIMESTAMP = "D:20000101000000Z"
+
+
+def pin_document_metadata(pdf_path: Path, *, title: str, lang: str) -> None:
+    """Make the file byte-reproducible and set the metadata PDF/UA requires.
+
+    The document ID is derived from the title so it stays stable across runs while
+    still differing between documents.
+    """
+    with pikepdf.open(pdf_path, allow_overwriting_input=True) as pdf:
+        with pdf.open_metadata(set_pikepdf_as_editor=False) as meta:
+            meta["dc:title"] = title
+            meta["dc:language"] = lang
+            meta["xmp:CreateDate"] = "2000-01-01T00:00:00Z"
+            meta["xmp:ModifyDate"] = "2000-01-01T00:00:00Z"
+            meta["xmp:MetadataDate"] = "2000-01-01T00:00:00Z"
+
+        with pdf.open_metadata() as _:
+            pass  # ensure the XMP packet is written before docinfo is touched
+
+        pdf.docinfo["/Title"] = title
+        pdf.docinfo["/CreationDate"] = FIXED_TIMESTAMP
+        pdf.docinfo["/ModDate"] = FIXED_TIMESTAMP
+        pdf.Root["/Lang"] = pikepdf.String(lang)
+
+        digest = hashlib.sha256(title.encode("utf-8")).digest()[:16]
+        pdf.trailer["/ID"] = pikepdf.Array(
+            [pikepdf.String(digest.decode("latin-1")), pikepdf.String(digest.decode("latin-1"))]
+        )
+
+        pdf.save(deterministic_id=False, preserve_pdfa=True)
+```
+
+- [ ] **Step 8: Run the tests**
+
+```bash
+uv run pytest tests/test_reproducible.py -v
+```
+Expected: `2 passed`.
+
+**If bytes still differ,** diff the two files to find what varies
+(`cmp -l one.pdf two.pdf | head`) and pin that too. Common remaining culprits are the XMP packet's
+`xmpMM:DocumentID` and stream compression nondeterminism. If `pikepdf.save(deterministic_id=True)`
+resolves it more simply, use that instead and delete the manual `/ID` block — record which approach
+worked in the commit message.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add src/rebind/pagelabels.py src/rebind/reproducible.py src/rebind/inspect.py \
+        tests/test_pagelabels.py tests/test_reproducible.py
+git commit -m "Preserve original pagination and pin output for reproducibility"
 git push origin main
 ```
 
