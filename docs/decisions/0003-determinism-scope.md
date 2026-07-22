@@ -66,7 +66,62 @@ in `tests/test_reproducible.py`), which reliably pass: two builds *within one in
 process* are byte-identical every time. The nondeterminism is specifically a cross-process
 phenomenon, and it is not eliminated by pinning `PYTHONHASHSEED`.
 
-### Root cause: narrower than originally diagnosed
+This table is reproducible from the repo, not just asserted here: `scripts/determinism_probe.py`
+runs N independent subprocess builds with a pinned `PYTHONHASHSEED` and prints each output's
+size and SHA-256. Run it yourself with `uv run python scripts/determinism_probe.py 8` to
+regenerate the table above (hashes will differ from the ones printed here since fontTools/
+WeasyPrint versions and the exact divergence are not pinned by this decision, but the shape --
+all distinct, sizes clustering near two adjacent values -- should reproduce).
+
+### A larger sample changes the picture: the 8-run size split does not hold up
+
+The eight-run table above happens to split cleanly into four runs at 7335 bytes and four at
+7334. Read on its own, a clean binary split is at least as consistent with a coarse two-state
+effect (e.g. a subset/no-subset decision, or one of two glyph orderings) as with address-space
+randomization, which would be expected to scatter sizes more broadly rather than settle into
+exactly two values.
+
+To check this, the same probe was re-run with **N = 20**:
+
+```
+run  size(bytes)  sha256 (first 12 hex chars)
+1    7334         1d2146599d5c
+2    7334         fc5b91d270fa
+3    7334         eeb457809cd8
+4    7335         8251417ea2ff
+5    7335         5366f2b8d6c3
+6    7334         da7788fa8201
+7    7334         c6017d6f3554
+8    7334         1550d215d07e
+9    7334         fd31242bc6e8
+10   7334         0a78a5b40225
+11   7334         b1c3370866ea
+12   7334         46535d18469e
+13   7334         69d9cbb079a7
+14   7333         6bd2c5234214
+15   7334         0e99a5fe614b
+16   7334         2446f510ac5b
+17   7333         5fbc55c51fb7
+18   7334         a38493c44668
+19   7334         2ba4985ebd1c
+20   7332         a1a1597b278b
+
+20 distinct SHA-256 hashes out of 20 runs.
+Byte-length distribution: 7332 (1 run), 7333 (2 runs), 7334 (15 runs), 7335 (2 runs).
+```
+
+At N = 20, the sizes do **not** stay confined to the two values seen at N = 8: four distinct
+sizes appear (7332-7335), with 7334 as a clear mode and the other three sizes each occurring
+once or twice. This means the "clean binary split" observed at N = 8 was very likely a small-
+sample artifact, not evidence of a genuine two-state mechanism -- with only eight draws from a
+distribution that puts most of its mass on one value and small amounts on a few neighbors,
+landing on exactly two observed values is unsurprising. The larger sample does not, however,
+cleanly settle the question in the other direction either: the distribution is not the wide,
+unclustered scatter one might naively expect from ASLR-driven addresses either. It is a narrow
+spread of byte-length outcomes (a 3-byte range) with an uneven mode, which is compatible with
+several mechanisms and does not, by itself, single one out.
+
+### Root cause: unresolved, with competing hypotheses
 
 The divergence occurs inside `HTML(...).write_pdf(...)` in `src/rebind/render.py`, upstream of
 anything `reproducible.py` controls, in WeasyPrint's font-embedding/subsetting path. The
@@ -76,40 +131,48 @@ above shows that explanation is incomplete: with `PYTHONHASHSEED` fixed identica
 eight processes, Python's string/bytes hash values are guaranteed identical in every process,
 yet the output still varied every time.
 
-The evidence is consistent with a different, and more resistant, class of cause: an unordered
-container (a `dict` or `set`) keyed on something whose default hash is based on **object
-identity** (`id()`) rather than value -- CPython's default `object.__hash__` derives from an
-object's memory address. Object addresses are affected by OS-level address space layout
-randomization (ASLR) at process start, which is a separate mechanism from Python's
-`PYTHONHASHSEED` and is not controlled by it. This would explain both observations at once:
-stable within a process (addresses don't change once assigned) and unstable across processes
-even with `PYTHONHASHSEED` pinned (ASLR still varies the addresses). This code path was not
-required reading for this decision (rebind's own source does not construct it), and pinpointing
-the exact container and library (WeasyPrint, fontTools, or a native dependency such as Pango,
-HarfBuzz, or fontconfig that WeasyPrint calls into) needs further upstream investigation; it is
-not asserted here as confirmed, only as the explanation consistent with all evidence collected.
+Two hypotheses remain on the table, and **this decision does not resolve between them**:
+
+- **Object-identity hashing influenced by ASLR.** An unordered container (a `dict` or `set`)
+  keyed on something whose default hash is based on object identity (`id()`) rather than
+  value -- CPython's default `object.__hash__` derives from an object's memory address, which
+  OS-level address space layout randomization (ASLR) varies per process start, independently of
+  `PYTHONHASHSEED`. This would explain both observations at once: stable within a process
+  (addresses don't change once assigned) and unstable across processes even with
+  `PYTHONHASHSEED` pinned.
+- **A coarse, small-state decision elsewhere in the subsetting path** (e.g. a subset/no-subset
+  branch, or a small number of glyph-ordering outcomes) that happens to vary per process for a
+  reason unrelated to address-space layout. The N = 20 run above rules out the *specific* claim
+  that this is a clean two-state split, but it does not rule out a small-state mechanism in
+  general -- a narrow, unevenly-weighted spread of outcomes is also consistent with, for
+  example, a handful of possible orderings with unequal probability.
+
+Neither hypothesis has been confirmed by inspecting the actual WeasyPrint/fontTools/native-
+dependency code path responsible; this code path was not required reading for this decision
+(rebind's own source does not construct it). Pinpointing the exact container and library
+(WeasyPrint, fontTools, or a native dependency such as Pango, HarfBuzz, or fontconfig that
+WeasyPrint calls into) needs further upstream investigation. Stating this as ASLR without that
+investigation would be overstating what the evidence shows; the honest summary is that the
+mechanism is unresolved and both hypotheses remain live.
 
 ## Decision
 
-1. **Pin `PYTHONHASHSEED` wherever Rebind controls the process**, because it is still a
-   necessary (if not sufficient) part of eliminating Python-level hash-randomization effects,
-   and because it makes test runs reproducible with respect to that one axis:
-   - The test suite pins it via a relaunch mechanism in `tests/conftest.py`: since
-     `PYTHONHASHSEED` must be set before the interpreter starts (hash randomization is seeded
-     once at process startup; setting the environment variable from already-running Python
-     code has no effect on that process), `conftest.py` checks the seed at collection time
-     and, if it does not match the pinned value, relaunches `pytest` in a child process with
-     the correct value set and exits with the child's status code. (An in-place re-exec via
-     `os.execve` was tried first and segfaults under this platform's process model; a spawned
-     child process achieves the same effect portably.) Every `pytest` invocation is therefore
-     pinned regardless of the ambient shell environment.
+1. **Pin `PYTHONHASHSEED` only where a specific test needs a controlled seed, in that test's
+   own subprocess environment**, not process-wide. An earlier version of this decision had
+   `tests/conftest.py` relaunch the whole `pytest` process in a child with the seed pinned
+   whenever the ambient environment didn't match. That was removed: since pinning the seed
+   does not, by itself, deliver cross-process byte-identity (see evidence above), the
+   process-wide relaunch was buying only cosmetic reproducibility at one fixed seed, at the
+   real cost of an untraced child process that silently breaks IDE debugger breakpoints and
+   coverage collection for the whole suite. The two tests in `tests/test_reproducible.py` that
+   actually need a controlled `PYTHONHASHSEED` (see below) set it directly in the environment
+   of the subprocess they spawn to build a PDF, which is the correct scope for that control and
+   does not affect the process running pytest itself.
    - Rebind ships no console entry point as of this decision (no `src/rebind/app.py`, no
-     `[project.scripts]` in `pyproject.toml`). If/when one is added, it must apply the same
-     relaunch-before-work pattern at its own entry point, for the same reason: setting the
-     environment variable inside `main()` is too late for the already-started interpreter.
-     This is stated plainly here rather than left silently unhandled: **pinning the hash seed
-     does not, by itself, deliver cross-process byte-identity** (see evidence above), so an
-     entry point that pins it is a partial mitigation, not a fix.
+     `[project.scripts]` in `pyproject.toml`). If/when one is added, and if it needs a pinned
+     seed for some other reason, note that pinning the hash seed does not, by itself, deliver
+     cross-process byte-identity (see evidence above) -- it would be a partial mitigation for
+     Python-level hash effects, not a fix for this ADR's finding.
 2. **Narrow the formal claim to what was actually verified.** Rebind's determinism
    constraint is now: the **document model** (structure, tagging, content, and all metadata
    `reproducible.py` pins) **is deterministic**; **PDF bytes are byte-identical for two builds
@@ -144,9 +207,11 @@ nondeterminism is resolved.
 This should be reported upstream to the WeasyPrint project
 (https://github.com/Kozea/WeasyPrint), since the nondeterminism originates in its font
 handling, not in Rebind, and the evidence above (identical `PYTHONHASHSEED` still producing
-divergent output) suggests the responsible party may need to look beyond Python-level hash
-randomization -- e.g. at object-identity-based container ordering, or a native dependency
-(fontTools, Pango, HarfBuzz, or fontconfig) whose internal ordering is influenced by process
-memory layout (ASLR). As of this decision, no upstream issue has been filed; filing one,
-including the eight-run byte evidence above, is tracked as follow-up work and is not part of
-this decision.
+divergent output, and a byte-length distribution at N = 20 that is neither a clean two-state
+split nor a wide ASLR-like scatter) shows the responsible party needs to look beyond
+Python-level hash randomization, without yet pinning down which of the two hypotheses named
+above (object-identity/ASLR-influenced container ordering, or some other small-state
+mechanism) is correct. `scripts/determinism_probe.py` is included in this repo specifically so
+that evidence can be regenerated and attached to an upstream report at whatever N is useful. As
+of this decision, no upstream issue has been filed; filing one, including the byte evidence
+above, is tracked as follow-up work and is not part of this decision.
