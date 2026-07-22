@@ -1313,7 +1313,8 @@ Expected: `packaging/Output/rebind-setup.exe` exists.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add src/rebind/app.py packaging/rebind.spec packaging/rebind.iss tests/test_app.py pyproject.toml
+git add src/rebind/app.py packaging/rebind.spec packaging/rebind.iss tests/test_app.py \
+        pyproject.toml uv.lock
 git commit -m "Package the local service as a Windows installer"
 git push origin main
 ```
