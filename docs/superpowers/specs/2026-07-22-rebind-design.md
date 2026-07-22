@@ -59,12 +59,22 @@ should not have to.
 **Scale:** roughly 1,000 documents per year at the originating institution. Typical documents run
 20–300 pages; the architecture must survive 1,000+ pages with unattended, resumable runs.
 
-**Explicitly in scope:** degraded scans, multi-column layouts, sidebars and pedagogical apparatus,
-tables, mathematics, chemical structures, sheet music (description only), footnotes, long documents.
+**Explicitly in scope:** degraded scans, born-digital PDFs, mixed documents, multi-column layouts,
+sidebars and pedagogical apparatus, tables, mathematics, chemical structures, sheet music (description
+only), footnotes, long documents.
 
-**Explicitly out of scope for v1:** optical music recognition, braille output, forms, born-digital PDF
-remediation (other tools do this well), documents in scripts other than Latin (deferred, not designed
-against), and any cloud service or paid API.
+**Born-digital and mixed input.** Untagged or badly tagged born-digital PDFs are handled by the same
+pipeline on a separate branch: the embedded text layer is extracted directly, with font, size, weight,
+and position metadata, and restoration and OCR are skipped. This branch is both faster and
+substantially more accurate than the scanned branch, since heading levels, emphasis, and reading order
+can be inferred from typography rather than guessed from pixels. Mixed documents — a born-digital
+report containing scanned inserts, which is common — are branched per page rather than per document.
+
+A PDF that is *already* well tagged and passes validation is detected at ingest and reported as such
+rather than reconstructed. Rebind should not churn documents that are already accessible.
+
+**Explicitly out of scope for v1:** optical music recognition, braille output, PDF forms, documents in
+scripts other than Latin (deferred, not designed against), and any cloud service or paid API.
 
 **Non-goals:** matching the source page's visual layout; being the fastest tool; handling clean
 documents better than Acrobat does.
@@ -85,6 +95,7 @@ documents better than Acrobat does.
 | 10 | Sheet music is description-only | OMR on degraded scans is research-grade; honest description is achievable |
 | 11 | Windows-first, unsigned, double-click installer | Target user's platform; signing cost rejected; OpenRefine precedent |
 | 12 | Documents are durable, resumable jobs | 300+ page runs must survive crashes and reboots |
+| 13 | Born-digital and mixed input handled on a parallel branch | Same pipeline, better input; page-level branching covers mixed documents |
 
 ## 5. Architecture
 
@@ -102,15 +113,20 @@ rebooting does not lose work; a job resumes at the last completed stage of the l
 Ten stages, each an independent module with a single responsibility, its own confidence output, and
 cached per-page results.
 
-1. **Ingest** — render page images at working DPI; classify source as scanned, born-digital, or mixed;
-   capture original page labels.
-2. **Restoration** — deskew, dewarp, denoise, contrast normalization, page-edge and occlusion (finger)
-   detection.
+1. **Ingest** — render page images at working DPI; classify **each page** as scanned, born-digital, or
+   mixed; detect existing valid tagging; capture original page labels.
+2. **Restoration** *(scanned pages only)* — deskew, dewarp, denoise, contrast normalization, page-edge
+   and occlusion (finger) detection.
 3. **Layout analysis** — detect and classify regions: heading, body text, figure, caption, table,
-   formula, chemical structure, music, running header/footer, sidebar, page number.
+   formula, chemical structure, music, running header/footer, sidebar, page number. On born-digital
+   pages this is informed by embedded text position and font metrics rather than by pixels alone.
 4. **Reading order** — column detection, sidebar placement, cross-page continuation. Where WCAG 1.3.2
    is decided.
-5. **Text recognition** — Tesseract via OCRmyPDF machinery, retaining per-word confidence.
+5. **Text acquisition** — two branches converging on the same output shape (text spans with position,
+   style, and confidence):
+   - *Scanned pages:* Tesseract via OCRmyPDF machinery, retaining per-word confidence.
+   - *Born-digital pages:* direct text-layer extraction with font, size, and weight metadata.
+     Confidence is high by construction, so these pages produce few flags.
 6. **Specialist recognizers** — tables, mathematics, chemistry, music, figures (see 5.4).
 7. **Assembly** — build the semantic document tree (see 5.3).
 8. **Confidence and flagging** — aggregate node confidence, apply thresholds, emit the review queue.

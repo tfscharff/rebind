@@ -48,6 +48,8 @@ escape.
 | | |
 |---|---|
 | Degraded scans | deskew, dewarp, denoise, occlusion detection |
+| Born-digital PDFs | untagged or badly tagged files, using the embedded text layer |
+| Mixed documents | digital pages and scanned inserts, branched per page |
 | Complex layout | multi-column, sidebars, pull quotes, marginalia |
 | Tables | header association, spans, cross-page continuation |
 | Mathematics | recognized to LaTeX, output as MathML with spoken descriptions |
