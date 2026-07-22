@@ -2,7 +2,13 @@
 
 **Accessible PDF reconstruction for damaged library scans.**
 
-> ⚠️ **Status: pre-alpha.** Design approved 2026-07-22; implementation beginning. Nothing here works yet.
+> ⚠️ **Status: pre-alpha.** Phase 0 (feasibility spikes) complete — see
+> [ADR 0002](docs/decisions/0002-phase-0-findings.md). WeasyPrint reliably produces PDF/UA-1
+> tagged output (headings, lists, tables with header associations, figures with alt text, page
+> labels) and a frozen, no-system-Python build has been proven to render real PDFs from bundled
+> DLLs — but the double-click installer itself has not yet been built or tested end-to-end, and
+> output is not byte-reproducible (see ADR 0002/0003). Phase 1 (end-to-end pipeline spine) in
+> progress.
 
 Rebind takes a badly scanned PDF — skewed, warped, low-contrast, fingers in frame, multi-column with
 sidebars, full of tables and equations — and produces a **new**, born-accessible PDF that conforms to

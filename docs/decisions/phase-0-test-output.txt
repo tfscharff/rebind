@@ -1,0 +1,84 @@
+============================= test session starts =============================
+platform win32 -- Python 3.12.13, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\thoma\Documents\rebind\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\thoma\Documents\rebind
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.14.2
+collecting ... collected 31 items / 1 deselected / 30 selected
+
+tests/test_app.py::test_health_endpoint_reports_ready PASSED             [  3%]
+tests/test_app.py::test_health_reports_the_rendering_backend PASSED      [  6%]
+tests/test_app.py::test_render_smoke_endpoint_renders_a_real_pdf PASSED  [ 10%]
+tests/test_pagelabels.py::test_page_labels_round_trip PASSED             [ 13%]
+tests/test_pagelabels.py::test_page_labels_do_not_break_conformance PASSED [ 16%]
+tests/test_pagelabels.py::test_roman_and_arabic_labels_are_both_supported PASSED [ 20%]
+tests/test_render_math.py::test_mathml_produces_a_formula_element XFAIL  [ 23%]
+tests/test_render_math.py::test_mathml_glyphs_are_present_in_content_stream PASSED [ 26%]
+tests/test_render_math.py::test_svg_fallback_is_conformant PASSED        [ 30%]
+tests/test_render_minimal.py::test_minimal_document_passes_pdf_ua PASSED [ 33%]
+tests/test_render_structure.py::test_structured_document_passes_pdf_ua PASSED [ 36%]
+tests/test_render_structure.py::test_expected_structure_elements_are_present PASSED [ 40%]
+tests/test_render_structure.py::test_table_headers_resolve_to_the_correct_header_cells PASSED [ 43%]
+tests/test_render_structure.py::test_th_and_td_are_descendants_of_table_and_li_of_l PASSED [ 46%]
+tests/test_render_structure.py::test_containment_check_rejects_a_th_outside_any_table PASSED [ 50%]
+tests/test_render_structure.py::test_cyclic_structure_tree_raises_instead_of_hanging PASSED [ 53%]
+tests/test_reproducible.py::test_two_runs_produce_identical_bytes XPASS's original name and this project's original claim. Repeated
+measurement (12 full-suite runs, 12 isolated runs concurrent with an
+unrelated process, 15 isolated runs with nothing else running, and a
+bare in-process repro with no pytest involved at all) found this
+assertion fails roughly 1 time in 7 to 1 in 12, with the identical
+embedded-font-subset divergence signature documented for the cross-
+process case in docs/decisions/0003-determinism-scope.md (same /Length1,
+differing compressed /Length and bytes from that point on). The two
+builds in this test use separate target files under the same tmp_path
+and introduce no shared state of their own, so this is not a test-
+harness artifact -- it reproduces even as a bare function call with no
+pytest fixtures involved. If a future WeasyPrint/fontTools/native-
+dependency release removes this source of variance, this test will XPASS
+-- that is the signal to revisit the ADR and this xfail.)                [ 56%]
+tests/test_reproducible.py::test_output_still_varies_across_processes_even_with_hash_seed_pinned XFAILning PYTHONHASHSEED to the *same* value
+for both subprocess builds does NOT make the output byte-identical.
+Direct experiment (see docs/decisions/0003-determinism-scope.md) built 8
+PDFs from identical input with PYTHONHASHSEED=0 in every process and got
+8 distinct SHA-256 hashes, diverging at the same embedded-font
+compressed-stream offset each time. This means the randomness is not
+(solely) Python string-hash randomization, which pinning PYTHONHASHSEED
+would fully control -- something else that varies per process
+(consistent with ASLR-influenced object-identity hashing in WeasyPrint's
+font stack, likely in a native dependency) is also in play. Rebind's
+byte-identity guarantee is therefore scoped to a single process, not
+'pinned hash seed', pending upstream diagnosis. If a future
+WeasyPrint/fontTools/native-dependency release removes this source of
+variance, this test will XPASS -- that is the signal to revisit the ADR
+and this xfail.)                                                         [ 60%]
+tests/test_reproducible.py::test_output_varies_across_differing_hash_seeds_upstream_bug XFAILt, given *different* PYTHONHASHSEED values,
+produce different PDF bytes inside an embedded font's compressed stream.
+This was the originally diagnosed form of the bug (see
+docs/decisions/0003-determinism-scope.md);
+test_output_still_varies_across_processes_even_with_hash_seed_pinned
+above shows the same divergence persists even when the seed is held
+constant, so this test is a strict subset of that finding, kept separate
+because it is the form of the bug originally reported. If a future
+WeasyPrint/fontTools/native-dependency release fixes cross-process
+determinism, this test will XPASS -- that is the signal to revisit the
+ADR and this xfail.)                                                     [ 63%]
+tests/test_reproducible.py::test_pinned_metadata_preserves_conformance PASSED [ 66%]
+tests/test_smoke.py::test_package_imports PASSED                         [ 70%]
+tests/test_smoke.py::test_python_version_is_pinned PASSED                [ 73%]
+tests/test_validate.py::test_conformant_pdf_is_compliant PASSED          [ 76%]
+tests/test_validate.py::test_untagged_pdf_is_not_compliant PASSED        [ 80%]
+tests/test_validate.py::test_failed_rules_are_parsed_with_detail PASSED  [ 83%]
+tests/test_validate.py::test_validate_pdf_ua_raises_on_invalid_pdf PASSED [ 86%]
+tests/test_validate.py::test_parse_validation_report_normal_noncompliant_report_shape PASSED [ 90%]
+tests/test_validate.py::test_parse_validation_report_alternate_jobs_shape PASSED [ 93%]
+tests/test_validate.py::test_parse_validation_report_raises_on_abnormal_job_end_status PASSED [ 96%]
+tests/test_validate.py::test_parse_validation_report_raises_on_missing_compliant_key PASSED [100%]
+
+============================== warnings summary ===============================
+.venv\Lib\site-packages\fastapi\testclient.py:1
+  C:\Users\thoma\Documents\rebind\.venv\Lib\site-packages\fastapi\testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+= 26 passed, 1 deselected, 3 xfailed, 1 xpassed, 1 warning in 99.34s (0:01:39) =
