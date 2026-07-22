@@ -1,8 +1,12 @@
-# 0003. Scope the determinism claim to a single process
+# 0003. Rebind's PDF output is not byte-reproducible, at any process granularity
 
 ## Status
 
-Accepted
+Accepted (superseded finding: an earlier version of this decision scoped the determinism claim
+to "byte-identical within a single process." That narrower claim has since been retested and
+falsified -- see "Same-process byte-identity does not hold either" below. The claim is now
+retracted rather than narrowed: rebind's PDF *bytes* are not guaranteed reproducible at all. The
+document model remains deterministic; see the Decision section.)
 
 ## Context
 
@@ -61,10 +65,10 @@ in every run) but a different compressed `/Length` and different compressed byte
 point on -- i.e. the same embedded-font-subset divergence, occurring **even when Python's hash
 randomization is held constant**.
 
-This was also confirmed with same-process comparisons (`test_two_runs_produce_identical_bytes`
-in `tests/test_reproducible.py`), which reliably pass: two builds *within one interpreter
-process* are byte-identical every time. The nondeterminism is specifically a cross-process
-phenomenon, and it is not eliminated by pinning `PYTHONHASHSEED`.
+This was originally believed to be confirmed as a same-process invariant by
+`test_two_runs_produce_identical_bytes` in `tests/test_reproducible.py`, which was reported to
+pass reliably. **That belief has since been retested directly and falsified — see "Same-process
+byte-identity does not hold either" below.**
 
 This table is reproducible from the repo, not just asserted here: `scripts/determinism_probe.py`
 runs N independent subprocess builds with a pinned `PYTHONHASHSEED` and prints each output's
@@ -121,6 +125,61 @@ unclustered scatter one might naively expect from ASLR-driven addresses either. 
 spread of byte-length outcomes (a 3-byte range) with an uneven mode, which is compatible with
 several mechanisms and does not, by itself, single one out.
 
+### Same-process byte-identity does not hold either
+
+A later investigation (prompted by a previously-flagged, then-unexplained flake in
+`test_two_runs_produce_identical_bytes` during full-suite runs) retested the one claim this
+ADR still made: that two builds *within a single process* are always byte-identical. That claim
+is **false**. It does not survive direct, repeated measurement:
+
+- **Full suite, run 12 times back to back:** 1/12 runs (8.3%) failed
+  `test_two_runs_produce_identical_bytes`.
+- **The same test run in isolation (`pytest tests/test_reproducible.py::test_two_runs_produce_identical_bytes`),
+  12 times, concurrently with an unrelated full-suite loop running in another process:** 2/12
+  runs (16.7%) failed.
+- **The same isolated test, run 15 times sequentially with no other process running at all** (to
+  rule out cross-process resource contention, e.g. a shared fontconfig/font cache, as a
+  confound): **2/15 runs (13.3%) still failed.** This rules out "leftover WeasyPrint state from
+  earlier tests in the suite" and "contention with another concurrent process" as the
+  explanation — the failure rate is statistically indistinguishable whether the test runs alone,
+  back-to-back with itself, or alongside a full suite in another process.
+- **A minimal repro** (`_build()` called twice back-to-back inside one Python process, no
+  pytest, no fixtures, no `tmp_path` reuse across attempts) reproduced the same failure signature
+  on the 5th of 5 attempts in one run.
+
+In every failing case, the two builds have the same `Length1` (uncompressed glyph program size,
+e.g. `2416`) but differ starting partway through the *compressed* `FlateDecode` font stream that
+follows it — the identical signature already documented above for the cross-process case. One
+concrete example, `_build()` called twice in the same process:
+
+```
+first differing byte offset: 2677 (of ~7334 total bytes)
+dict header at that offset (both builds): << /Filter /FlateDecode /Length1 2416 /Length 1344 >>
+first : ...\x14?\xf7\xf5\xbd\xae\x9b|\xac\xd8n\x04\x91\xb5+\xeb\x98\xc0\x84u\xddTd\x8e\xb9\x95\x81\xd31\xf6\xe1\xe4cP\xba\xafB\xbbvk'<\x05\xb7B\x04q\x89\x11
+second: ...\x14?\xf7\xf5\xbd\xae\x9b|\xac\xd0n\x04\x91\xb5+\xeb\x98\xc0\x84u\xddTd\x8e\xb9\x95\x81\xd31\xf6\xe1\xe4cP\xba\xafB\xbbvk'<\x05G!\x82\xb8\xc4\x08
+```
+
+Everything before the divergence point — including the entire uncompressed glyph program length
+(`Length1`) — is identical; only the emitted compressed bytes inside the embedded font's
+`FontFile2` stream vary. This is the same embedded-font-subsetting code path implicated above
+(`src/rebind/render.py` → WeasyPrint's `pdf/fonts.py`, which subsets via HarfBuzz's native
+subsetter when available — see `Font._harfbuzz_subset`), not a test-harness artifact: each of
+the two builds in every reproduction uses its own target file, its own `tmp_path`, and no shared
+global state that rebind's own code introduces. The two builds run consecutively in the very
+same interpreter, with `PYTHONHASHSEED` (and everything else about the environment) held
+constant by construction, and still occasionally diverge. This means the earlier working theory
+— that the phenomenon needs a process boundary at all — was itself incomplete: whatever varies
+(most plausibly heap-allocation-pattern-dependent iteration inside HarfBuzz's native subsetter,
+since the two calls in the same process do not necessarily reuse identical memory addresses or
+allocator state between the first and second build) can vary between two calls in one process,
+not only between two processes.
+
+**Practical consequence:** byte-identity is not a reliable, deterministic property of rebind's
+PDF output at any granularity — same process or across processes. It is better described as
+*usually* byte-identical (roughly 85-90% of paired same-process builds in the measurements
+above) with a real, intermittent, non-negligible chance of divergence confined to the
+compressed bytes of embedded font subsets.
+
 ### Root cause: unresolved, with competing hypotheses
 
 The divergence occurs inside `HTML(...).write_pdf(...)` in `src/rebind/render.py`, upstream of
@@ -173,34 +232,39 @@ mechanism is unresolved and both hypotheses remain live.
      seed for some other reason, note that pinning the hash seed does not, by itself, deliver
      cross-process byte-identity (see evidence above) -- it would be a partial mitigation for
      Python-level hash effects, not a fix for this ADR's finding.
-2. **Narrow the formal claim to what was actually verified.** Rebind's determinism
-   constraint is now: the **document model** (structure, tagging, content, and all metadata
-   `reproducible.py` pins) **is deterministic**; **PDF bytes are byte-identical for two builds
-   within the same process**; **cross-process PDF byte-identity is not currently guaranteed,
-   even with a pinned `PYTHONHASHSEED`**, and remains an open upstream issue. Code comments and
+2. **Narrow the formal claim to what was actually verified -- and correct it again now that
+   the remaining claim has also been falsified.** Rebind's determinism constraint is now: the
+   **document model** (structure, tagging, content, and all metadata `reproducible.py` pins)
+   **is deterministic**. **PDF bytes are NOT guaranteed byte-identical, even for two builds
+   within the same process** -- repeated measurement (see "Same-process byte-identity does not
+   hold either" above) found same-process divergence at a rate of roughly 1 in 7 to 1 in 12
+   paired builds, with the same embedded-font-subset signature as the cross-process case.
+   Rebind previously claimed same-process byte-identity as its one remaining determinism
+   guarantee; **that guarantee does not hold and the claim is retracted.** Code comments and
    docstrings in `src/rebind/reproducible.py` were updated to say this explicitly.
-3. **Keep the underlying defect visible in both of its observed forms.** Two dedicated tests
-   in `tests/test_reproducible.py`, both marked `xfail` and referencing this ADR:
+3. **Keep the underlying defect visible in all of its observed forms.** Three dedicated tests
+   in `tests/test_reproducible.py`, all marked `xfail(strict=False)` and referencing this ADR:
    - `test_output_varies_across_differing_hash_seeds_upstream_bug` -- the originally diagnosed
      reproduction (two different seeds).
    - `test_output_still_varies_across_processes_even_with_hash_seed_pinned` -- the stronger
      finding from this ADR (same seed, still varies).
+   - `test_two_runs_produce_identical_bytes` -- originally written (and, for a time, believed)
+     to prove same-process byte-identity; converted to a non-strict `xfail` once repeated
+     measurement showed it fails intermittently even in isolation, with no other process
+     running, for the same reason as the two tests above.
 
    If a future WeasyPrint/fontTools/native-dependency release removes this source of
-   variance, either test will XPASS, which is the signal to revisit this ADR.
+   variance, any of the three will XPASS, which is the signal to revisit this ADR.
 
 ## Consequence for Phase 1's golden-file testing
 
-Golden-file (byte-for-byte) comparisons are only valid **within the same process that
-generates the golden file and performs the comparison** (e.g. a single test run that renders
-both the fixture and the comparison file back to back). They are **not** currently valid
-across separate process invocations -- including the common CI pattern of "generate golden
-files once, compare against them in later, separate test runs" -- because cross-process
-byte-identity does not hold even with a pinned hash seed. Any golden-file strategy for Phase 1
-must either (a) regenerate and compare golden files within a single process per test run, or
-(b) compare at a level above raw PDF bytes (e.g. the document's tag tree, extracted text, or a
-normalized/re-parsed structural representation) until the upstream cross-process
-nondeterminism is resolved.
+Golden-file (byte-for-byte) comparisons are **not currently valid at any granularity** --
+neither across separate process invocations nor within a single process that generates and
+compares a fixture back to back -- because byte-identity does not reliably hold even for two
+builds in the same process (see evidence above). Phase 1's golden-file strategy must therefore
+compare **above the level of raw PDF bytes**: the document's tag tree, extracted text, page
+structure, or a normalized/re-parsed structural representation, never PDF bytes directly, until
+the upstream embedded-font-subsetting nondeterminism is resolved.
 
 ## Upstream reporting
 

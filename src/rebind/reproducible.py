@@ -7,15 +7,18 @@ determinism invariant.
 Scope note: this module makes the *document model and metadata* deterministic (title,
 language, and timestamps are pinned to fixed values; the trailer /ID's first element is
 pinned, its second element is content-derived by qpdf regardless of what is assigned -- see
-`pin_document_metadata` for detail). It does NOT by itself guarantee that two builds of the same input are byte-identical PDF files across
-process boundaries. Two builds within a single process ARE byte-identical. Across processes,
-even with an identical, pinned PYTHONHASHSEED, embedded font stream bytes have been observed
-to still differ (8 runs with the same seed produced 8 distinct outputs) -- so this is not
-solely Python string-hash randomization, and pinning PYTHONHASHSEED is not sufficient to
-restore cross-process byte-identity. See docs/decisions/0003-determinism-scope.md for the
-evidence and the decision record: rebind's determinism claim is scoped to the document model
-plus single-process byte-identity; cross-process byte-identity is a known, currently-open
-upstream issue.
+`pin_document_metadata` for detail). It does NOT guarantee that two builds of the same input
+are byte-identical PDF files -- not across process boundaries, and, contrary to an earlier
+version of this note, NOT even for two builds within a single process. Embedded font stream
+bytes have been observed to differ between builds at every granularity measured: across
+processes with different PYTHONHASHSEED, across processes with an identical pinned
+PYTHONHASHSEED (8 runs with the same seed produced 8 distinct outputs), and between two builds
+made back-to-back inside the same interpreter process (measured same-process failure rates of
+roughly 1 in 7 to 1 in 12 paired builds). This is not solely Python string-hash randomization --
+pinning PYTHONHASHSEED does not restore byte-identity at any of these granularities. See
+docs/decisions/0003-determinism-scope.md for the full evidence and the decision record:
+rebind's determinism claim is scoped to the *document model* only; PDF byte-identity is not
+guaranteed at any process granularity and is a known, currently-open upstream issue.
 """
 
 from __future__ import annotations
@@ -33,12 +36,13 @@ def pin_document_metadata(pdf_path: Path, *, title: str, lang: str) -> None:
     """Pin this file's metadata (title, language, timestamps, /ID) to fixed values.
 
     This removes the metadata-level sources of nondeterminism (wall-clock timestamps, a
-    random document ID) and sets the metadata PDF/UA requires. It does NOT, by itself, make
-    the surrounding PDF bytes fully reproducible across processes: WeasyPrint's font
-    subsetting varies per process even with a pinned PYTHONHASHSEED (see
-    docs/decisions/0003-determinism-scope.md for the evidence). Byte-identity is guaranteed
-    only for two builds within the same process; cross-process byte-identity is a known,
-    currently-open upstream issue that this function cannot fix.
+    random document ID) and sets the metadata PDF/UA requires. It does NOT make the
+    surrounding PDF bytes reproducible: WeasyPrint's font subsetting varies between builds
+    even with a pinned PYTHONHASHSEED and even within a single process (see
+    docs/decisions/0003-determinism-scope.md for the evidence). PDF byte-identity is not
+    guaranteed at any granularity -- same process or across processes -- and is a known,
+    currently-open upstream issue that this function cannot fix. Only the document model
+    (structure, tagging, content, and the metadata this function pins) is deterministic.
 
     The document ID is derived from the title so it stays stable across runs while
     still differing between documents. Note this makes the ID a determinism knob, not a
