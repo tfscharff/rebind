@@ -63,6 +63,23 @@ def is_descendant_of(ancestor: StructElement, struct_type: str) -> bool:
     return any(child.type == struct_type for child in _iter_elements(ancestor.children))
 
 
+def page_labels(pdf_path: Path) -> list[str]:
+    """Read back the per-page labels written by rebind.pagelabels.set_page_labels."""
+    with pikepdf.open(pdf_path) as pdf:
+        tree = pdf.Root.get("/PageLabels")
+        if tree is None:
+            return []
+        nums = tree.get("/Nums")
+        if nums is None:
+            return []
+        labels: list[str] = []
+        for i in range(1, len(nums), 2):
+            entry = nums[i]
+            prefix = entry.get("/P")
+            labels.append(str(prefix) if prefix is not None else "")
+        return labels
+
+
 def table_header_associations(pdf_path: Path) -> list[tuple[str, list[str]]]:
     """For each table data cell that carries a /Headers attribute, resolve it.
 
