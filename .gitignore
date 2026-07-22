@@ -1,0 +1,39 @@
+# Sample documents are copyrighted third-party scans. They must never be published.
+samples/
+*.pdf
+!docs/**/*.pdf
+
+# Working data
+jobs/
+*.sqlite
+*.sqlite3
+out/
+tmp/
+
+# Bundled model weights (fetched at build time, not committed)
+models/
+*.onnx
+*.pt
+*.pth
+*.safetensors
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
