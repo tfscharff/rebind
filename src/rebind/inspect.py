@@ -276,6 +276,17 @@ def _page_mcid_text(page: pikepdf.Object) -> dict[int, str]:
     pikepdf has no text-extraction API, so this parses the content stream directly: it
     tracks the current font (Tf) and the innermost active MCID (from BDC/EMC nesting), and
     decodes each shown string (Tj/TJ/'/") through that font's /ToUnicode CMap.
+
+    SCOPE WARNING -- diagnostic and test-only, do not extend into production:
+    This hand-rolled extractor (here and in `_font_decoders` / `_decode_tounicode_cmap` /
+    `_decode_string` below) only handles what WeasyPrint's own generated PDFs need: Identity-H
+    2-byte Type0 fonts and simple 1-byte fonts, with a single, self-contained /ToUnicode CMap
+    per font. It does not handle `usecmap` references, Type3 fonts, multi-dictionary /A or
+    /ToUnicode edge cases, or the many malformed/legacy encodings found in real-world scanned
+    and born-digital third-party PDFs. It exists solely so this module's own tests can assert
+    on rendered text; it must not be hardened or grown into rebind's production text-extraction
+    path. If/when rebind needs real text extraction for born-digital PDFs, adopt `pdfminer.six`
+    (MIT, pure Python, Windows-bundleable) rather than extending this parser.
     """
     resources = page.get("/Resources")
     font_maps, font_widths = _font_decoders(resources)

@@ -4,6 +4,7 @@ import pikepdf
 import pytest
 
 from rebind.inspect import (
+    StructElement,
     StructureTreeError,
     structure_element_types,
     structure_tree,
@@ -79,6 +80,40 @@ def test_table_headers_resolve_to_the_correct_header_cells(tmp_path: Path):
     assert set(by_data_text["0.385"]) >= {"Copper", "c (J/g·K)"}
 
 
+def _descendants(elements):
+    for element in elements:
+        yield element
+        yield from _descendants(element.children)
+
+
+def _assert_th_td_in_table_li_in_l(tree) -> None:
+    """Assert per-element containment: every TH/TD is a descendant of *some* Table, and
+    every LI is a descendant of *some* L. Uses object identity (`id()`), not type name, so
+    a stray TH sitting outside every Table cannot be masked by a correctly-nested sibling
+    TH elsewhere in the document contributing the type name "TH" to some vocabulary set.
+    """
+    all_elements = list(_descendants(tree))
+    tables = [e for e in all_elements if e.type == "Table"]
+    lists = [e for e in all_elements if e.type == "L"]
+    assert tables, "no Table element found in structure tree"
+    assert lists, "no L element found in structure tree"
+
+    th_td_ids_in_tables = {
+        id(e) for table in tables for e in _descendants(table.children) if e.type in ("TH", "TD")
+    }
+    li_ids_in_lists = {
+        id(e) for lst in lists for e in _descendants(lst.children) if e.type == "LI"
+    }
+
+    for element in all_elements:
+        if element.type in ("TH", "TD"):
+            assert id(element) in th_td_ids_in_tables, (
+                f"a {element.type} exists outside of any Table"
+            )
+        if element.type == "LI":
+            assert id(element) in li_ids_in_lists, "an LI exists outside of any L"
+
+
 def test_th_and_td_are_descendants_of_table_and_li_of_l(tmp_path: Path):
     """A flat type-vocabulary check would pass even if TH/TD lived outside any Table, or LI
     outside any L. Assert actual containment in the tree, not just presence somewhere in it.
@@ -87,28 +122,26 @@ def test_th_and_td_are_descendants_of_table_and_li_of_l(tmp_path: Path):
     render_html_to_pdf(STRUCTURED_HTML, target, title="Thermodynamics", lang="en")
 
     tree = structure_tree(target)
+    _assert_th_td_in_table_li_in_l(tree)
 
-    def descendants(elements):
-        for element in elements:
-            yield element
-            yield from descendants(element.children)
 
-    all_elements = list(descendants(tree))
-    tables = [e for e in all_elements if e.type == "Table"]
-    lists = [e for e in all_elements if e.type == "L"]
-    assert tables, "no Table element found in structure tree"
-    assert lists, "no L element found in structure tree"
+def test_containment_check_rejects_a_th_outside_any_table():
+    """Guard the guard: a synthetic tree with a TH sibling outside the Table (but sharing
+    the same document, so "TH" is in the type vocabulary via the correctly-nested TH inside
+    the table) must fail `_assert_th_td_in_table_li_in_l`. This is the exact defect a
+    type-name-only check would miss -- it proves the containment assertion above can
+    actually fail, rather than always passing because the type name is present somewhere.
+    """
+    stray_th = StructElement(type="TH", id=None, headers=(), page_ref=None, mcids=())
+    nested_th = StructElement(type="TH", id=None, headers=(), page_ref=None, mcids=())
+    table = StructElement(
+        type="Table", id=None, headers=(), page_ref=None, mcids=(), children=(nested_th,)
+    )
+    the_list = StructElement(type="L", id=None, headers=(), page_ref=None, mcids=())
+    tree = [table, the_list, stray_th]
 
-    th_and_td_in_tables = {e.type for table in tables for e in descendants(table.children)}
-    li_in_lists = {e.type for lst in lists for e in descendants(lst.children)}
-
-    for element in all_elements:
-        if element.type in ("TH", "TD"):
-            assert element.type in th_and_td_in_tables, (
-                f"a {element.type} exists outside of any Table"
-            )
-        if element.type == "LI":
-            assert "LI" in li_in_lists, "an LI exists outside of any L"
+    with pytest.raises(AssertionError, match="TH exists outside of any Table"):
+        _assert_th_td_in_table_li_in_l(tree)
 
 
 def test_cyclic_structure_tree_raises_instead_of_hanging(tmp_path: Path):
