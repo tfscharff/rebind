@@ -1,0 +1,33 @@
+[project]
+name = "rebind"
+version = "0.0.1"
+description = "Accessible PDF reconstruction for damaged library scans"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Thomas Scharff" }]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "weasyprint>=62",
+    "pikepdf>=9",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rebind"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
