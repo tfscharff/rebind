@@ -37,6 +37,30 @@ elsewhere in this repo.
   equation, and no exposed `alttext` — WeasyPrint does not appear to surface the `alttext`
   attribute as a PDF actual-text or alternate-description property; it was not detected
   anywhere in the tag tree or its properties.
+- **The generic tag tree is consistent with two different underlying failures that look
+  identical from `structure_element_types` alone: (a) the equation's glyphs were laid out and
+  are present in the page content stream, merely tagged generically, or (b) the MathML was
+  silently dropped during HTML5 foreign-content parsing and never rendered at all.** These
+  were distinguished directly rather than assumed, using the same MCID/`ToUnicode`
+  text-extraction machinery `table_header_associations` relies on
+  (`rebind.inspect._page_mcid_text`, applied to each MCID actually present on the rendered
+  page): `test_mathml_glyphs_are_present_in_content_stream` extracts the text shown under
+  every MCID on the page and confirms the equation's own characters — `x`, `=`, `-`, `b`, `2`,
+  `4`, `a`, `c`, matching `x = -b ± √(b²-4ac) ⁄ 2a` term for term — are present in the content
+  stream, distinct from the surrounding prose paragraph's text. **This is case (a):
+  WeasyPrint did lay out and render the MathML's glyphs; the defect is confined to
+  structure-tree tagging, not content loss.** (The ± glyph's `ToUnicode` mapping did not
+  decode cleanly through this extractor's simple CMap parsing — it came back as `U+FFFD` —
+  but that is a limitation of this test-only decoder, not evidence the glyph itself is
+  missing; its presence as a *shown* glyph under its own MCID is not in question, only its
+  Unicode round-trip.)
+- **Root cause not localized.** This task determined *that* WeasyPrint renders but
+  mis-tags the MathML, not *where* in its pipeline the generic tagging originates — whether
+  HTML5 foreign-content parsing loses the MathML's semantic identity before layout ever sees
+  it, or WeasyPrint's layout/tagging stage sees a recognized `<math>` subtree but has no
+  `Formula`-producing tagging rule for it. Distinguishing those would require instrumenting or
+  reading WeasyPrint's internals, which was out of scope here. This ADR should not be read as
+  implying that diagnostic depth was reached.
 - Marked `@pytest.mark.xfail` (non-strict, default) with
   `reason="WeasyPrint does not tag native MathML as Formula; see ADR 0001"` rather than
   deleted, per the brief's instruction, so a future WeasyPrint release that adds MathML
@@ -56,8 +80,9 @@ aria-label="...">`, spoken-form string as both `alt` and `aria-label`):**
   validation pipeline, using only what already exists in `render_html_to_pdf` — no new
   runtime code was needed to make this test pass.
 
-**Full suite after this change:** 22 passed, 3 xfailed, 1 xpassed (previously 21 passed,
-2 xfailed, 1 xpassed — the one new test here is the added, non-strict `xfail`; no existing
+**Full suite after this change:** 23 passed, 3 xfailed, 1 xpassed (previously 22 passed,
+3 xfailed, 1 xpassed — the one new test here, `test_mathml_glyphs_are_present_in_content_stream`,
+is a plain passing assertion of what was actually observed, not another `xfail`; no existing
 test was weakened, skipped, or deleted).
 
 ## Decision
@@ -93,7 +118,14 @@ surface it as accessible structure on its own.
 - Capability lost: assistive technology that understands embedded PDF MathML natively (where
   it exists) gets no benefit from rebind's tagging today, since MathML cannot currently be
   exposed as first-class accessible PDF structure through this rendering pipeline; only the
-  spoken-form alt text is guaranteed to reach the reader.
+  spoken-form alt text is guaranteed to reach the reader. Concretely, that means a screen
+  reader user gets one undifferentiated spoken string for the whole equation and **cannot
+  navigate into its sub-expressions** — there is no way to step into just the numerator,
+  just the denominator, or just the radicand and have that piece re-spoken on its own, the
+  way a `Formula`-tagged native-MathML structure (or MathML consumed directly by a
+  math-aware reader) would allow. That per-part navigation is the main practical advantage
+  MathML holds over a flat text description, and it is exactly what this rendering path
+  gives up.
 - This finding is scoped to WeasyPrint 69.0. `test_mathml_produces_a_formula_element` remains
   in the suite, non-strict `xfail`, specifically so a WeasyPrint upgrade that adds `Formula`
   tagging support is caught automatically (XPASS) rather than silently going unnoticed.
