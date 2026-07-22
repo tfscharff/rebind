@@ -3,6 +3,18 @@
 PDFs record a creation timestamp and a random document ID. Both make byte comparison
 useless, which breaks the golden-file testing Phase 1 depends on. See the design spec's
 determinism invariant.
+
+Scope note: this module makes the *document model and metadata* deterministic (title,
+language, timestamps, and the trailer /ID are all pinned to fixed values). It does NOT by
+itself guarantee that two builds of the same input are byte-identical PDF files across
+process boundaries. Two builds within a single process ARE byte-identical. Across processes,
+even with an identical, pinned PYTHONHASHSEED, embedded font stream bytes have been observed
+to still differ (8 runs with the same seed produced 8 distinct outputs) -- so this is not
+solely Python string-hash randomization, and pinning PYTHONHASHSEED is not sufficient to
+restore cross-process byte-identity. See docs/decisions/0003-determinism-scope.md for the
+evidence and the decision record: rebind's determinism claim is scoped to the document model
+plus single-process byte-identity; cross-process byte-identity is a known, currently-open
+upstream issue.
 """
 
 from __future__ import annotations
@@ -17,7 +29,15 @@ FIXED_TIMESTAMP = "D:20000101000000Z"
 
 
 def pin_document_metadata(pdf_path: Path, *, title: str, lang: str) -> None:
-    """Make the file byte-reproducible and set the metadata PDF/UA requires.
+    """Pin this file's metadata (title, language, timestamps, /ID) to fixed values.
+
+    This removes the metadata-level sources of nondeterminism (wall-clock timestamps, a
+    random document ID) and sets the metadata PDF/UA requires. It does NOT, by itself, make
+    the surrounding PDF bytes fully reproducible across processes: WeasyPrint's font
+    subsetting varies per process even with a pinned PYTHONHASHSEED (see
+    docs/decisions/0003-determinism-scope.md for the evidence). Byte-identity is guaranteed
+    only for two builds within the same process; cross-process byte-identity is a known,
+    currently-open upstream issue that this function cannot fix.
 
     The document ID is derived from the title so it stays stable across runs while
     still differing between documents. Note this makes the ID a determinism knob, not a
