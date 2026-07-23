@@ -35,3 +35,19 @@ def test_missing_source_is_reported_cleanly(tmp_path: Path, capsys):
 
     assert code == 1
     assert "nope.pdf" in capsys.readouterr().err
+
+
+def test_unexpected_exception_is_reported_not_raised(tmp_path: Path, capsys, monkeypatch):
+    source = born_digital_pdf("<h1>T</h1><p>body</p>", tmp_path / "in.pdf")
+
+    def boom(*args, **kwargs):
+        raise ValueError("boom")
+
+    monkeypatch.setattr("rebind.cli.convert", boom)
+
+    code = main(["convert", str(source), str(tmp_path / "out.pdf")])
+
+    err = capsys.readouterr().err
+    assert code == 1
+    assert str(source) in err
+    assert "boom" in err

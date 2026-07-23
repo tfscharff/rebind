@@ -8,7 +8,9 @@ still starts the server without going through argument parsing.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import traceback
 from pathlib import Path
 
 from .extract import ExtractionError
@@ -44,6 +46,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except ExtractionError as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        # The intended user is a librarian, not a developer: a raw traceback reads as "this
+        # software is broken" and gives them nothing they can act on or report. Everything not
+        # already handled above (bad page-label counts, a read-only network share rejecting the
+        # write, a WeasyPrint rendering failure, ...) lands here instead of escaping as a crash.
+        print(f"error: could not convert {args.source}: {exc}", file=sys.stderr)
+        print("this is unexpected and worth reporting", file=sys.stderr)
+        if os.environ.get("REBIND_DEBUG"):
+            traceback.print_exc()
         return 1
 
     print(f"wrote {result.pdf_path}")
