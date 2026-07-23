@@ -1,0 +1,9 @@
+# Normalize line endings so Windows checkouts stop producing CRLF/LF warnings on every commit.
+* text=auto eol=lf
+
+# Binary/generated artifacts: never touch line endings.
+*.pdf -text
+*.png binary
+*.ico binary
+*.exe binary
+*.dll binary

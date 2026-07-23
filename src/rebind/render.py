@@ -6,6 +6,8 @@ WCAG 2.1 AA achievable by construction. See the design spec, section 2.
 
 from __future__ import annotations
 
+import html
+import re
 from pathlib import Path
 
 from weasyprint import HTML
@@ -31,13 +33,23 @@ _DOCUMENT_TEMPLATE = """<!doctype html>
 """
 
 
-def render_html_to_pdf(html: str, target: Path, *, title: str, lang: str = "en") -> Path:
+def render_html_to_pdf(html_body: str, target: Path, *, title: str, lang: str = "en") -> Path:
     """Render an HTML body fragment to a tagged PDF/UA-1 file.
 
     The document colours are fixed to guarantee WCAG 1.4.3 contrast, which we can do
     precisely because we generate the output rather than inherit it.
+
+    Heading levels in `html_body` are normalized before rendering (see
+    `_normalize_heading_levels`): PDF/UA-1 clause 7.4.2 requires headings to start at H1 and
+    never skip an intervening level, but Rebind reconstructs scans that routinely start
+    mid-chapter or yield irregular recognized heading levels (e.g. only H3 headings present,
+    or an H1 followed directly by an H3), which would otherwise fail validation outright.
     """
-    document = _DOCUMENT_TEMPLATE.format(lang=lang, title=_escape(title), body=html)
+    normalized_body = _normalize_heading_levels(html_body)
+    document = _DOCUMENT_TEMPLATE.format(
+        lang=html.escape(lang, quote=True), title=html.escape(title, quote=True),
+        body=normalized_body,
+    )
     HTML(string=document).write_pdf(
         target,
         pdf_variant="pdf/ua-1",
@@ -46,10 +58,72 @@ def render_html_to_pdf(html: str, target: Path, *, title: str, lang: str = "en")
     return target
 
 
-def _escape(text: str) -> str:
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+_HEADING_TAG_RE = re.compile(r"<(/?)h([1-6])((?:\s[^>]*)?)>", re.IGNORECASE)
+
+
+def _normalize_heading_levels(html_body: str) -> str:
+    """Renumber h1-h6 tags so the sequence never skips a level, without changing nesting.
+
+    PDF/UA-1 clause 7.4.2 requires that if heading tags are used, H1 is first and a
+    descending sequence never skips an intervening level (H1 -> H3 with no H2 between them is
+    non-conformant, and so is a document using only H2 with no H1 at all). Rebind's source
+    material is damaged/reconstructed scans, so recognized heading levels routinely start
+    mid-chapter (H2/H3 only) or skip a level, and this cannot be fixed by asking the input to
+    be well-formed -- it must be normalized on the way to the renderer.
+
+    The algorithm is a standard "logical heading level" renumbering (the same shape used by
+    several HTML accessibility remediation tools): walk the headings in document order,
+    keeping a stack of (raw_level, mapped_level) pairs for the currently "open" ancestors.
+    For each heading, pop the stack while its top is at or above the current raw level (i.e.
+    it is a sibling or an uncle, not an ancestor), then the new mapped level is one more than
+    whatever remains on top of the stack (or 1 if the stack is now empty). This guarantees:
+    - The first heading anywhere in the document always maps to H1, even if its raw level is
+      H2 or deeper -- a document that genuinely starts at H2 becomes H1 in the output, which
+      is the correct normalization (a document truly does start its own top level wherever
+      its first heading is), not a loss of information: relative nesting among the headings
+      that follow is preserved exactly, only the absolute levels shift down uniformly.
+    - Levels only ever increase by exactly 1 at a time, never skip.
+    - A later heading that returns to a shallower raw level maps back to the same mapped
+      level its earlier sibling at that raw level used (via the stack). Worked example:
+      raw H1, H3, H2, H3 normalizes to mapped H1, H2, H2, H3 -- the first H3 (under H1, no H2
+      between them) maps to H2 (one more than its open ancestor); the following raw H2 is
+      shallower than that open H3, so it pops back past it and maps using the stack entry the
+      original H1 left, giving H2 again; the final H3 then reopens under that new H2, giving H3.
+
+    This never invents structure the source didn't have and never merges genuinely distinct
+    heading levels together -- it only compresses gaps, which is the minimum change needed to
+    satisfy 7.4.2 while preserving the recognized document's actual heading hierarchy.
+    """
+    matches = list(_HEADING_TAG_RE.finditer(html_body))
+    if not matches:
+        return html_body
+
+    stack: list[tuple[int, int]] = []  # (raw_level, mapped_level) for open headings
+    mapped_for_open: list[int] = []  # mapped level assigned to each opening tag, in order
+
+    for match in matches:
+        if match.group(1) == "/":
+            continue
+        raw_level = int(match.group(2))
+        while stack and stack[-1][0] >= raw_level:
+            stack.pop()
+        mapped_level = min((stack[-1][1] + 1) if stack else 1, 6)
+        stack.append((raw_level, mapped_level))
+        mapped_for_open.append(mapped_level)
+
+    pieces: list[str] = []
+    last_end = 0
+    open_iter = iter(mapped_for_open)
+    close_stack: list[int] = []
+    for match in matches:
+        pieces.append(html_body[last_end:match.start()])
+        if match.group(1) == "/":
+            mapped_level = close_stack.pop()
+            pieces.append(f"</h{mapped_level}>")
+        else:
+            mapped_level = next(open_iter)
+            close_stack.append(mapped_level)
+            pieces.append(f"<h{mapped_level}{match.group(3)}>")
+        last_end = match.end()
+    pieces.append(html_body[last_end:])
+    return "".join(pieces)
