@@ -1,5 +1,22 @@
 # Phase 1 Born-Digital Pipeline Spine Implementation Plan
 
+> **SUPERSEDED — historical record only.** This is the plan as originally written, before
+> execution. It is kept for history, not as a guide to follow verbatim: several code blocks below
+> contain defects that were found and corrected during implementation. `src/rebind/` is
+> authoritative; do not copy code from this document. Known defects in the plan's code blocks:
+>
+> - `node_id`'s bbox normalization was a no-op in the plan's version (it didn't actually quantize
+>   before hashing), which the shipped `model.py` fixes.
+> - Artifact recurrence was counted per *line* instead of per *page* in the plan, which
+>   over-counts a repeated running header that spans multiple lines on the same page.
+> - A stray `continue` in the plan's per-page loop skipped image handling entirely on scanned
+>   pages; the shipped `assemble.py` still emits image placeholders for scanned pages.
+> - The plan's ordered-list marker regex was broken (it did not correctly separate the marker
+>   from trailing content in all cases); see `ORDERED_RE` in `assemble.py` for the corrected
+>   pattern and its documented limitations.
+>
+> If you are implementing new work, read `src/rebind/` and its tests, not this file.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Convert a born-digital PDF into a tagged PDF/UA document that veraPDF passes, recovering headings, paragraphs and lists from typography.
