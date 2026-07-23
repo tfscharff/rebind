@@ -1,6 +1,9 @@
 # Phase 1 — the pipeline spine, born-digital branch
 
-**Status:** design approved 2026-07-23. Not yet implemented.
+**Status:** implemented 2026-07-23. The born-digital spine is built and passing veraPDF; see
+`src/rebind/` (`extract`, `profile`, `model`, `assemble`, `emit`, `pipeline`, `cli`), which is
+authoritative where it differs from this document. Known gaps deliberately left open are recorded
+in §6 and §9.1 rather than silently.
 
 Governing design: `2026-07-22-rebind-design.md`. This spec refines sections 5.1–5.3 and 9 of that
 document for the first implementable slice and does not supersede it.
