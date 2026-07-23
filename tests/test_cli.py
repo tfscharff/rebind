@@ -37,6 +37,35 @@ def test_missing_source_is_reported_cleanly(tmp_path: Path, capsys):
     assert "nope.pdf" in capsys.readouterr().err
 
 
+def test_convert_reports_multi_column_pages_to_the_librarian(tmp_path: Path, capsys):
+    source = born_digital_pdf(
+        "<h1>Doc</h1><div style='column-count:2'>"
+        + "".join(f"<p>Paragraph {i} of the column test.</p>" for i in range(40))
+        + "</div>",
+        tmp_path / "in.pdf",
+    )
+
+    code = main(["convert", str(source), str(tmp_path / "out.pdf")])
+
+    assert code == 0
+    assert "multi-column" in capsys.readouterr().err.lower()
+
+
+def test_convert_does_not_report_multi_column_for_a_clean_single_column_source(
+    tmp_path: Path, capsys
+):
+    source = born_digital_pdf(
+        "<h1>Doc</h1>"
+        + "".join(f"<p>Paragraph {i} of the single column test.</p>" for i in range(40)),
+        tmp_path / "in.pdf",
+    )
+
+    code = main(["convert", str(source), str(tmp_path / "out.pdf")])
+
+    assert code == 0
+    assert "multi-column" not in capsys.readouterr().err.lower()
+
+
 def test_unexpected_exception_is_reported_not_raised(tmp_path: Path, capsys, monkeypatch):
     source = born_digital_pdf("<h1>T</h1><p>body</p>", tmp_path / "in.pdf")
 

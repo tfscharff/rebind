@@ -72,4 +72,20 @@ def main(argv: list[str] | None = None) -> int:
             "note: the source already declares a structure tree; it may already be accessible",
             file=sys.stderr,
         )
+    multi_column_pages = {
+        node.page for node in result.document.nodes if "multi-column-suspected" in node.flags
+    }
+    if multi_column_pages:
+        print(
+            f"note: {len(multi_column_pages)} page(s) look multi-column and may have scrambled "
+            "reading order (Phase 1 does not reconstruct columns); check them by hand",
+            file=sys.stderr,
+        )
+    degraded_count = sum(1 for node in result.document.nodes if "degraded-region" in node.flags)
+    if degraded_count:
+        print(
+            f"note: {degraded_count} region(s) had low-confidence text and are flagged "
+            "'degraded-region' in the model for review",
+            file=sys.stderr,
+        )
     return 0
