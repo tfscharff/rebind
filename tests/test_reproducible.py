@@ -1,3 +1,4 @@
+import hashlib
 import os
 import subprocess
 import sys
@@ -8,6 +9,8 @@ import pytest
 from rebind.render import render_html_to_pdf
 from rebind.reproducible import pin_document_metadata
 from rebind.validate import validate_pdf_ua
+
+_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / "scripts"
 
 HTML = "<h1>Determinism</h1><p>Two runs must produce identical bytes.</p>"
 
@@ -66,37 +69,42 @@ def _diff_detail(first: bytes, second: bytes) -> str:
     )
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Same-process byte-identity does NOT hold either, contrary to this test's original "
-        "name and this project's original claim. Repeated measurement (12 full-suite runs, "
-        "12 isolated runs concurrent with an unrelated process, 15 isolated runs with nothing "
-        "else running, and a bare in-process repro with no pytest involved at all) found this "
-        "assertion fails roughly 1 time in 7 to 1 in 12, with the identical embedded-font-"
-        "subset divergence signature documented for the cross-process case in "
-        "docs/decisions/0003-determinism-scope.md (same /Length1, differing compressed "
-        "/Length and bytes from that point on). The two builds in this test use separate "
-        "target files under the same tmp_path and introduce no shared state of their own, so "
-        "this is not a test-harness artifact -- it reproduces even as a bare function call "
-        "with no pytest fixtures involved. If a future WeasyPrint/fontTools/native-dependency "
-        "release removes this source of variance, this test will XPASS -- that is the signal "
-        "to revisit the ADR and this xfail."
-    ),
-    strict=False,
-)
-def test_two_runs_produce_identical_bytes(tmp_path: Path):
-    """Global constraint: same input at same version yields the same output.
+def test_repeated_builds_still_exhibit_the_known_font_subsetting_nondeterminism(tmp_path: Path):
+    """Stable characterization test, replacing the noisy `test_two_runs_produce_identical_bytes`.
 
-    Historical note: this test's name and docstring originally asserted a same-process
-    determinism guarantee that rebind believed it had verified. That guarantee does not hold
-    -- see the xfail reason above and docs/decisions/0003-determinism-scope.md. Kept as a
-    non-strict xfail (rather than deleted or silently skipped) so the underlying defect stays
-    visible in the suite and any future fix is caught by this test XPASSing.
+    That test was a non-strict `xfail` asserting byte-identity, which this ADR's own evidence
+    says fails only ~1 time in 7-12 -- so across ordinary runs it XPASSed roughly 85-90% of
+    the time. A flip that noisy is not a useful signal: nobody scanning CI history for a lone
+    XPASS among a sea of expected XPASSes would ever notice the day upstream actually fixes
+    this, and a real regression toward *more* determinism would look identical to normal
+    noise. This test asserts the opposite direction instead: that N independent builds of
+    identical input produce *more than one* distinct SHA-256 hash. That is true on every run
+    today (this is the actual, currently-reliable behaviour, not a coin flip), and it would
+    fail loudly -- for the right reason -- the day upstream's font-subsetting nondeterminism is
+    actually resolved, which is the point at which this test (and the ADR) should be revisited.
+
+    Uses `scripts/determinism_probe.py`'s own build-and-hash routine directly (imported, not
+    subprocessed as a script) so this test and the standalone reproduction tool the ADR points
+    readers at can never drift out of sync with each other.
     """
-    first = _build(tmp_path / "one.pdf")
-    second = _build(tmp_path / "two.pdf")
+    sys.path.insert(0, str(_SCRIPTS_DIR))
+    try:
+        import determinism_probe
+    finally:
+        sys.path.remove(str(_SCRIPTS_DIR))
 
-    assert first == second, "PDF output is not byte-reproducible"
+    hashes = {
+        hashlib.sha256(determinism_probe._build_once(tmp_path / f"probe_{i}.pdf")).hexdigest()
+        for i in range(8)
+    }
+
+    assert len(hashes) > 1, (
+        "expected the known upstream font-subsetting nondeterminism (see "
+        "docs/decisions/0003-determinism-scope.md) to produce more than one distinct hash "
+        "across 8 builds of identical input, but got only one -- if this is a real, repeated "
+        "result (not a one-off fluke), upstream may have fixed the nondeterminism; revisit "
+        "the ADR and this test before loosening it further."
+    )
 
 
 @pytest.mark.xfail(
