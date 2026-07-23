@@ -41,6 +41,5 @@ desktop.ini
 # SDD scratch
 .superpowers/
 
-# Local agent/session context — kept out of the public repo
-CLAUDE.md
+# Local session handoff notes — kept out of the public repo
 docs/NEXT-SESSION.md
