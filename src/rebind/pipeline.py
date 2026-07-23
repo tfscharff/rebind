@@ -101,7 +101,7 @@ def _page_labels(
     labels: list[str] = []
     # The initial value for output pages before the first anchor is derived from the first anchor
     # itself, never fabricated: inventing a source page number for output pages that precede any
-    # known anchor is exactly what this project forbids (see Finding 5).
+    # known anchor is exactly what this project's "never fabricate" invariant forbids.
     current_source_page: int | None = entries[0][1] if entries else None
     for index in range(1, output_page_count + 1):
         current_source_page = start_of.get(index, current_source_page)
@@ -122,6 +122,20 @@ def convert(
     write_model: bool = True,
 ) -> ConversionResult:
     source, target = Path(source), Path(target)
+    # `render_html_to_pdf_with_anchors` writes `target` unconditionally, and `set_page_labels`
+    # opens it with `allow_overwriting_input=True` -- so if `target` names the same file as
+    # `source`, the librarian's only copy of the evidence gets overwritten by the generated
+    # artifact partway through, and `convert` would go on to report success. Resolved-path
+    # comparison (not a bare string/path equality check, and not `samefile`, which requires both
+    # paths to already exist -- `target` usually does not yet) is required because two
+    # differently-spelled paths -- a relative path vs. an absolute one, a path through a
+    # symlink, differing case on Windows -- can name the same file on disk without being
+    # string-equal.
+    if source.resolve() == target.resolve():
+        raise ValueError(
+            f"source and target are the same file ({source}); refusing to convert in place, "
+            "which would overwrite the only copy of the source evidence"
+        )
     tagged = source_is_tagged(source)
 
     # Pass one. Only style statistics are retained, so this does not hold the document. A
@@ -150,10 +164,14 @@ def convert(
 
     # Written now, before rendering or page-labelling run, so a WeasyPrint failure or a
     # `set_page_labels` `ValueError` never throws away a model that cost two extraction passes to
-    # build (Finding 2).
+    # build.
     model_path = target.with_suffix(".model.json")
     if write_model:
-        model_path.write_text(document.to_json(), encoding="utf-8")
+        # `newline="\n"` pins the line ending: without it, `Path.write_text` translates "\n" to
+        # the platform default, so the model JSON -- the actual deliverable, and the golden-file
+        # target in tests/golden/ -- comes out CRLF on Windows and LF everywhere else, a spurious
+        # cross-platform diff in a file meant to be byte-comparable.
+        model_path.write_text(document.to_json(), encoding="utf-8", newline="\n")
 
     anchor_pages = render_html_to_pdf_with_anchors(
         to_html(document), target, title=document.title, lang=lang

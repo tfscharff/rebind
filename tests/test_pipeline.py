@@ -7,7 +7,7 @@ from rebind.emit import PAGE_ANCHOR_PREFIX
 from rebind.extract import ExtractionError
 from rebind.model import Document, PageBreak
 from rebind.pipeline import NoTextLayerError, _page_labels, convert
-from tests.fixtures import born_digital_pdf
+from tests.fixtures import born_digital_pdf, pdf_with_text_in_form_xobject
 
 
 def _page_break(page: int, label: str) -> PageBreak:
@@ -99,6 +99,19 @@ def test_output_has_page_labels_matching_its_page_count(tmp_path: Path):
         assert str(first_label_dict["/P"]) == "1"
 
 
+def test_form_xobject_text_is_not_mistaken_for_a_scan(tmp_path: Path):
+    """Regression test for Finding 2's document-wide failure mode: a page whose only content
+    lives inside a Form XObject must not be refused as `NoTextLayerError` -- it has a real text
+    layer, just one the pre-fix extractor could not see."""
+    source = pdf_with_text_in_form_xobject(tmp_path / "xobj.pdf", text="Hello Figure")
+
+    result = convert(source, tmp_path / "out.pdf", title="T")
+
+    assert result.scanned_pages == ()
+    paragraphs = [n.text for n in result.document.nodes if n.kind == "Paragraph"]
+    assert any("Hello Figure" in text for text in paragraphs), paragraphs
+
+
 def test_all_scanned_input_is_refused(tmp_path: Path):
     target = tmp_path / "scan.pdf"
     pdf = pikepdf.new()
@@ -121,6 +134,31 @@ def test_generated_output_passes_pdf_ua(tmp_path: Path, verapdf_exe: Path):
 
     assert result.validation is not None
     assert result.validation.compliant, result.validation.summary()
+
+
+def test_convert_refuses_to_overwrite_the_source(tmp_path: Path):
+    """Regression test for Finding 5: `render_html_to_pdf_with_anchors` writes `target`
+    unconditionally and `set_page_labels` opens with `allow_overwriting_input=True`, so
+    `convert(same_path, same_path)` would silently destroy the librarian's only copy of the
+    source evidence and report success. Must raise before any of that runs."""
+    source = born_digital_pdf("<h1>T</h1><p>body</p>", tmp_path / "in.pdf")
+
+    with pytest.raises(ValueError, match="same file"):
+        convert(source, source, title="T")
+
+    # The source must survive untouched -- not truncated or partially overwritten.
+    assert source.exists()
+    assert source.stat().st_size > 0
+
+
+def test_convert_refuses_to_overwrite_the_source_via_a_differently_spelled_path(tmp_path: Path):
+    """The guard must compare resolved paths, not raw strings -- a relative path naming the same
+    file as the absolute `source` path must be caught too."""
+    source = born_digital_pdf("<h1>T</h1><p>body</p>", tmp_path / "in.pdf")
+    differently_spelled = tmp_path / "." / source.name
+
+    with pytest.raises(ValueError, match="same file"):
+        convert(source, differently_spelled, title="T")
 
 
 def test_zero_page_input_raises_a_clear_error(tmp_path: Path):
