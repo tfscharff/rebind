@@ -28,7 +28,10 @@ def test_untagged_pdf_is_not_compliant(untagged_pdf: Path, verapdf_exe: Path):
 
     assert isinstance(result, ValidationResult)
     assert result.compliant is False
-    assert result.flavour == "ua1"
+    # `flavour` is read back from veraPDF's own report (see `_parse_validation_report`), not
+    # hardcoded, so this asserts on veraPDF's actual profile name rather than the short
+    # `--flavour` spelling rebind passes on the command line.
+    assert "UA-1" in result.flavour, result.flavour
     assert len(result.failed_rules) > 0
 
 

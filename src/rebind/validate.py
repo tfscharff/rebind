@@ -87,9 +87,16 @@ def _parse_validation_report(raw: dict) -> ValidationResult:
         for summary in validation.get("details", {}).get("ruleSummaries", [])
     ]
 
+    # veraPDF's own report names the flavour "profileName" (e.g. "PDF/UA-1 validation
+    # profile"), not the short "ua1" spelling this module previously hardcoded regardless of
+    # what was actually validated. Read it from the report so this field reflects the real
+    # profile veraPDF ran, falling back to the literal `--flavour` value this module always
+    # passes (see `validate_pdf_ua`) only if a future report schema variant omits it.
+    flavour = str(validation.get("profileName") or "ua1")
+
     return ValidationResult(
         compliant=bool(validation["compliant"]),
-        flavour="ua1",
+        flavour=flavour,
         failed_rules=rules,
         raw=raw,
     )
