@@ -123,9 +123,16 @@ def _normalize_heading_levels(html_body: str) -> str:
       shallower than that open H3, so it pops back past it and maps using the stack entry the
       original H1 left, giving H2 again; the final H3 then reopens under that new H2, giving H3.
 
-    This never invents structure the source didn't have and never merges genuinely distinct
-    heading levels together -- it only compresses gaps, which is the minimum change needed to
-    satisfy 7.4.2 while preserving the recognized document's actual heading hierarchy.
+    This never invents structure the source didn't have -- gaps are compressed, not filled with
+    invented intermediate headings. It also never merges genuinely distinct levels *within the
+    first six* -- but HTML and PDF/UA only define h1 through h6, so `mapped_level` is clamped to
+    6 here (`min(..., 6)`), and a document whose recognized heading styles nest more than six
+    levels deep genuinely does lose the distinction between level 7+ styles: they collapse
+    together into h6 in this rendering. That loss is real, not hypothetical (a long catalog
+    routinely has a dozen distinct heading styles); it is visible in the document model, where
+    `assemble` flags the affected `Heading` nodes with `heading-level-collapsed` before this
+    function ever sees them, rather than being silently absorbed here where a reviewer has no way
+    to notice it happened.
     """
     matches = list(_HEADING_TAG_RE.finditer(html_body))
     if not matches:

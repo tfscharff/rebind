@@ -237,7 +237,9 @@ def test_stray_marker_far_from_unrelated_paragraph_is_not_merged():
 
     lists = [n for n in doc.nodes if isinstance(n, ListNode)]
     assert lists, "the stray marker must not be silently dropped"
-    assert any(item.text == "" for item in lists[0].items)
+    assert any(item.text == "•" for item in lists[0].items), (
+        "the degenerate item must carry the marker's own glyph, not an empty string"
+    )
 
 
 def test_marker_followed_by_heading_is_not_lost():
@@ -253,7 +255,7 @@ def test_marker_followed_by_heading_is_not_lost():
     assert heading.text == "Chapter Two"
     lists = [n for n in doc.nodes if isinstance(n, ListNode)]
     assert lists, "the marker preceding a heading must not be dropped"
-    assert any(item.text == "" for item in lists[0].items)
+    assert any(item.text == "•" for item in lists[0].items)
 
 
 def test_marker_followed_by_artifact_is_not_lost():
@@ -275,7 +277,7 @@ def test_marker_followed_by_artifact_is_not_lost():
     assert any(a.page == 1 for a in artifacts), "the footer must be recognized as an artifact"
     lists = [n for n in doc.nodes if isinstance(n, ListNode)]
     assert lists, "the marker preceding the artifact must not be dropped"
-    assert any(item.text == "" for item in lists[0].items)
+    assert any(item.text == "•" for item in lists[0].items)
 
 
 def test_marker_followed_immediately_by_another_marker_keeps_both():
@@ -289,7 +291,7 @@ def test_marker_followed_immediately_by_another_marker_keeps_both():
 
     lists = [n for n in doc.nodes if isinstance(n, ListNode)]
     assert lists, "both stray markers must surface, not be dropped"
-    assert [item.text for item in lists[0].items] == ["", ""]
+    assert [item.text for item in lists[0].items] == ["•", "*"]
 
 
 def test_marker_at_end_of_page_with_content_on_next_page_keeps_both():
@@ -303,7 +305,7 @@ def test_marker_at_end_of_page_with_content_on_next_page_keeps_both():
 
     lists = [n for n in doc.nodes if isinstance(n, ListNode)]
     assert lists, "the marker stranded at end of page must not be dropped"
-    assert any(item.text == "" for item in lists[0].items)
+    assert any(item.text == "•" for item in lists[0].items)
     paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
     assert any(p.text == "Next page content" for p in paragraphs), (
         "content on the following page must not be merged into the previous page's marker"
@@ -340,6 +342,54 @@ def test_year_starting_a_sentence_is_not_mistaken_for_a_list_marker():
     assert not any(isinstance(n, ListNode) for n in doc.nodes)
     paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
     assert any(p.text == "1996. It was a good year." for p in paragraphs)
+
+
+def test_heading_level_past_six_is_flagged_when_collapsed():
+    """Regression test for Finding 4: `emit`/`render` both clamp heading levels to h6, so a
+    document with more than six genuinely distinct heading styles (unbounded by design --
+    invariant 5, no arbitrary limits) silently collapses levels 7+ into h6 downstream. The model
+    itself must keep the true, uncapped level and flag the loss so it is visible, not silent."""
+    lines = [line("body", y=780.0 - i) for i in range(30)]
+    # Eight distinct heading sizes, strictly decreasing, all larger than body (11pt) -- assigned
+    # levels 1 through 8 by build_profile's size-descending ranking.
+    sizes = [40.0, 36.0, 32.0, 28.0, 24.0, 20.0, 16.0, 12.0]
+    for index, size in enumerate(sizes):
+        lines.append(line(f"Heading level {index + 1}", size=size, bold=True, y=100.0 - index))
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    headings = {h.text: h for h in doc.nodes if isinstance(h, Heading)}
+    assert headings["Heading level 7"].level == 7
+    assert "heading-level-collapsed" in headings["Heading level 7"].flags
+    assert headings["Heading level 8"].level == 8
+    assert "heading-level-collapsed" in headings["Heading level 8"].flags
+
+    for index in range(1, 7):
+        heading = headings[f"Heading level {index}"]
+        assert heading.level == index
+        assert "heading-level-collapsed" not in heading.flags
+
+
+def test_stray_numeric_marker_does_not_fabricate_an_ordinal():
+    """A bare '7.' with nothing ever arriving to merge with it must not become the sole item of
+    an <ol> list -- CSS auto-numbers an empty <ol><li></li></ol> as '1.', reintroducing an
+    ordinal the source never had. The degenerate item must fall back to unordered and carry the
+    real marker glyph as its text, not an empty string standing in for a fabricated number."""
+    lines = [line("body", y=500.0 - i) for i in range(20)]
+    lines.append(line("7.", y=280.0))
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    lists = [n for n in doc.nodes if isinstance(n, ListNode)]
+    assert lists, "the stray marker must not be silently dropped"
+    assert lists[0].ordered is False, (
+        "a marker with no content must not decide the list is ordered -- that fabricates '1.'"
+    )
+    assert [item.text for item in lists[0].items] == ["7."]
 
 
 def test_list_id_is_deterministic_and_content_derived():

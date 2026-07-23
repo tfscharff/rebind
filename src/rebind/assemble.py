@@ -230,16 +230,27 @@ def assemble(
             def flush_pending_marker() -> None:
                 """Emit a held marker line as its own item if nothing ever arrived to merge it
                 with (end of page, or a heading/artifact intervened) -- honest, if degenerate,
-                rather than silently dropping the marker."""
+                rather than silently dropping the marker.
+
+                The item's text carries the marker's own glyph (e.g. "7." or a bullet character)
+                rather than being left empty: an empty `<li>` inside `<ol>` still gets a CSS
+                auto-number from the browser/renderer, so a stray numeric marker with nothing
+                ever following it would otherwise reappear in the output as a fabricated "1." --
+                real content the source never had. A marker that never got its content also must
+                not decide the list's ordered-ness for the same reason: rendering it inside <ol>
+                invents that ordinal regardless of what the marker glyph actually was, so a
+                content-less marker always falls back to unordered (a bullet), which makes no
+                numeric claim at all.
+                """
                 nonlocal pending_marker, pending_ordered
                 if pending_marker is None:
                     return
-                marker, marker_confidence, ordered = pending_marker
+                marker, marker_confidence, _ordered = pending_marker
                 if not pending_items:
-                    pending_ordered = ordered
+                    pending_ordered = False
                 pending_items.append(
                     ListItem(id=_ids(marker, page), page=marker.page, bbox=marker.bbox,
-                             confidence=marker_confidence, stage=_STAGE, flags=[], text="")
+                             confidence=marker_confidence, stage=_STAGE, flags=[], text=marker.text)
                 )
                 pending_marker = None
 
@@ -288,10 +299,19 @@ def assemble(
 
                 if role == "heading":
                     flush_list()
+                    level = profile.heading_level(style_of(line))
+                    # HTML/PDF-UA headings only go to h6; `emit` and `render` both clamp to that
+                    # ceiling downstream. A document with more than six genuinely distinct heading
+                    # styles (a real catalog routinely has a dozen) has some of those distinct
+                    # levels collapse into h6 together at that point -- a real loss of structure,
+                    # not a cosmetic clamp. The model keeps the true, uncapped level (the source
+                    # of truth is never lossy on our account), and flags the node so the collapse
+                    # is visible to a human reviewer rather than silently absorbed on the way out.
+                    heading_flags = ["heading-level-collapsed"] if level > 6 else []
                     nodes.append(
                         Heading(id=_ids(line, page), page=line.page, bbox=line.bbox,
-                                confidence=confidence, stage=_STAGE, flags=[],
-                                level=profile.heading_level(style_of(line)),
+                                confidence=confidence, stage=_STAGE, flags=heading_flags,
+                                level=level,
                                 text=line.text)
                     )
                     continue
