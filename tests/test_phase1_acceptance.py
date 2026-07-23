@@ -51,6 +51,39 @@ def test_running_headers_are_not_read_aloud(tmp_path: Path):
     )
 
 
+def test_body_style_at_page_edge_is_never_classified_as_an_artifact(tmp_path: Path):
+    """Regression test for Finding 1.
+
+    `profile.build_profile` used to key `artifact_keys` on `(Style, band)` alone, with nothing
+    excluding the body style itself. Any document whose body text reaches into the top or bottom
+    `EDGE_FRACTION` of the page on more than `RECURRENCE_FRACTION` of pages made the body style
+    itself an artifact key -- deleting real paragraphs with confidence=1.0 and no flag. The
+    default 1in margin every other fixture in this suite uses escapes the edge band by a few
+    points, which is why nothing caught this: a narrower, still entirely ordinary 0.75in margin
+    is what actually reproduces it, with no running header in the source at all.
+    """
+    paragraph_count = 120
+    body = "".join(
+        f"<p>Paragraph number {i} of the reproduction document, long enough to fill a line.</p>"
+        for i in range(paragraph_count)
+    )
+    source = born_digital_pdf(body, tmp_path / "in.pdf", margin="0.75in")
+
+    result = convert(source, tmp_path / "out.pdf", title="T")
+
+    artifacts = [n for n in result.document.nodes if n.kind == "Artifact"]
+    assert not artifacts, (
+        f"source has no running header; the body style must never be classified as an "
+        f"artifact, but got: {artifacts}"
+    )
+
+    paragraphs = [n for n in result.document.nodes if n.kind == "Paragraph"]
+    assert len(paragraphs) == paragraph_count, (
+        f"expected all {paragraph_count} input paragraphs to survive; got {len(paragraphs)} -- "
+        "some were silently dropped as artifacts"
+    )
+
+
 def test_two_column_text_is_flagged_not_silently_trusted(tmp_path: Path):
     """A genuinely two-column source must have its paragraphs flagged 'multi-column-suspected'.
 

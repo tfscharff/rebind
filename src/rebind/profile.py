@@ -79,11 +79,19 @@ class TypographicProfile:
         style = style_of(line)
         if style == self.body:
             return 1.0
-        if self.heading_level(style):
-            return 0.9
         if not self.total_chars:
             return 0.0
         share = self.style_volumes.get(style, 0) / self.total_chars
+        if self.heading_level(style):
+            # A heading style covering a meaningful share of the document -- because it recurs
+            # across many pages, or introduces long sections -- is a confident classification;
+            # one seen only a handful of characters anywhere (a style guessed to be a heading
+            # purely from being larger/bolder than body, with almost nothing else to go on) is a
+            # guess and must score low, not the flat 0.9 every heading style used to get
+            # regardless of evidence. The floor and ceiling are higher than the generic fallback
+            # below because heading candidates arrive here already narrowed by the size/bold
+            # heuristic in `build_profile`, so the same share of evidence carries more weight.
+            return round(min(1.0, 0.4 + share * 6), 3)
         # A style covering a large share of the document is a confident classification even when
         # it is neither body nor a recognized heading; a style seen twice is a guess.
         return round(min(0.8, 0.2 + share * 4), 3)
@@ -135,8 +143,21 @@ def build_profile(pages: Iterable[Page]) -> TypographicProfile:
     # number: max(2, int(page_count * RECURRENCE_FRACTION)) is unreachable on a 1-page document
     # (int(1 * 0.5) == 0), which correctly means nothing on a 1-page document is ever an artifact.
     threshold = max(2, int(page_count * RECURRENCE_FRACTION))
+    # The body style itself is never eligible to become an artifact key, no matter how often it
+    # recurs at a page edge. Style + position alone cannot tell a running header from an ordinary
+    # paragraph that happens to be the first or last line on its page (a page with generous
+    # margins, or a document with no running header at all, routinely has body-styled lines
+    # reaching into EDGE_FRACTION on well over RECURRENCE_FRACTION of pages) -- a running header
+    # is additionally distinguished by being the *same text* recurring, which this pass never
+    # inspects (it retains style statistics only, never text, see the module docstring). Absent
+    # that check, classifying the body style as an artifact silently deletes real paragraphs with
+    # confidence=1.0 and no flag -- exactly the "never fabricate/never silently drop" invariant
+    # this project exists to uphold. The cost is that a genuine running header sharing the body's
+    # exact style is not caught here; that is a real but much rarer shape than the false positive
+    # this excludes, and catching it would require the text-recurrence signal this pass
+    # deliberately does not retain.
     artifact_keys = frozenset(
-        key for key, count in edge_page_counts.items() if count >= threshold
+        key for key, count in edge_page_counts.items() if count >= threshold and key[0] != body
     )
 
     return TypographicProfile(
