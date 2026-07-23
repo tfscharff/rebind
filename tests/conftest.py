@@ -22,7 +22,16 @@ import pytest
 
 @pytest.fixture(scope="session")
 def verapdf_exe() -> Path:
-    """Locate verapdf.bat, preferring the REBIND_VERAPDF env var."""
+    """Locate verapdf.bat, preferring the REBIND_VERAPDF env var.
+
+    When veraPDF cannot be found, the default behaviour is to skip -- convenient for local
+    development on a machine that hasn't installed it. But every PDF/UA-conformance assertion
+    in this suite depends on this fixture, so a CI environment that is missing veraPDF (a
+    misconfiguration, not an expected condition) would otherwise report a fully green
+    "26 passed" run having validated *nothing*, which is worse than a visible failure. Setting
+    REBIND_REQUIRE_VERAPDF (to any non-empty value) turns the "not found" case into a hard
+    `pytest.fail` instead of a skip, so CI can opt into a gate that cannot silently no-op.
+    """
     env = os.environ.get("REBIND_VERAPDF")
     if env and Path(env).exists():
         return Path(env)
@@ -35,6 +44,11 @@ def verapdf_exe() -> Path:
     found = shutil.which("verapdf")
     if found:
         return Path(found)
+    if os.environ.get("REBIND_REQUIRE_VERAPDF"):
+        pytest.fail(
+            "veraPDF not installed and REBIND_REQUIRE_VERAPDF is set, so this is a hard "
+            "failure rather than a skip: set REBIND_VERAPDF to verapdf.bat or install veraPDF."
+        )
     pytest.skip("veraPDF not installed; set REBIND_VERAPDF to verapdf.bat")
 
 
