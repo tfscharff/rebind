@@ -51,6 +51,9 @@ escape.
 
 ## Handles
 
+**This table is the design target, not the current state.** Today only the born-digital branch is
+built — see [Usage](#usage) below for exactly what works and what does not.
+
 | | |
 |---|---|
 | Degraded scans | deskew, dewarp, denoise, occlusion detection |
@@ -62,6 +65,41 @@ escape.
 | Chemistry | recognized to SMILES, re-rendered as clean vector structures |
 | Sheet music | detected and described (recognition not attempted) |
 | Long documents | 1,000+ pages, resumable, no structure-element limits |
+
+## Usage
+
+Convert a born-digital PDF (one with a real text layer) to a tagged PDF/UA document:
+
+```
+rebind convert input.pdf output.pdf
+```
+
+This writes `output.pdf` and `output.model.json`. The model is the source of truth; the PDF is a
+build artifact regenerable from it.
+
+Recovered structure: headings (levels inferred from a document-wide typographic profile),
+paragraphs, and ordered/unordered lists. Running headers, footers and page numbers are detected
+and excluded from the reading order. Output pages carry the source's sequential page number (page
+1, 2, 3, ...), not the source's own printed pagination — a document with roman-numeral front
+matter or plate numbers does not yet get those labels back. Extracting the document's own printed
+page labels is later work.
+
+Images become placeholders rather than figures — PDF/UA requires alt text on every figure, and
+there is currently no honest way to generate it, so **images are not reproduced in the output**.
+Pages that look multi-column are flagged in the model rather than reconstructed into columns; real
+column detection is a later phase. **Tables are not detected at all.** A table's cell text is kept,
+but it is emitted as ordinary paragraphs in naive reading order, with no flag — cell text can come
+out in the wrong order with nothing to warn you. Real table structuring is a later phase.
+
+Pages without a text layer become honest placeholders and are listed on stderr, so a later OCR
+pass knows which pages to revisit. A document with no text layer on any page is a scan, and is
+refused outright — the OCR branch is not implemented yet.
+
+Set `REBIND_DEBUG=1` to print a full traceback on an unexpected conversion failure, for bug
+reports.
+
+`rebind serve` starts the local server; this is also what the installed desktop application runs
+on double-click.
 
 ## Documentation
 

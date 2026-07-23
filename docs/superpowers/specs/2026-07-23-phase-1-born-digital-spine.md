@@ -1,6 +1,9 @@
 # Phase 1 — the pipeline spine, born-digital branch
 
-**Status:** design approved 2026-07-23. Not yet implemented.
+**Status:** implemented 2026-07-23. The born-digital spine is built and passing veraPDF; see
+`src/rebind/` (`extract`, `profile`, `model`, `assemble`, `emit`, `pipeline`, `cli`), which is
+authoritative where it differs from this document. Known gaps deliberately left open are recorded
+in §6 and §9.1 rather than silently.
 
 Governing design: `2026-07-22-rebind-design.md`. This spec refines sections 5.1–5.3 and 9 of that
 document for the first implementable slice and does not supersede it.
@@ -129,17 +132,27 @@ reading order, so assistive technology does not announce the document title on e
 
 ### 5.4 Page breaks
 
-`PageBreak` nodes carry the original page label and feed the existing `pagelabels.py`, so a viewer
-shows the source document's own page numbering and a screen-reader user can cite accurately.
+`PageBreak` nodes feed the existing `pagelabels.py`. As implemented, `PageBreak.label` holds the
+source page's sequential ordinal (`str(page.number)`), not the source's own printed pagination --
+so a viewer shows page 1, 2, 3, ... rather than the roman numerals or plate numbers the source
+document may actually use. Extracting and preserving the source's own labels is later work; see
+§9.1.
 
 ## 6. Handling content Phase 1 does not model
 
 Split by region type:
 
-- **Text-bearing regions that cannot be structured** (tables, multi-column regions) keep their text,
-  emitted in reading order as paragraphs, flagged `degraded-region` with provenance retained.
-  Nothing recoverable is discarded, and nothing is claimed to be more structured than it is.
+- **Text-bearing regions that cannot be structured** keep their text, emitted in reading order as
+  paragraphs, with provenance retained. Nothing recoverable is discarded.
 - **Non-text regions** (images, figures) become `Placeholder` nodes retaining page and bbox.
+
+Of the regions above, only multi-column text is actually flagged in Phase 1: `assemble.py` has a
+cheap heuristic (disjoint, vertically-overlapping horizontal clusters of lines) that marks
+suspect pages `multi-column-suspected`, precisely so scrambled reading order is surfaced rather
+than silently trusted. **Tables have no equivalent heuristic.** A table's cells share the body
+paragraph style, so they score the same confidence as ordinary prose and carry no flag at all --
+cell text is preserved but may read out of order, indistinguishable in the output from a correctly
+ordered paragraph. Table detection is Phase 2 work; see §9.1.
 
 `Placeholder`, not `Figure`, is used for images deliberately. PDF/UA 7.3 requires `/Alt` on every
 figure, and Phase 1 has no honest way to produce alt text. Emitting a `Figure` with invented alt
@@ -202,6 +215,18 @@ margin boxes.
 real documents can do that, and the first of those is the 300-page catalog, which lives outside the
 repository. Tuning against it is expected work at the end of Phase 1, not a sign something went
 wrong.
+
+**Table cell text has no ordering guarantee and no flag.** Phase 1 has no table detection at all;
+a table's cells are ordinary text lines that happen to share the body paragraph style, so they are
+emitted as confident, unflagged paragraphs in whatever order the naive top-to-bottom /
+left-to-right sort produces -- which for a multi-column table is frequently the wrong order, with
+nothing in the output to warn a reviewer. This is a known Phase 1 gap, not a bug to fix here; real
+table structuring is Phase 2 work.
+
+**Page labels are sequential ordinals, not the source's own pagination.** `PageBreak.label` is
+`str(page.number)` today. A source with roman-numeral front matter or non-arabic pagination gets
+plain sequential numbering in the output instead of its own scheme; extracting real source labels
+is later work (see §5.4).
 
 ## 10. Invariants this design upholds
 

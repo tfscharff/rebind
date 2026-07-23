@@ -97,9 +97,20 @@ Phase 0 (feasibility spikes) is complete — see `docs/decisions/0002-phase-0-fi
 PDF/UA generation works; the frozen bundle renders using vendored DLLs with nothing loading from
 outside it. The installer itself has never been built.
 
-**Next: Phase 1 — the pipeline spine.** Ingest → text acquisition → minimal document model → tagged
-PDF → veraPDF, end to end. Start with the born-digital branch: it has a real text layer, needs no
-OCR or restoration, and therefore delivers a genuinely useful feature rather than scaffolding.
+**Phase 1's born-digital spine is complete.** `rebind convert input.pdf output.pdf` takes a
+born-digital PDF through `extract` → `profile` → `assemble` → `emit` → render → validate
+(orchestrated by `pipeline`, driven by `cli`) and produces a tagged PDF/UA document that veraPDF
+passes, plus `output.model.json`. Headings, paragraphs and lists are recovered from a
+document-global typographic profile; running headers/footers/page numbers are detected and
+excluded from reading order; source page labels are preserved. Images become `Placeholder` nodes,
+not figures, so images are not reproduced in the output — there is no honest way yet to produce
+the alt text PDF/UA requires. Multi-column pages are flagged `multi-column-suspected` rather than
+reconstructed. Pages with no text layer become placeholders and are reported; a document with no
+text layer anywhere is refused as a scan. Tables, figures, formulae, chemistry, music and footnote
+linking are not implemented.
+
+**Next: Phase 2 — restoration, layout analysis and reading order**, which is what the scanned
+branch (OCR, dewarping, multi-column reconstruction) needs.
 
 Full progress ledger, including every deferred finding: `.superpowers/sdd/progress.md`.
 

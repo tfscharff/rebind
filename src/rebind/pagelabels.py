@@ -1,11 +1,17 @@
-"""Write original source pagination into the reconstructed PDF.
+"""Write page labels into the reconstructed PDF.
 
-Rebind reflows the document, so output page N rarely equals source page N. Page labels keep
-citation working: the viewer's page field shows the source's number. See design spec 5.3.
+Rebind reflows the document, so output page N rarely equals source page N. Page labels keep the
+viewer's page field pointing at the right source page. See design spec 5.3.
 
-Every label is written as an explicit prefix with no numeric style. This is verbose but exact,
-and it handles arbitrary source pagination (roman numerals, plate numbers, "A-17") without
-Rebind having to infer a numbering scheme it cannot know.
+As of Phase 1, the label written for each output page is the source's *sequential* page number
+(1, 2, 3, ...) -- not the source's own printed pagination. A source with roman-numeral front
+matter, plate numbers, or an "A-17"-style scheme does not get that scheme back; it gets the plain
+ordinal of the source page instead. Extracting and preserving the document's own printed labels is
+later work (see `pipeline._page_labels`).
+
+Every label is written as an explicit prefix with no numeric style. This is verbose but exact, and
+leaves room to plug in the source's real pagination scheme later without changing this function's
+contract: one string label per page, written as-is.
 """
 
 from __future__ import annotations

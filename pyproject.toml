@@ -11,6 +11,7 @@ dependencies = [
     "pikepdf>=9",
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "pdfminer.six>=20240706",
 ]
 
 [project.optional-dependencies]
@@ -22,7 +23,7 @@ dev = [
 ]
 
 [project.scripts]
-rebind = "rebind.app:main"
+rebind = "rebind.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -34,8 +35,14 @@ packages = ["src/rebind"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v -m \"not packaging\""
+# Puts the repo root on sys.path so tests can `from tests.fixtures import ...`. Without this,
+# pytest's default "prepend" import mode adds only `tests/` itself, and `import tests.fixtures`
+# fails with "No module named 'tests'" -- verified, not assumed. Phase 1 shares a fixture
+# generator across several test modules, so the shared import has to resolve.
+pythonpath = ["."]
 markers = [
     "packaging: slow, opt-in tests that build the frozen PyInstaller bundle and exercise it. Run with `uv run pytest -m packaging`.",
+    "slow: long-running tests (e.g. the 300-page document). Included by default; deselect with `-m 'not slow'`.",
 ]
 
 [tool.ruff]
