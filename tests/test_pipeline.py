@@ -99,6 +99,21 @@ def test_output_has_page_labels_matching_its_page_count(tmp_path: Path):
         assert str(first_label_dict["/P"]) == "1"
 
 
+def test_source_was_tagged_is_true_for_a_genuinely_tagged_source(tmp_path: Path):
+    """Every other fixture in this suite is untagged, so only the `False` branch of
+    `source_was_tagged` is normally exercised -- the propagation could be inverted with a green
+    suite. Rebind's own output is a tagged PDF/UA document, so converting a previously-converted
+    file gives a genuinely tagged source to convert again.
+    """
+    source = born_digital_pdf("<h1>T</h1><p>body</p>", tmp_path / "in.pdf")
+    already_tagged = tmp_path / "tagged.pdf"
+    convert(source, already_tagged, title="T")
+
+    result = convert(already_tagged, tmp_path / "out.pdf", title="T")
+
+    assert result.source_was_tagged is True
+
+
 def test_form_xobject_text_is_not_mistaken_for_a_scan(tmp_path: Path):
     """Regression test for Finding 2's document-wide failure mode: a page whose only content
     lives inside a Form XObject must not be refused as `NoTextLayerError` -- it has a real text
@@ -237,8 +252,13 @@ def test_page_labels_tie_break_is_the_highest_source_page_regardless_of_insertio
 
 
 def test_page_labels_tie_break_sorts_source_page_numerically_not_lexically():
-    # If the tie-break compared the stripped anchor id as a string, "10" would sort before "9".
-    anchor_pages = {_anchor(9): 1, _anchor(10): 1}
+    # Inserted with 10 before 9 deliberately: a tie-break that (bug) ignored the source page as a
+    # sort key entirely and fell back to input order would then produce "9", not "10" -- so this
+    # only passes today because the code genuinely parses the source page as an int and sorts on
+    # it, not because it happens to agree with insertion order. (With 9 inserted before 10, a
+    # broken tie-break that preserved input order on ties would coincidentally also land on "10",
+    # making the test pass for the wrong reason -- see the finding this regression-tests.)
+    anchor_pages = {_anchor(10): 1, _anchor(9): 1}
 
     labels = _page_labels(anchor_pages, output_page_count=1, document=_EMPTY_DOCUMENT)
 
