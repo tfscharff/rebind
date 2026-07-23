@@ -10,7 +10,7 @@ anything else, it bundles the GTK3 native libraries that its PDF renderer
 depends on. Those libraries are the work of other people, distributed under
 their own licenses, and this file discharges the obligation to tell you so.
 
-80 bundled libraries are covered, grouped below by project. The full text of
+26 bundled libraries are covered, grouped below by project. The full text of
 every license referenced here is installed in this same folder. Nothing in this
 file modifies the terms of any license it points to; where they differ, the
 license text governs.
@@ -25,11 +25,6 @@ DLL-INVENTORY.md in this folder.
 
 ================================================================================
 
-ATK
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libatk-1.0-0.dll
-
 Brotli
     License:  MIT
     Text:     LICENSE-brotli.txt
@@ -39,11 +34,6 @@ bzip2
     License:  bzip2-1.0.6
     Text:     LICENSE-bzip2.txt
     Files:    libbz2-1.dll
-
-cairo
-    License:  LGPL-2.1-only OR MPL-1.1
-    Text:     LICENSE-LGPL-2.1.txt, LICENSE-MPL-1.1.txt
-    Files:    libcairo-2.dll, libcairo-gobject-2.dll, libcairo-script-interpreter-2.dll
 
 Expat
     License:  MIT
@@ -63,17 +53,12 @@ FreeType
 GCC runtime (TDM-GCC/MinGW-w64)
     License:  GPL-3.0-or-later WITH GCC-exception-3.1
     Text:     LICENSE-GPL-3.0.txt, LICENSE-GCC-Runtime-Exception-3.1.txt
-    Files:    libgcc_s_seh-1.dll, libssp-0.dll, libstdc++-6.dll
-
-gdk-pixbuf
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libgdk_pixbuf-2.0-0.dll
+    Files:    libgcc_s_seh-1.dll, libstdc++-6.dll
 
 GLib
     License:  LGPL-2.1-or-later
     Text:     LICENSE-LGPL-2.1.txt
-    Files:    libgio-2.0-0.dll, libglib-2.0-0.dll, libgmodule-2.0-0.dll, libgobject-2.0-0.dll, libgthread-2.0-0.dll
+    Files:    libgio-2.0-0.dll, libglib-2.0-0.dll, libgmodule-2.0-0.dll, libgobject-2.0-0.dll
 
 GNU FriBidi
     License:  LGPL-2.1-or-later
@@ -90,195 +75,50 @@ GNU libiconv
     Text:     LICENSE-LGPL-2.1.txt
     Files:    libiconv-2.dll
 
-GNU libidn2
-    License:  LGPL-3.0-or-later OR GPL-2.0-or-later
-    Text:     LICENSE-LGPL-3.0.txt, LICENSE-GPL-3.0.txt, LICENSE-GPL-2.0.txt
-    Files:    libidn2-0.dll
-
-GNU libtasn1
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libtasn1-6.dll
-
-GNU libunistring
-    License:  LGPL-3.0-or-later
-    Text:     LICENSE-LGPL-3.0.txt, LICENSE-GPL-3.0.txt
-    Files:    libunistring-2.dll
-
-GNU MP (GMP)
-    License:  LGPL-3.0-or-later OR GPL-2.0-or-later
-    Text:     LICENSE-LGPL-3.0.txt, LICENSE-GPL-3.0.txt, LICENSE-GPL-2.0.txt
-    Files:    libgmp-10.dll
-
-GnuTLS
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libgnutls-30.dll
-
-gobject-introspection
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libgirepository-1.0-1.dll
-
 Graphite2
     License:  LGPL-2.1-or-later
     Text:     LICENSE-LGPL-2.1.txt
     Files:    libgraphite2.dll
-
-GTK
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libgailutil-3-0.dll, libgdk-3-0.dll, libgtk-3-0.dll
-
-gtkmm / glibmm C++ bindings
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libatkmm-1.6-1.dll, libcairomm-1.0-1.dll, libgdkmm-3.0-1.dll, libgiomm-2.4-1.dll, libglibmm-2.4-1.dll, libglibmm_generate_extra_defs-2.4-1.dll, libgtkmm-3.0-1.dll, libgtksourceviewmm-3.0-0.dll, libpangomm-1.4-1.dll
-
-GtkSourceView
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libgtksourceview-3.0-1.dll, libgtksourceview-4-0.dll
 
 HarfBuzz
     License:  MIT
     Text:     LICENSE-HarfBuzz.txt
     Files:    libharfbuzz-0.dll
 
-JasPer
-    License:  JasPer-2.0
-    Text:     LICENSE-JasPer-2.0.txt
-    Files:    libjasper-4.dll
-
-JSON-GLib
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libjson-glib-1.0-0.dll
-
-libcroco
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libcroco-0.6-3.dll
-
 libdatrie
     License:  LGPL-2.1-or-later
     Text:     LICENSE-LGPL-2.1.txt
     Files:    libdatrie-1.dll
-
-libepoxy
-    License:  MIT
-    Text:     LICENSE-libepoxy.txt
-    Files:    libepoxy-0.dll
 
 libffi
     License:  MIT
     Text:     LICENSE-libffi.txt
     Files:    libffi-7.dll
 
-libjpeg (IJG)
-    License:  IJG
-    Text:     LICENSE-IJG-libjpeg.txt
-    Files:    libjpeg-8.dll
-
-libpeas
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libpeas-1.0-0.dll, libpeas-gtk-1.0-0.dll
-
 libpng
     License:  Libpng
     Text:     LICENSE-libpng.txt
     Files:    libpng16-16.dll
-
-libproxy
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libproxy-1.dll
-
-libpsl
-    License:  MIT
-    Text:     LICENSE-libpsl.txt
-    Files:    libpsl-5.dll
-
-librsvg
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    librsvg-2-2.dll
-
-libsigc++
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libsigc-2.0-0.dll
-
-libsoup
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libsoup-2.4-1.dll, libsoup-gnome-2.4-1.dll
 
 libthai
     License:  LGPL-2.1-or-later
     Text:     LICENSE-LGPL-2.1.txt
     Files:    libthai-0.dll
 
-libtiff
-    License:  libtiff
-    Text:     LICENSE-libtiff.txt
-    Files:    libtiff-5.dll
-
-libxml++
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libxml++-2.6-2.dll, libxml++-3.0-1.dll
-
-libxml2
-    License:  MIT
-    Text:     LICENSE-libxml2.txt
-    Files:    libxml2-2.dll
-
-libxslt
-    License:  MIT
-    Text:     LICENSE-libxslt.txt
-    Files:    libexslt-0.dll, libxslt-1.dll
-
 MinGW-w64 winpthreads
     License:  MIT AND BSD-3-Clause
     Text:     LICENSE-mingw-w64-winpthreads.txt
     Files:    libwinpthread-1.dll
 
-Nettle
-    License:  LGPL-3.0-or-later OR GPL-2.0-or-later
-    Text:     LICENSE-LGPL-3.0.txt, LICENSE-GPL-3.0.txt, LICENSE-GPL-2.0.txt
-    Files:    libhogweed-6.dll, libnettle-8.dll
-
-p11-kit
-    License:  BSD-3-Clause
-    Text:     LICENSE-p11-kit.txt
-    Files:    libp11-kit-0.dll
-
 Pango
     License:  LGPL-2.1-or-later
     Text:     LICENSE-LGPL-2.1.txt
-    Files:    libpango-1.0-0.dll, libpangocairo-1.0-0.dll, libpangoft2-1.0-0.dll, libpangowin32-1.0-0.dll
+    Files:    libpango-1.0-0.dll, libpangoft2-1.0-0.dll
 
 PCRE
     License:  BSD-3-Clause
     Text:     LICENSE-PCRE.txt
     Files:    libpcre-1.dll
-
-pixman
-    License:  MIT
-    Text:     LICENSE-pixman.txt
-    Files:    libpixman-1-0.dll
-
-SQLite
-    License:  blessing
-    Text:     LICENSE-SQLite-blessing.txt
-    Files:    libsqlite3-0.dll
-
-XZ Utils (liblzma)
-    License:  LicenseRef-public-domain
-    Text:     LICENSE-xz-liblzma.txt
-    Files:    liblzma-5.dll
 
 zlib
     License:  Zlib

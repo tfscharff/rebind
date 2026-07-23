@@ -171,18 +171,18 @@ sources may be obtained from the upstream project URLs.
 
 ## GPL-3 components
 
-`libstdc++-6.dll`, `libgcc_s_seh-1.dll` and `libssp-0.dll` are GPL-3-licensed but carry the **GCC
-Runtime Library Exception 3.1**, which explicitly permits distributing them with a program
-compiled by GCC without that program becoming subject to the GPL. This is the standard and
-intended arrangement for any MinGW-built binary; it does not impose obligations on Rebind's own
-MIT-licensed code.
+`libstdc++-6.dll` and `libgcc_s_seh-1.dll` are GPL-3-licensed but carry the **GCC Runtime Library
+Exception 3.1**, which explicitly permits distributing them with a program compiled by GCC
+without that program becoming subject to the GPL. This is the standard and intended arrangement
+for any MinGW-built binary; it does not impose obligations on Rebind's own MIT-licensed code.
 
-`libgmp-10.dll`, `libnettle-8.dll`, `libhogweed-6.dll` and `libidn2-0.dll` are dual-licensed and
-may be taken under **GPL-2.0-or-later** *or* **LGPL-3.0-or-later**; Rebind relies on the LGPL-3
-option, satisfied by the dynamic linking argument above. `libunistring-2.dll` is LGPL-3 only.
-
-Note that these five libraries reach the bundle only as transitive dependencies of GnuTLS, which
-Rebind never loads -- see the trim item in the progress ledger.
+These are the only GPL-3-family components in the bundle, and the exception is what makes them
+unproblematic. Every library that was LGPL-3 *without* such an exception -- GnuTLS, Nettle,
+Hogweed, GMP, libidn2, libunistring, gtksourceview -- reached the bundle only because the whole
+GTK3 runtime `bin\\` directory was vendored wholesale. `packaging/rebind.spec` now vendors only
+the computed dependency closure of the libraries WeasyPrint dlopens, and none of them survive it.
+The heaviest copyleft obligations are therefore no longer present at all rather than being
+argued around.
 """
 
 
@@ -195,17 +195,30 @@ def _load_present() -> set[str]:
     return {p.name for p in BUNDLED_BIN.glob("*.dll")}
 
 
-def _check(present: set[str]) -> list[str]:
-    problems = []
+def _check(present: set[str]) -> tuple[list[str], list[str]]:
+    """Return (fatal problems, non-fatal stale mappings).
+
+    The two directions of drift are not symmetric and must not be treated as if they were.
+
+    A DLL in the bundle with no mapping here is **fatal**: the installer would ship a binary
+    whose license is undeclared, which is exactly the false claim this script exists to prevent.
+
+    A mapping for a DLL no longer in the bundle is **not** an error. `_render` emits only what is
+    actually present, so a stale row cannot over-claim. Keeping these rows is deliberate: DLLS is
+    the full catalogue of what the GTK3 runtime can ship, and several rows required reading the
+    binary to identify the real upstream project (libiconv, libpcre) -- expensive to redo if the
+    vendored set ever grows again. They are reported so the drift stays visible, not silenced.
+    """
+    problems, stale = [], []
     for name in sorted(present - DLLS.keys()):
         problems.append(f"  DLL present in the bundle but not mapped in this script: {name}")
-    for name in sorted(DLLS.keys() - present):
-        problems.append(f"  Mapped here but no longer in the bundle: {name}")
     for project, (_, files) in DLLS.values():
         for filename in files:
             if not (LICENSES_DIR / filename).is_file():
                 problems.append(f"  {project}: missing license text {filename}")
-    return problems
+    for name in sorted(DLLS.keys() - present):
+        stale.append(f"  mapped but not currently vendored: {name}")
+    return problems, stale
 
 
 def _render(present: set[str]) -> str:
@@ -312,14 +325,19 @@ def main() -> int:
     args = parser.parse_args()
 
     present = _load_present()
-    problems = _check(present)
+    problems, stale = _check(present)
     if problems:
         print("License inventory is out of sync with the built bundle:", file=sys.stderr)
         print("\n".join(problems), file=sys.stderr)
         return 1
 
+    if stale:
+        print(f"Note: {len(stale)} mapped DLLs are not in the current bundle "
+              "(harmless -- only vendored DLLs are written to the inventory):", file=sys.stderr)
+        print("\n".join(stale), file=sys.stderr)
+
     if args.check:
-        print(f"OK: {len(present)} DLLs mapped, all license texts present.")
+        print(f"OK: {len(present)} vendored DLLs, all mapped, all license texts present.")
         return 0
 
     INVENTORY.write_text(_render(present), encoding="utf-8")

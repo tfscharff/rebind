@@ -6,9 +6,10 @@ GTK3 bundling
 WeasyPrint needs the GTK3 native libraries (gobject, pango, harfbuzz, fontconfig, ...) that
 Task 3 found are not installed by `uv sync` on Windows -- they come from a separate
 GTK3-Runtime-Win64 install. A librarian cannot be asked to install that separately, so this
-spec vendors the whole `bin\` directory of that runtime (all the DLLs WeasyPrint's ffi loader
-and their transitive dependencies need) plus `etc\fonts` (the fontconfig configuration WeasyPrint
-needs to locate usable fonts) into the frozen bundle, under `gtk3-runtime\`.
+spec vendors the DLLs WeasyPrint's ffi loader dlopens plus their transitive dependencies --
+computed from PE import tables at build time, see below -- along with `etc\fonts` (the
+fontconfig configuration WeasyPrint needs to locate usable fonts), into the frozen bundle under
+`gtk3-runtime\`.
 
 `src/rebind/app.py` calls `os.add_dll_directory()` on that bundled directory (and sets
 `FONTCONFIG_PATH`) before WeasyPrint is imported anywhere in the process -- see
@@ -39,9 +40,73 @@ if not os.path.isdir(gtk_bin):
     raise SystemExit(
         f"GTK3 runtime not found at {gtk_bin!r}. Set REBIND_GTK_RUNTIME to its install root."
     )
-for name in os.listdir(gtk_bin):
-    if name.lower().endswith(".dll"):
-        binaries.append((os.path.join(gtk_bin, name), "gtk3-runtime/bin"))
+# Vendor only the transitive dependency closure of the libraries WeasyPrint actually dlopens,
+# not the runtime's entire bin\ directory. The full directory is 80 DLLs; the closure is 26.
+# What gets dropped is not incidental -- it is GTK itself, cairo, gdk-pixbuf, librsvg,
+# gtksourceview, and the whole GnuTLS/Nettle/GMP/libidn2/libunistring TLS stack. That last
+# group carries every LGPL-3 obligation in the bundle, so trimming removes the heaviest
+# licensing burden along with the bytes.
+#
+# The closure is computed from PE import tables rather than hardcoded, so a GTK runtime upgrade
+# that changes dependencies cannot silently leave a stale list behind. Caveat: import tables
+# only capture load-time linkage. A library that dlopens a plugin by name at runtime (GIO
+# modules, gdk-pixbuf loaders) would not appear here -- nothing on WeasyPrint's path does, and
+# `pytest -m packaging` renders a real PDF through the frozen exe to catch it if that changes.
+#
+# `scripts/license_inventory.py --check` fails if the vendored set and the license mapping
+# disagree, so this trim cannot silently invalidate what the installer claims about licensing.
+import pefile  # ships with PyInstaller on Windows
+
+# The names WeasyPrint passes to ffi.dlopen (weasyprint/text/ffi.py). libharfbuzz-subset-0 is
+# absent from this GTK runtime and WeasyPrint loads it with allow_fail=True, so it is expected
+# to be missing; see docs/NEXT-SESSION.md. Every other root missing is a hard error.
+DLOPEN_ROOTS = [
+    "libgobject-2.0-0.dll",
+    "libpango-1.0-0.dll",
+    "libharfbuzz-0.dll",
+    "libfontconfig-1.dll",
+    "libpangoft2-1.0-0.dll",
+]
+OPTIONAL_ROOTS = ["libharfbuzz-subset-0.dll"]
+
+_available = {
+    name.lower(): os.path.join(gtk_bin, name)
+    for name in os.listdir(gtk_bin)
+    if name.lower().endswith(".dll")
+}
+
+_missing = [r for r in DLOPEN_ROOTS if r not in _available]
+if _missing:
+    raise SystemExit(f"GTK runtime at {gtk_bin!r} is missing required libraries: {_missing}")
+
+
+def _imported_dlls(path):
+    pe = pefile.PE(path, fast_load=True)
+    try:
+        pe.parse_data_directories(
+            directories=[pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"]]
+        )
+        return [
+            entry.dll.decode("ascii", "replace").lower()
+            for entry in getattr(pe, "DIRECTORY_ENTRY_IMPORT", None) or []
+        ]
+    finally:
+        pe.close()
+
+
+_closure = set()
+_stack = [r for r in DLOPEN_ROOTS + OPTIONAL_ROOTS if r in _available]
+while _stack:
+    _name = _stack.pop()
+    if _name in _closure:
+        continue
+    _closure.add(_name)
+    # Anything not in the runtime's bin\ resolves to a Windows system DLL, which must not be
+    # vendored -- shipping copies of kernel32/user32 would be both wrong and unloadable.
+    _stack.extend(dep for dep in _imported_dlls(_available[_name]) if dep in _available)
+
+for _name in sorted(_closure):
+    binaries.append((_available[_name], "gtk3-runtime/bin"))
 
 gtk_fonts_conf = os.path.join(GTK_RUNTIME_ROOT, "etc", "fonts")
 if os.path.isdir(gtk_fonts_conf):
@@ -70,8 +135,8 @@ pyz = PYZ(a.pure)
 # back, only "it didn't work."
 # version=: without an explicit version resource a PyInstaller exe has entirely blank Company/
 # Product/Description metadata, which is an antivirus heuristic trigger in its own right on top
-# of everything else about this binary that already looks suspicious (unsigned, ~170 MB, packed,
-# ~80 bundled DLLs, opens a local listener). See packaging/version_info.txt.
+# of everything else about this binary that already looks suspicious (unsigned, large, packed,
+# bundling native DLLs, opens a local listener). See packaging/version_info.txt.
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="rebind",
           console=False, icon=None, version="version_info.txt")
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="rebind")
