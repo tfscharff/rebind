@@ -40,3 +40,7 @@ desktop.ini
 
 # SDD scratch
 .superpowers/
+
+# Local agent/session context — kept out of the public repo
+CLAUDE.md
+docs/NEXT-SESSION.md
