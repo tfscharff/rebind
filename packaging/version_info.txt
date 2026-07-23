@@ -1,0 +1,46 @@
+# Win32 version resource for rebind.exe, consumed by PyInstaller (`version=` on EXE()).
+#
+# Why this file exists at all: a PyInstaller-built exe has NO version resource unless one is
+# supplied, and an executable with entirely empty metadata is a well-known antivirus heuristic
+# trigger. Rebind's binary already looks alarming to a scanner without help -- it is unsigned,
+# ~170 MB, packed by PyInstaller, ships ~80 native DLLs, and opens a local network listener on
+# startup. Blank Company/Product/Description fields on top of that is the profile of something a
+# managed-machine AV or an ASR rule declines to run, and Rebind's users are librarians on exactly
+# such machines. Metadata is not a fix for being unsigned, but it removes one free strike.
+#
+# It is also a prerequisite for free open-source code signing via the SignPath Foundation, which
+# requires product name and version attributes to be set consistently across all signed binaries.
+#
+# The version below must match `version` in pyproject.toml and `AppVersion` in rebind.iss.
+# PyInstaller requires the numeric tuples to be exactly four integers.
+
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(0, 0, 1, 0),
+    prodvers=(0, 0, 1, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0),
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',  # US English, Unicode
+        [
+          StringStruct('CompanyName', 'Thomas Scharff'),
+          StringStruct('FileDescription', 'Rebind - accessible PDF reconstruction'),
+          StringStruct('FileVersion', '0.0.1.0'),
+          StringStruct('InternalName', 'rebind'),
+          StringStruct('LegalCopyright', 'Copyright (c) Thomas Scharff. MIT License.'),
+          StringStruct('OriginalFilename', 'rebind.exe'),
+          StringStruct('ProductName', 'Rebind'),
+          StringStruct('ProductVersion', '0.0.1.0'),
+        ],
+      )
+    ]),
+    VarFileInfo([VarStruct('Translation', [0x409, 1200])]),
+  ],
+)

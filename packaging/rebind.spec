@@ -68,6 +68,10 @@ pyz = PYZ(a.pure)
 # a file next to the executable specifically to compensate for this loss; if that redirection
 # is ever removed, a librarian who hits a crash will have no diagnostic output at all to send
 # back, only "it didn't work."
+# version=: without an explicit version resource a PyInstaller exe has entirely blank Company/
+# Product/Description metadata, which is an antivirus heuristic trigger in its own right on top
+# of everything else about this binary that already looks suspicious (unsigned, ~170 MB, packed,
+# ~80 bundled DLLs, opens a local listener). See packaging/version_info.txt.
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="rebind",
-          console=False, icon=None)
+          console=False, icon=None, version="version_info.txt")
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="rebind")
