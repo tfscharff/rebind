@@ -6,6 +6,7 @@ import pytest
 from rebind.inspect import (
     StructElement,
     StructureTreeError,
+    alt_texts,
     structure_element_types,
     structure_tree,
     table_header_associations,
@@ -142,6 +143,22 @@ def test_containment_check_rejects_a_th_outside_any_table():
 
     with pytest.raises(AssertionError, match="TH exists outside of any Table"):
         _assert_th_td_in_table_li_in_l(tree)
+
+
+def test_figure_alt_text_matches_what_was_supplied(tmp_path: Path):
+    """veraPDF's PDF/UA check only confirms /Alt is *present*; it says nothing about whether
+    the text is correct. Rebind's central accessibility claim is that generated alt text is
+    accurate, not merely non-empty, so this reads the /Alt value back off the rendered
+    structure tree and asserts it is exactly the string that was supplied -- a regression that
+    silently substituted a generic placeholder, truncated the text, or mangled its encoding
+    would still pass veraPDF and every other test in this file, but would fail this one.
+    """
+    target = tmp_path / "structured.pdf"
+    render_html_to_pdf(STRUCTURED_HTML, target, title="Thermodynamics", lang="en")
+
+    figure_alts = alt_texts(target, "Figure")
+
+    assert figure_alts == ["Diagram of a piston compressing gas in a cylinder"], figure_alts
 
 
 def test_cyclic_structure_tree_raises_instead_of_hanging(tmp_path: Path):
