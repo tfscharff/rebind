@@ -34,6 +34,7 @@ class StructElement:
     page_ref: tuple[int, int] | None
     mcids: tuple[int, ...]
     children: tuple["StructElement", ...] = field(default_factory=tuple)
+    alt: str | None = None
 
 
 def structure_element_types(pdf_path: Path) -> set[str]:
@@ -61,6 +62,20 @@ def elements_of_type(pdf_path: Path, struct_type: str) -> list[StructElement]:
 def is_descendant_of(ancestor: StructElement, struct_type: str) -> bool:
     """Return whether any element of `struct_type` is somewhere under `ancestor`."""
     return any(child.type == struct_type for child in _iter_elements(ancestor.children))
+
+
+def alt_texts(pdf_path: Path, struct_type: str = "Figure") -> list[str | None]:
+    """Return the `/Alt` value of every structure element of `struct_type`, in document order.
+
+    veraPDF's PDF/UA check only confirms an `/Alt` entry is *present* on a `Figure` (or other
+    element requiring one) -- it does not, and cannot, know whether the text it contains
+    correctly describes the image. Rebind's central accessibility claim is that generated
+    alt text is correct, not merely present, so tests need to read this value back and compare
+    it against what was actually supplied, not just trust a passing veraPDF run. Elements with
+    no `/Alt` attribute contribute `None` at their position, so a caller can tell "missing"
+    apart from "present but empty".
+    """
+    return [element.alt for element in elements_of_type(pdf_path, struct_type)]
 
 
 def page_labels(pdf_path: Path) -> list[str]:
@@ -155,21 +170,30 @@ def _iter_elements(elements: tuple[StructElement, ...] | list[StructElement]):
         yield from _iter_elements(element.children)
 
 
-def _node_key(node: pikepdf.Object) -> object:
+def _node_key(node: pikepdf.Object) -> object | None:
     """A key that identifies `node` across the *current recursion path*, for cycle detection.
 
-    Indirect objects share identity via their (obj, gen) pair; direct (inline) objects have
-    no independent identity in the PDF at all, so a fresh Python wrapper is created on every
-    access and `id()` can never collide between genuinely distinct direct objects — which is
-    correct, since a direct object cannot participate in a cycle in the first place.
+    Indirect objects share identity via their (obj, gen) pair, which is stable and safe to
+    store in `visited`. Direct (inline) objects have no independent identity in the PDF at
+    all — a fresh Python wrapper is created on every access — and cannot participate in a
+    reference cycle in the first place (a cycle requires an indirect reference pointing back
+    at an ancestor; a direct object is inlined into its parent and has no way to be pointed
+    at). Returning `id(node)` for them, as an earlier version of this function did, is a
+    latent garbage-collection hazard: `visited` stores only the bare integer, not a reference
+    to `node`, so once this wrapper is garbage-collected (which can happen as soon as this
+    stack frame returns to a caller holding no other reference to it) CPython is free to reuse
+    that same address for an unrelated, later object -- producing a spurious "cyclic /K
+    reference" `StructureTreeError` on a distinct, non-cyclic node in a third-party PDF purely
+    by address reuse. Returning `None` here and having the caller skip cycle-tracking for
+    direct objects entirely avoids the hazard rather than papering over it.
     """
     try:
         objgen = node.objgen
     except AttributeError:
-        return id(node)
+        return None
     if objgen != (0, 0):
         return objgen
-    return id(node)
+    return None
 
 
 def _build_elements(
@@ -203,7 +227,7 @@ def _build_elements(
         return []
 
     key = _node_key(node)
-    if key in visited:
+    if key is not None and key in visited:
         raise StructureTreeError(
             f"cyclic /K reference detected in structure tree at object {key!r}: an element "
             "references one of its own ancestors"
@@ -217,11 +241,17 @@ def _build_elements(
         # them as untyped structure elements) is intentional, not an oversight.
         return []
 
-    visited = visited | {key}
+    # A direct (inline) object has no `key` to track (see `_node_key`) and cannot itself be
+    # part of a cycle, so `visited` is left unchanged rather than polluted with a
+    # collectible id() that a later, unrelated object could reuse.
+    visited = visited | {key} if key is not None else visited
     type_name = str(struct_type).lstrip("/")
 
     elem_id_obj = node.get("/ID")
     elem_id = bytes(elem_id_obj) if elem_id_obj is not None else None
+
+    alt_obj = node.get("/Alt")
+    alt_text = str(alt_obj) if alt_obj is not None else None
 
     headers = _extract_headers(node.get("/A"))
 
@@ -253,6 +283,7 @@ def _build_elements(
             page_ref=page_ref,
             mcids=mcids,
             children=tuple(children),
+            alt=alt_text,
         )
     ]
 
