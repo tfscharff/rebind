@@ -26,10 +26,6 @@ def _esc(text: str) -> str:
     return html_escape.escape(text, quote=False)
 
 
-def _esc_attr(text: str) -> str:
-    return html_escape.escape(text, quote=True)
-
-
 def to_html(document: Document) -> str:
     parts: list[str] = []
 

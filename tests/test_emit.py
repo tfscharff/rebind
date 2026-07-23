@@ -77,13 +77,14 @@ def test_page_break_emits_an_anchor_for_label_mapping():
     assert f"{PAGE_ANCHOR_PREFIX}3" in html
 
 
-def test_page_break_label_is_escaped_as_an_attribute_value():
-    # The anchor id is built from page number, not label, but the label is provenance data
-    # extracted from the scan and must never be trusted to be attribute-safe if it is ever
-    # rendered.
+def test_page_break_label_is_never_rendered():
+    # `label` is provenance-only in Phase 1: the anchor id is built from the node's page number,
+    # not its label (see emit.to_html), so a label containing HTML-attribute-breaking characters
+    # must simply never reach the output at all -- there is no attribute-escaping code path to
+    # test here because `label` is deliberately not emitted anywhere.
     html = to_html(doc(PageBreak(**node_kwargs(page=3), label='3" onmouseover="x')))
 
-    assert 'onmouseover="x"' not in html
+    assert "onmouseover" not in html
 
 
 def test_unrecognized_node_kind_raises_instead_of_silently_dropping_content():
