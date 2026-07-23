@@ -88,77 +88,86 @@ def assemble(
                            "OCR branch not implemented",
                 )
             )
-            continue
+        else:
+            # Reading order for Phase 1 is top-to-bottom within a page. Column detection is
+            # Phase 2; a multi-column page therefore produces interleaved paragraphs, which is
+            # why such regions are flagged rather than silently trusted.
+            ordered_lines = sorted(page.lines, key=lambda line: (-line.bbox[3], line.bbox[0]))
 
-        # Reading order for Phase 1 is top-to-bottom within a page. Column detection is Phase 2;
-        # a multi-column page therefore produces interleaved paragraphs, which is why such
-        # regions are flagged rather than silently trusted.
-        ordered_lines = sorted(page.lines, key=lambda line: (-line.bbox[3], line.bbox[0]))
-
-        pending_items: list[ListItem] = []
-        pending_ordered = False
-
-        def flush_list() -> None:
-            nonlocal pending_items, pending_ordered
-            if not pending_items:
-                return
-            first = pending_items[0]
-            nodes.append(
-                ListNode(
-                    id=f"list-{first.id}",
-                    page=first.page,
-                    bbox=first.bbox,
-                    confidence=min(item.confidence for item in pending_items),
-                    stage=_STAGE,
-                    flags=[],
-                    ordered=pending_ordered,
-                    items=list(pending_items),
-                )
-            )
-            pending_items = []
+            pending_items: list[ListItem] = []
             pending_ordered = False
 
-        for line in ordered_lines:
-            role = profile.role_of(line, page_height=page.height)
-            confidence = profile.confidence_for(line, page_height=page.height)
-
-            if role == "artifact":
-                flush_list()
-                nodes.append(
-                    Artifact(id=_ids(line, page), page=line.page, bbox=line.bbox,
-                             confidence=confidence, stage=_STAGE, flags=[], text=line.text)
-                )
-                continue
-
-            if role == "heading":
-                flush_list()
-                nodes.append(
-                    Heading(id=_ids(line, page), page=line.page, bbox=line.bbox,
-                            confidence=confidence, stage=_STAGE, flags=[],
-                            level=profile.heading_level(style_of(line)),
-                            text=line.text)
-                )
-                continue
-
-            item = _list_item_text(line.text)
-            if item is not None:
-                text, ordered = item
+            def flush_list() -> None:
+                nonlocal pending_items, pending_ordered
                 if not pending_items:
-                    pending_ordered = ordered
-                pending_items.append(
-                    ListItem(id=_ids(line, page), page=line.page, bbox=line.bbox,
-                             confidence=confidence, stage=_STAGE, flags=[], text=text)
+                    return
+                # The list's own bbox is the union of its items' bboxes, not just the first
+                # item's -- a downstream consumer reading ListNode.bbox as "the region this
+                # list occupies" would otherwise get only the first line's rectangle.
+                x0 = min(item.bbox[0] for item in pending_items)
+                y0 = min(item.bbox[1] for item in pending_items)
+                x1 = max(item.bbox[2] for item in pending_items)
+                y1 = max(item.bbox[3] for item in pending_items)
+                union_bbox = (x0, y0, x1, y1)
+                first = pending_items[0]
+                nodes.append(
+                    ListNode(
+                        id=node_id(page=first.page, bbox=union_bbox, page_width=page.width,
+                                   page_height=page.height,
+                                   text="|".join(item.text for item in pending_items)),
+                        page=first.page,
+                        bbox=union_bbox,
+                        confidence=min(item.confidence for item in pending_items),
+                        stage=_STAGE,
+                        flags=[],
+                        ordered=pending_ordered,
+                        items=list(pending_items),
+                    )
                 )
-                continue
+                pending_items = []
+                pending_ordered = False
+
+            for line in ordered_lines:
+                role = profile.role_of(line, page_height=page.height)
+                confidence = profile.confidence_for(line, page_height=page.height)
+
+                if role == "artifact":
+                    flush_list()
+                    nodes.append(
+                        Artifact(id=_ids(line, page), page=line.page, bbox=line.bbox,
+                                 confidence=confidence, stage=_STAGE, flags=[], text=line.text)
+                    )
+                    continue
+
+                if role == "heading":
+                    flush_list()
+                    nodes.append(
+                        Heading(id=_ids(line, page), page=line.page, bbox=line.bbox,
+                                confidence=confidence, stage=_STAGE, flags=[],
+                                level=profile.heading_level(style_of(line)),
+                                text=line.text)
+                    )
+                    continue
+
+                item = _list_item_text(line.text)
+                if item is not None:
+                    text, ordered = item
+                    if not pending_items:
+                        pending_ordered = ordered
+                    pending_items.append(
+                        ListItem(id=_ids(line, page), page=line.page, bbox=line.bbox,
+                                 confidence=confidence, stage=_STAGE, flags=[], text=text)
+                    )
+                    continue
+
+                flush_list()
+                flags = [] if confidence >= 0.5 else ["degraded-region"]
+                nodes.append(
+                    Paragraph(id=_ids(line, page), page=line.page, bbox=line.bbox,
+                              confidence=confidence, stage=_STAGE, flags=flags, text=line.text)
+                )
 
             flush_list()
-            flags = [] if confidence >= 0.5 else ["degraded-region"]
-            nodes.append(
-                Paragraph(id=_ids(line, page), page=line.page, bbox=line.bbox,
-                          confidence=confidence, stage=_STAGE, flags=flags, text=line.text)
-            )
-
-        flush_list()
 
         for image in page.images:
             nodes.append(

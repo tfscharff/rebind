@@ -89,16 +89,34 @@ def test_scanned_page_yields_a_flagged_placeholder_and_is_recorded():
 
 def test_image_region_becomes_a_placeholder_never_a_figure():
     """PDF/UA requires /Alt on figures and Phase 1 cannot produce it honestly."""
+    image_bbox = (100.0, 100.0, 300.0, 300.0)
     pages = [page_of([line("body") for _ in range(10)],
-                     images=[ImageRegion(page=1, bbox=(100.0, 100.0, 300.0, 300.0))])]
+                     images=[ImageRegion(page=1, bbox=image_bbox)])]
     profile = build_profile(pages)
 
     doc = assemble(pages, profile, title="T")
 
     placeholders = [n for n in doc.nodes if isinstance(n, Placeholder)]
     assert placeholders
-    assert "image" in placeholders[0].reason.lower()
+    image_placeholder = next(p for p in placeholders if "image" in p.reason.lower())
+    assert image_placeholder.bbox == image_bbox
+    # model.py defines no Figure class at all today, so this can never fail; it is a future
+    # regression guard, not live protection -- do not mistake it for one.
     assert "Figure" not in kinds(doc)
+
+
+def test_scanned_page_with_images_gets_both_the_page_and_image_placeholders():
+    pages = [page_of([], number=1, images=[ImageRegion(page=1, bbox=(50.0, 60.0, 200.0, 300.0))])]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    placeholders = [n for n in doc.nodes if isinstance(n, Placeholder)]
+    page_placeholder = next(p for p in placeholders if "no-text-layer" in p.flags)
+    assert page_placeholder.bbox == (0.0, 0.0, 612.0, 792.0)
+    image_placeholder = next(p for p in placeholders if "image" in p.reason.lower())
+    assert image_placeholder.bbox == (50.0, 60.0, 200.0, 300.0)
+    assert image_placeholder is not page_placeholder
 
 
 def test_every_node_has_provenance_and_an_id():
@@ -109,3 +127,50 @@ def test_every_node_has_provenance_and_an_id():
         assert node.id
         assert node.page >= 1
         assert len(node.bbox) == 4
+        if isinstance(node, ListNode):
+            for item in node.items:
+                assert item.id
+                assert item.page >= 1
+                assert len(item.bbox) == 4
+
+
+def test_list_bbox_is_the_union_of_its_items():
+    lines = [line("body", y=500.0 - i) for i in range(20)]
+    lines += [line("• first", y=300.0), line("• second", y=100.0)]
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    list_node = next(n for n in doc.nodes if isinstance(n, ListNode))
+    item_bboxes = [item.bbox for item in list_node.items]
+    assert list_node.bbox[0] == min(b[0] for b in item_bboxes)
+    assert list_node.bbox[1] == min(b[1] for b in item_bboxes)
+    assert list_node.bbox[2] == max(b[2] for b in item_bboxes)
+    assert list_node.bbox[3] == max(b[3] for b in item_bboxes)
+
+
+def test_list_id_is_deterministic_and_content_derived():
+    def make_lines():
+        lines = [line("body", y=500.0 - i) for i in range(20)]
+        lines += [line("• first", y=300.0), line("• second", y=280.0)]
+        return lines
+
+    pages_a = [page_of(make_lines())]
+    pages_b = [page_of(make_lines())]
+    profile_a = build_profile(pages_a)
+    profile_b = build_profile(pages_b)
+
+    list_a = next(n for n in assemble(pages_a, profile_a, title="T").nodes
+                  if isinstance(n, ListNode))
+    list_b = next(n for n in assemble(pages_b, profile_b, title="T").nodes
+                  if isinstance(n, ListNode))
+    assert list_a.id == list_b.id
+
+    lines_c = [line("body", y=500.0 - i) for i in range(20)]
+    lines_c += [line("• third", y=300.0), line("• fourth", y=280.0)]
+    pages_c = [page_of(lines_c)]
+    profile_c = build_profile(pages_c)
+    list_c = next(n for n in assemble(pages_c, profile_c, title="T").nodes
+                  if isinstance(n, ListNode))
+    assert list_c.id != list_a.id
