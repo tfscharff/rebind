@@ -6,13 +6,18 @@ avoids bundling a native GUI toolkit and gives librarians a familiar interface.
 
 from __future__ import annotations
 
-import os
-import sys
 import tempfile
 import threading
 import traceback
 import webbrowser
 from pathlib import Path
+
+# Explicit, even though other imports below would eventually pull `rebind` in transitively:
+# when PyInstaller freezes this file as its Analysis entry script, it is executed directly as
+# `__main__`, not reached via `import rebind.app` -- so nothing guarantees this package's
+# `__init__.py` (which registers the bundled GTK3 DLL directory before WeasyPrint is ever
+# imported) has already run, unless something in this module says so explicitly.
+import rebind  # noqa: F401
 
 from fastapi import FastAPI
 
@@ -41,34 +46,9 @@ _SMOKE_HTML = f"""
 """
 
 
-def _bootstrap_bundled_dll_directory() -> None:
-    """Point WeasyPrint's native loader at the bundled GTK3 DLLs, not the system install.
-
-    WeasyPrint loads libgobject/libpango/etc. via ``LOAD_LIBRARY_SEARCH_DEFAULT_DIRS`` and
-    ignores ``PATH``. When frozen by PyInstaller, the bundled DLLs live next to this
-    executable under ``gtk3-runtime\\bin`` (see packaging/rebind.spec). We must register that
-    directory — via ``os.add_dll_directory`` (Windows-only, Python 3.8+) and the
-    ``WEASYPRINT_DLL_DIRECTORIES`` env var WeasyPrint itself consults — *before* WeasyPrint
-    (or anything importing it) is imported anywhere in the process, or the OS loader will fall
-    back to whatever copy it finds via its own default search (which includes a system-wide
-    GTK3 install, if one is present, and would defeat this whole check on a dev machine).
-    """
-    if not getattr(sys, "frozen", False):
-        return
-    bundle_root = Path(sys._MEIPASS)  # type: ignore[attr-defined]
-    gtk_bin = bundle_root / "gtk3-runtime" / "bin"
-    if not gtk_bin.is_dir():
-        return
-    os.environ["WEASYPRINT_DLL_DIRECTORIES"] = str(gtk_bin)
-    if hasattr(os, "add_dll_directory"):
-        os.add_dll_directory(str(gtk_bin))
-
-    fonts_conf = bundle_root / "gtk3-runtime" / "etc" / "fonts" / "fonts.conf"
-    if fonts_conf.is_file():
-        os.environ["FONTCONFIG_PATH"] = str(fonts_conf.parent)
-
-
-_bootstrap_bundled_dll_directory()
+# The DLL bootstrap that used to live here now lives in `rebind/__init__.py` (triggered by the
+# explicit `import rebind` above), so every entry point that imports anything under the
+# `rebind` package gets it, not just this module.
 
 
 def _renderer_available() -> bool:
@@ -126,11 +106,34 @@ def create_app() -> FastAPI:
     return app
 
 
+def _log_file_path() -> Path:
+    """Where to write rebind's own log when there is no console to print to.
+
+    `packaging/rebind.spec` builds the frozen exe with `console=False` (no console window),
+    which means stdout/stderr -- and therefore uvicorn's default logging -- go nowhere on
+    Windows; they are not merely hidden, they are discarded. Writing to a file next to the
+    frozen executable (or the current working directory, unfrozen) is the minimum needed so a
+    librarian who hits a crash has something to send back other than "it didn't work."
+    """
+    import sys
+
+    base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
+    return base / "rebind.log"
+
+
 def main() -> None:
     import uvicorn
 
+    log_config = uvicorn.config.LOGGING_CONFIG
+    log_config["handlers"]["default"]["class"] = "logging.FileHandler"
+    log_config["handlers"]["default"]["filename"] = str(_log_file_path())
+    log_config["handlers"]["default"].pop("stream", None)
+    log_config["handlers"]["access"]["class"] = "logging.FileHandler"
+    log_config["handlers"]["access"]["filename"] = str(_log_file_path())
+    log_config["handlers"]["access"].pop("stream", None)
+
     threading.Timer(1.5, lambda: webbrowser.open(f"http://{HOST}:{PORT}/health")).start()
-    uvicorn.run(create_app(), host=HOST, port=PORT, log_level="info")
+    uvicorn.run(create_app(), host=HOST, port=PORT, log_level="info", log_config=log_config)
 
 
 if __name__ == "__main__":
