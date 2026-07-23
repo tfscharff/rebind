@@ -34,6 +34,11 @@ packages = ["src/rebind"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v -m \"not packaging\""
+# Puts the repo root on sys.path so tests can `from tests.fixtures import ...`. Without this,
+# pytest's default "prepend" import mode adds only `tests/` itself, and `import tests.fixtures`
+# fails with "No module named 'tests'" -- verified, not assumed. Phase 1 shares a fixture
+# generator across several test modules, so the shared import has to resolve.
+pythonpath = ["."]
 markers = [
     "packaging: slow, opt-in tests that build the frozen PyInstaller bundle and exercise it. Run with `uv run pytest -m packaging`.",
 ]
