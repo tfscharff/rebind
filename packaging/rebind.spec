@@ -59,6 +59,15 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
+# console=False: a librarian double-clicking rebind.exe should not see a console window pop
+# up (that reads as "broken" or "malware" to a non-technical user, and this app already opens
+# its UI in a browser tab). Consequence: with no console, anything written to stdout/stderr
+# (uvicorn's request/access logging, unhandled exception tracebacks that would otherwise print
+# before the process exits) has nowhere to go and is silently discarded on Windows -- it is
+# NOT captured anywhere by default. `src/rebind/app.py::main()` redirects uvicorn's logging to
+# a file next to the executable specifically to compensate for this loss; if that redirection
+# is ever removed, a librarian who hits a crash will have no diagnostic output at all to send
+# back, only "it didn't work."
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="rebind",
-          console=True, icon=None)
+          console=False, icon=None)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="rebind")
