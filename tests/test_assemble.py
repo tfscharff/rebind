@@ -13,6 +13,16 @@ def page_of(lines, number=1, images=()):
     return Page(number=number, width=612.0, height=792.0, lines=tuple(lines), images=tuple(images))
 
 
+def custom_line(text, x0, x1, y, *, page=1, size=11.0, bold=False):
+    """A line with an explicit horizontal extent, for exercising the column heuristic.
+
+    `line()` always uses a fixed x-range, which is fine for reading-order tests but cannot
+    represent columns or a narrower centered heading -- both need lines at distinct x-positions.
+    """
+    return TextLine(text=text, page=page, bbox=(x0, y, x1, y + size),
+                     font="DejaVuSerif", size=size, bold=bold, italic=False)
+
+
 def kinds(doc):
     return [node.kind for node in doc.nodes]
 
@@ -148,6 +158,45 @@ def test_list_bbox_is_the_union_of_its_items():
     assert list_node.bbox[1] == min(b[1] for b in item_bboxes)
     assert list_node.bbox[2] == max(b[2] for b in item_bboxes)
     assert list_node.bbox[3] == max(b[3] for b in item_bboxes)
+
+
+def test_two_column_page_paragraphs_are_flagged_multi_column_suspected():
+    left = [custom_line(f"left {i}", 72.0, 250.0, 300.0 + i * 20.0) for i in range(5)]
+    right = [custom_line(f"right {i}", 300.0, 480.0, 300.0 + i * 20.0) for i in range(5)]
+    pages = [page_of(left + right)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    assert paragraphs
+    assert all("multi-column-suspected" in p.flags for p in paragraphs)
+
+
+def test_single_column_page_paragraphs_are_not_flagged_multi_column():
+    lines = [line("body text", y=400.0 - i) for i in range(20)]
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    assert paragraphs
+    assert all("multi-column-suspected" not in p.flags for p in paragraphs)
+
+
+def test_centered_heading_above_full_width_body_is_not_flagged_multi_column():
+    heading = [custom_line("Chapter One", 250.0, 350.0, 700.0, size=24.0, bold=True)]
+    body = [custom_line("body text", 72.0, 540.0, 400.0 - i * 20.0) for i in range(10)]
+    pages = [page_of(heading + body)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    assert any(isinstance(n, Heading) for n in doc.nodes)
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    assert paragraphs
+    assert all("multi-column-suspected" not in p.flags for p in paragraphs)
 
 
 def test_list_id_is_deterministic_and_content_derived():
