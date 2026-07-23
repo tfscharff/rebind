@@ -97,6 +97,54 @@ def _line_from_container(container, page_number: int) -> TextLine | None:
     )
 
 
+def _collect_figure(
+    figure: LTFigure, page_number: int, lines: list[TextLine], images: list[ImageRegion]
+) -> tuple[bool, bool]:
+    """Recurse into a Form XObject, contributing its text lines and embedded images separately.
+
+    Rebind must never report real, extractable text as an unrecoverable image (see the
+    docstring on `extract_pages`), so a figure's own text -- grouped into `LTTextContainer`s by
+    `LAParams(all_texts=True)` -- is collected as `TextLine`s exactly as it would be at the top
+    level, rather than being ignored because it happens to sit inside an XObject.
+
+    The double-counting rule: a figure never contributes a whole-figure `ImageRegion` merely for
+    containing text. Text content and embedded raster images are independent signals recorded
+    independently -- an `LTImage` found anywhere inside (at any nesting depth) always becomes its
+    own `ImageRegion` describing just that image, regardless of whether the figure also holds
+    text, so a figure with both a photo and a caption yields both a text line and an image
+    region rather than one masking the other. Only a figure that yields neither text nor an
+    embedded image anywhere within it (e.g. one containing only vector graphics) falls back to a
+    single opaque `ImageRegion` for the whole figure, preserving Phase 1's honest "something is
+    here and we cannot describe it" signal for genuinely non-text, non-raster content.
+
+    Returns (found_text, found_image) so a caller nesting figures inside figures can propagate
+    whether this level already accounted for the region.
+    """
+    found_text = False
+    found_image = False
+    for child in figure:
+        if isinstance(child, LTTextContainer):
+            for container in child:
+                line = _line_from_container(container, page_number)
+                if line is not None:
+                    lines.append(line)
+                    found_text = True
+        elif isinstance(child, LTImage):
+            images.append(
+                ImageRegion(page=page_number, bbox=(child.x0, child.y0, child.x1, child.y1))
+            )
+            found_image = True
+        elif isinstance(child, LTFigure):
+            nested_text, nested_image = _collect_figure(child, page_number, lines, images)
+            found_text = found_text or nested_text
+            found_image = found_image or nested_image
+    if not found_text and not found_image:
+        images.append(
+            ImageRegion(page=page_number, bbox=(figure.x0, figure.y0, figure.x1, figure.y1))
+        )
+    return found_text, found_image
+
+
 def extract_pages(source: Path) -> Iterator[Page]:
     """Yield one `Page` per page of the source, lazily."""
     source = Path(source)
@@ -104,7 +152,12 @@ def extract_pages(source: Path) -> Iterator[Page]:
         raise ExtractionError(f"no such file: {source}")
 
     try:
-        layouts = _pdfminer_pages(str(source), laparams=LAParams())
+        # `all_texts=True` tells pdfminer to run its layout analysis (grouping characters into
+        # lines and boxes) *inside* Form XObjects too, not only at the page's top level. Without
+        # it, characters inside a figure arrive as ungrouped `LTChar`s that `_collect_figure`
+        # cannot turn into `TextLine`s, and real text is misreported as an unrecoverable image
+        # region -- a false provenance claim this project's invariants forbid.
+        layouts = _pdfminer_pages(str(source), laparams=LAParams(all_texts=True))
         for index, layout in enumerate(layouts, start=1):
             lines: list[TextLine] = []
             images: list[ImageRegion] = []
@@ -114,7 +167,9 @@ def extract_pages(source: Path) -> Iterator[Page]:
                         line = _line_from_container(container, index)
                         if line is not None:
                             lines.append(line)
-                elif isinstance(element, (LTImage, LTFigure)):
+                elif isinstance(element, LTFigure):
+                    _collect_figure(element, index, lines, images)
+                elif isinstance(element, LTImage):
                     images.append(
                         ImageRegion(
                             page=index,

@@ -5,7 +5,7 @@ import pikepdf
 import pytest
 
 from rebind.extract import ExtractionError, extract_pages, source_is_tagged
-from tests.fixtures import born_digital_pdf
+from tests.fixtures import born_digital_pdf, pdf_with_text_in_form_xobject
 
 
 def test_extracts_text_lines_with_style_and_provenance(tmp_path: Path):
@@ -93,3 +93,27 @@ def test_encrypted_pdf_raises_extraction_error_on_is_tagged(tmp_path: Path):
 
     with pytest.raises(ExtractionError):
         source_is_tagged(source)
+
+
+def test_text_inside_a_form_xobject_is_extracted_not_reported_as_an_image(tmp_path: Path):
+    """Regression test for Finding 2: text drawn from inside a Form XObject must surface as a
+    real `TextLine`, not silently vanish into a false "image region" placeholder. This is a live
+    PDF-shape failure, not a hypothetical one -- confirmed against the pre-fix extractor before
+    writing the fix (see the report), which found zero lines and one `ImageRegion` for the whole
+    figure instead.
+    """
+    source = pdf_with_text_in_form_xobject(tmp_path / "xobj.pdf", text="Hello Figure")
+
+    pages = list(extract_pages(source))
+
+    assert len(pages) == 1
+    page = pages[0]
+    assert page.has_text_layer, "the page has real, extractable text and must not read as a scan"
+    texts = [ln.text for ln in page.lines]
+    assert any("Hello Figure" in t for t in texts), (
+        f"expected the form xobject's text among extracted lines, got: {texts!r}"
+    )
+    # The figure held only text, no embedded raster image -- it must not also be reported as an
+    # opaque whole-figure ImageRegion (the double-counting rule: text and image are independent
+    # signals, and a text-only figure contributes no image region at all).
+    assert page.images == ()
