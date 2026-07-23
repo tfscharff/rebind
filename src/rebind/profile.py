@@ -91,7 +91,14 @@ class TypographicProfile:
 
 def build_profile(pages: Iterable[Page]) -> TypographicProfile:
     volumes: dict[Style, int] = {}
-    edge_counts: dict[tuple[Style, str], int] = {}
+    # Recurrence must be counted in DISTINCT PAGES, not lines: two lines of an address block
+    # sharing a style and edge band on the same page must never look like cross-page recurrence.
+    # Pages arrive in order, so we don't need a set of every page seen per key (that would grow
+    # with document length, violating this pass's "memory bounded by style count" invariant) --
+    # tracking only the last page number recorded for a key lets us detect "this is a new page
+    # for this key" in O(1) space per key.
+    edge_page_counts: dict[tuple[Style, str], int] = {}
+    edge_last_page: dict[tuple[Style, str], int] = {}
     page_count = 0
 
     for page in pages:
@@ -102,21 +109,35 @@ def build_profile(pages: Iterable[Page]) -> TypographicProfile:
             band = _edge_band(line, page.height)
             if band is not None:
                 key = (style, band)
-                edge_counts[key] = edge_counts.get(key, 0) + 1
+                if edge_last_page.get(key) != page.number:
+                    edge_page_counts[key] = edge_page_counts.get(key, 0) + 1
+                    edge_last_page[key] = page.number
 
     if not volumes:
         return TypographicProfile(None, (), frozenset(), {}, 0)
 
-    body = max(volumes.items(), key=lambda item: (item[1], -item[0].size))[0]
+    # Tie-break on every Style field, never on dict/set iteration order: Style has exactly four
+    # fields (font, size, bold, italic), so once all four appear in the sort key the order is
+    # fully determined by content. This project has already been bitten by nondeterminism (see
+    # ADR 0003), and heading level assignment downstream must not depend on insertion order.
+    body = max(
+        volumes.items(),
+        key=lambda item: (item[1], -item[0].size, item[0].bold, item[0].italic, item[0].font),
+    )[0]
 
     heading_candidates = [
         style for style in volumes
         if style != body and (style.size > body.size or (style.bold and not body.bold))
     ]
-    heading_candidates.sort(key=lambda s: (-s.size, not s.bold, s.font))
+    heading_candidates.sort(key=lambda s: (-s.size, not s.bold, not s.italic, s.font))
 
+    # A single page can never demonstrate cross-page recurrence, so the floor of 2 is not a magic
+    # number: max(2, int(page_count * RECURRENCE_FRACTION)) is unreachable on a 1-page document
+    # (int(1 * 0.5) == 0), which correctly means nothing on a 1-page document is ever an artifact.
     threshold = max(2, int(page_count * RECURRENCE_FRACTION))
-    artifact_keys = frozenset(key for key, count in edge_counts.items() if count >= threshold)
+    artifact_keys = frozenset(
+        key for key, count in edge_page_counts.items() if count >= threshold
+    )
 
     return TypographicProfile(
         body=body,

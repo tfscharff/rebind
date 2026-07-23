@@ -44,6 +44,37 @@ def test_recurring_edge_lines_are_artifacts():
     assert profile.role_of(header, page_height=792.0) == "artifact"
 
 
+def test_one_page_repeated_style_lines_are_not_artifacts():
+    """Recurrence must be counted across distinct pages, not lines on a single page.
+
+    A two-line address/letterhead block sharing a style and edge band on one page must not be
+    mistaken for cross-page recurrence -- there is only one page, so nothing on it can have
+    recurred.
+    """
+    address_line_1 = line("123 Main Street", y=760.0, size=9.0)
+    address_line_2 = line("Anytown, ST 00000", y=750.0, size=9.0)
+    body_lines = [line("body text", y=400.0) for _ in range(10)]
+
+    profile = build_profile([page_of([address_line_1, address_line_2] + body_lines, number=1)])
+
+    assert profile.role_of(address_line_1, page_height=792.0) != "artifact"
+    assert profile.role_of(address_line_2, page_height=792.0) != "artifact"
+
+
+def test_two_page_header_once_per_page_is_still_an_artifact():
+    """The per-page fix must not over-correct into never detecting artifacts on short documents."""
+    pages = []
+    for number in (1, 2):
+        header = line("Course Catalog", page=number, y=760.0, size=9.0)
+        body_lines = [line("body text", page=number, y=400.0) for _ in range(10)]
+        pages.append(page_of([header] + body_lines, number=number))
+
+    profile = build_profile(pages)
+    header = line("Course Catalog", y=760.0, size=9.0)
+
+    assert profile.role_of(header, page_height=792.0) == "artifact"
+
+
 def test_first_page_title_at_top_is_not_an_artifact():
     """Position alone must not condemn a line -- a title also sits at the top of the page."""
     pages = []
