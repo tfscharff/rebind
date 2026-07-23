@@ -17,6 +17,7 @@ from pathlib import Path
 import pikepdf
 from pdfminer.high_level import extract_pages as _pdfminer_pages
 from pdfminer.layout import LAParams, LTChar, LTFigure, LTImage, LTTextContainer
+from pdfminer.pdfdocument import PDFEncryptionError
 from pdfminer.pdfparser import PDFSyntaxError
 
 
@@ -129,6 +130,12 @@ def extract_pages(source: Path) -> Iterator[Page]:
             )
     except PDFSyntaxError as exc:
         raise ExtractionError(f"{source} is not a readable PDF: {exc}") from exc
+    except PDFEncryptionError as exc:
+        # Covers both PDFEncryptionError and its subclass PDFPasswordIncorrect: either way the
+        # PDF is password-protected and Rebind has no mechanism to supply a password.
+        raise ExtractionError(
+            f"{source} is password-protected; Rebind cannot read encrypted PDFs"
+        ) from exc
 
 
 def source_is_tagged(source: Path) -> bool:
@@ -140,5 +147,13 @@ def source_is_tagged(source: Path) -> bool:
     try:
         with pikepdf.open(source) as pdf:
             return "/StructTreeRoot" in pdf.Root
-    except Exception as exc:  # pikepdf raises several unrelated types here
+    # Narrowed to the exceptions that genuinely mean "this file cannot be opened" -- PdfError for
+    # malformed PDFs, PasswordError for encrypted ones, OSError for filesystem failures. A bare
+    # `except Exception` would also swallow programmer errors (e.g. an internal AttributeError)
+    # and misreport them as extraction failures, masking real bugs.
+    except (pikepdf.PdfError, pikepdf.PasswordError, OSError) as exc:
+        if isinstance(exc, pikepdf.PasswordError):
+            raise ExtractionError(
+                f"{source} is password-protected; Rebind cannot read encrypted PDFs"
+            ) from exc
         raise ExtractionError(f"cannot open {source}: {exc}") from exc
