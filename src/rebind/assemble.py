@@ -169,9 +169,33 @@ def assemble(
 
             pending_items: list[ListItem] = []
             pending_ordered = False
+            # Some renderers (WeasyPrint's native <ul>/<ol> markers among them) place the bullet
+            # or number glyph in its own text box, separate from the item's content, which
+            # pdfminer then yields as the *next* line rather than a prefix of the same one. A
+            # marker-only line is held here and merged with whatever comes next, rather than
+            # being emitted as a ListItem with empty text and letting its content fall through
+            # as an ordinary Paragraph -- which would both scramble the list and lose the item.
+            pending_marker: tuple[TextLine, float, bool] | None = None
+
+            def flush_pending_marker() -> None:
+                """Emit a held marker line as its own item if nothing ever arrived to merge it
+                with (end of page, or a heading/artifact intervened) -- honest, if degenerate,
+                rather than silently dropping the marker."""
+                nonlocal pending_marker, pending_ordered
+                if pending_marker is None:
+                    return
+                marker, marker_confidence, ordered = pending_marker
+                if not pending_items:
+                    pending_ordered = ordered
+                pending_items.append(
+                    ListItem(id=_ids(marker, page), page=marker.page, bbox=marker.bbox,
+                             confidence=marker_confidence, stage=_STAGE, flags=[], text="")
+                )
+                pending_marker = None
 
             def flush_list() -> None:
                 nonlocal pending_items, pending_ordered
+                flush_pending_marker()
                 if not pending_items:
                     return
                 # The list's own bbox is the union of its items' bboxes, not just the first
@@ -225,11 +249,40 @@ def assemble(
                 item = _list_item_text(line.text)
                 if item is not None:
                     text, ordered = item
+                    if text:
+                        flush_pending_marker()
+                        if not pending_items:
+                            pending_ordered = ordered
+                        pending_items.append(
+                            ListItem(id=_ids(line, page), page=line.page, bbox=line.bbox,
+                                     confidence=confidence, stage=_STAGE, flags=[], text=text)
+                        )
+                    else:
+                        # A marker glyph with nothing after it on the same line (e.g. a bare
+                        # bullet character). Don't emit an empty item yet -- hold it and see if
+                        # the content arrives as the next line.
+                        flush_pending_marker()
+                        pending_marker = (line, confidence, ordered)
+                    continue
+
+                if pending_marker is not None:
+                    marker, marker_confidence, ordered = pending_marker
+                    pending_marker = None
+                    x0 = min(marker.bbox[0], line.bbox[0])
+                    y0 = min(marker.bbox[1], line.bbox[1])
+                    x1 = max(marker.bbox[2], line.bbox[2])
+                    y1 = max(marker.bbox[3], line.bbox[3])
                     if not pending_items:
                         pending_ordered = ordered
                     pending_items.append(
-                        ListItem(id=_ids(line, page), page=line.page, bbox=line.bbox,
-                                 confidence=confidence, stage=_STAGE, flags=[], text=text)
+                        ListItem(
+                            id=node_id(page=line.page, bbox=(x0, y0, x1, y1),
+                                       page_width=page.width, page_height=page.height,
+                                       text=line.text),
+                            page=line.page, bbox=(x0, y0, x1, y1),
+                            confidence=min(confidence, marker_confidence),
+                            stage=_STAGE, flags=[], text=line.text,
+                        )
                     )
                     continue
 

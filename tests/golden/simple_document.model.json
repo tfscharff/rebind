@@ -1,0 +1,99 @@
+{
+  "lang": "en",
+  "nodes": [
+    {
+      "bbox": [
+        0.0,
+        0.0,
+        612.0,
+        792.0
+      ],
+      "confidence": 1.0,
+      "flags": [],
+      "id": "07b71b0621155a8d",
+      "kind": "PageBreak",
+      "label": "1",
+      "page": 1,
+      "stage": "assemble"
+    },
+    {
+      "bbox": [
+        78.0,
+        673.0185,
+        247.848,
+        697.0185
+      ],
+      "confidence": 0.9,
+      "flags": [],
+      "id": "468bc6f35f699343",
+      "kind": "Heading",
+      "level": 1,
+      "page": 1,
+      "stage": "assemble",
+      "text": "Chapter One"
+    },
+    {
+      "bbox": [
+        78.0,
+        640.136253918,
+        134.515492656,
+        651.135765918
+      ],
+      "confidence": 1.0,
+      "flags": [],
+      "id": "61fcb9eaedb85c4d",
+      "kind": "Paragraph",
+      "page": 1,
+      "stage": "assemble",
+      "text": "Body text."
+    },
+    {
+      "bbox": [
+        98.015625,
+        598.336254168,
+        138.754635552,
+        624.735765918
+      ],
+      "confidence": 1.0,
+      "flags": [],
+      "id": "333b1bbd06d86170",
+      "items": [
+        {
+          "bbox": [
+            98.015625,
+            613.736253918,
+            138.754635552,
+            624.735765918
+          ],
+          "confidence": 1.0,
+          "flags": [],
+          "id": "1437637c1e92bcdf",
+          "page": 1,
+          "stage": "assemble",
+          "text": "alpha"
+        },
+        {
+          "bbox": [
+            98.015625,
+            598.336254168,
+            132.52891176,
+            609.335766168
+          ],
+          "confidence": 1.0,
+          "flags": [],
+          "id": "400f4a700911fca4",
+          "page": 1,
+          "stage": "assemble",
+          "text": "beta"
+        }
+      ],
+      "kind": "ListNode",
+      "ordered": false,
+      "page": 1,
+      "stage": "assemble"
+    }
+  ],
+  "scanned_pages": [],
+  "source_was_tagged": false,
+  "title": "Golden"
+}

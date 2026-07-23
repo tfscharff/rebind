@@ -42,6 +42,7 @@ addopts = "-v -m \"not packaging\""
 pythonpath = ["."]
 markers = [
     "packaging: slow, opt-in tests that build the frozen PyInstaller bundle and exercise it. Run with `uv run pytest -m packaging`.",
+    "slow: long-running tests (e.g. the 300-page document). Included by default; deselect with `-m 'not slow'`.",
 ]
 
 [tool.ruff]
