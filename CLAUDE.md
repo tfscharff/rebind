@@ -73,6 +73,10 @@ uv run python scripts/determinism_probe.py   # reproduces the nondeterminism fin
 - **`WEASYPRINT_DLL_DIRECTORIES` is silently ignored in frozen builds** (`ffi.py` guards it with
   `not hasattr(sys, 'frozen')`). We call `os.add_dll_directory` ourselves before importing
   weasyprint. Unreported upstream bug.
+- **Font subsetting works; `libharfbuzz-subset-0.dll` being absent is a red herring.** WeasyPrint
+  falls back to `Font._fonttools_subset`, and the bundled HarfBuzz is older than 4.1.0, so the
+  HarfBuzz subsetter would be declined even if the DLL were supplied. Guarded by
+  `tests/test_font_subsetting.py`. This also rules out the native-subsetter hypothesis in ADR 0003.
 - **`sys.stdout` is `None` in the `console=False` frozen build** whenever the process is launched
   without an inherited handle — i.e. every real launch: double-click, Start menu, `Start-Process`.
   Anything touching `sys.stdout` at import or config time crashes before the server starts.

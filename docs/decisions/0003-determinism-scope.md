@@ -180,6 +180,32 @@ PDF output at any granularity — same process or across processes. It is better
 above) with a real, intermittent, non-negligible chance of divergence confined to the
 compressed bytes of embedded font subsets.
 
+### Correction (post-Phase 0): HarfBuzz's subsetter is not involved at all
+
+The passage above, and the hypothesis about "heap-allocation-pattern-dependent iteration inside
+HarfBuzz's native subsetter," are **wrong about the mechanism**, though the observations they
+rest on stand. Rebind never runs HarfBuzz's subsetter. Two independent reasons, either alone
+sufficient:
+
+- `libharfbuzz-subset-0.dll` is not present in the GTK3 runtime at all, and WeasyPrint dlopens
+  it with `allow_fail=True`, so `harfbuzz_subset` is `None`.
+- `Font.subset` additionally requires `harfbuzz.hb_version_atleast(4, 1, 0)`. The bundled
+  HarfBuzz is older than that, so even supplying the DLL would not change which path runs.
+
+Every subset is therefore produced by `Font._fonttools_subset` — pure Python, via fontTools.
+This **eliminates the native-allocator hypothesis**, which was the leading candidate, and
+narrows the remaining search to fontTools' subsetting output or the zlib compression applied to
+it. That is a strictly easier problem than a native heap-order theory: it is inspectable from
+Python, and fontTools has no address-dependent iteration to appeal to.
+
+This does not change the decision below. Byte-identity remains a property Rebind does not claim,
+and the determinism invariant stays scoped to the document model. It does mean that anyone
+picking up the root-cause investigation should start at fontTools, not HarfBuzz.
+
+Confirmed by `tests/test_font_subsetting.py`, which also verifies that subsetting genuinely
+happens — an earlier note claimed the missing DLL had disabled it, and that was wrong too: the
+fallback path was subsetting correctly the whole time.
+
 ### Root cause: unresolved, with competing hypotheses
 
 The divergence occurs inside `HTML(...).write_pdf(...)` in `src/rebind/render.py`, upstream of
