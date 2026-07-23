@@ -227,8 +227,13 @@ mechanism is unresolved and both hypotheses remain live.
    actually need a controlled `PYTHONHASHSEED` (see below) set it directly in the environment
    of the subprocess they spawn to build a PDF, which is the correct scope for that control and
    does not affect the process running pytest itself.
-   - Rebind ships no console entry point as of this decision (no `src/rebind/app.py`, no
-     `[project.scripts]` in `pyproject.toml`). If/when one is added, and if it needs a pinned
+   - **Correction (final whole-branch review): this statement is stale.** Rebind now ships both
+     a console entry point (`src/rebind/app.py`, `main()`) and a `[project.scripts]` entry
+     (`rebind = "rebind.app:main"` in `pyproject.toml`), added in a later Phase 0 task after
+     this ADR was originally written. Neither pins `PYTHONHASHSEED` for the whole process, so
+     the substance of this decision (pin only where a specific test needs it, in that test's
+     own subprocess) is unaffected -- only the "ships no console entry point" factual claim
+     was wrong and has been corrected here. If either entry point is ever changed to pin a
      seed for some other reason, note that pinning the hash seed does not, by itself, deliver
      cross-process byte-identity (see evidence above) -- it would be a partial mitigation for
      Python-level hash effects, not a fix for this ADR's finding.
