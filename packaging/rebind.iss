@@ -1,4 +1,10 @@
 [Setup]
+; Fixed, stable GUID identifying "Rebind" across all versions -- Inno Setup uses AppId (not
+; AppName) to recognize an existing install for upgrade/uninstall purposes. Without an
+; explicit AppId, Inno Setup derives one from AppName, which is fragile (a rename would orphan
+; every existing install); generated once with `uv run python -c "import uuid; print(uuid.uuid4())"`
+; and must never change between releases.
+AppId={{11732952-84C2-467D-9E8D-5263D9A81C11}
 AppName=Rebind
 AppVersion=0.0.1
 AppPublisher=Thomas Scharff
@@ -9,9 +15,18 @@ Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
+; With ~80 vendored third-party DLLs under LGPL/MIT/FTL/etc (see docs/decisions/0002-phase-0-
+; findings.md), the installer is the point of distribution where those obligations must be
+; discharged. LicenseFile shows this text in the setup wizard before install proceeds; the
+; [Files] entry below additionally ships the full notices into the installed payload so they
+; remain available after installation, not just during it. See packaging/licenses/README.md --
+; the per-DLL inventory itself is not yet complete; this wires up the structure it lands in.
+LicenseFile=licenses\LICENSE-THIRD-PARTY.txt
 
 [Files]
 Source: "dist\rebind\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\LICENSE"; DestDir: "{app}\licenses"; DestName: "LICENSE-Rebind.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Rebind"; Filename: "{app}\rebind.exe"

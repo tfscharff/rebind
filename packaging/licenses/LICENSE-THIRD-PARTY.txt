@@ -1,0 +1,16 @@
+Rebind - Third-Party License Notices (PLACEHOLDER)
+====================================================
+
+This file is a placeholder, not a completed license inventory. See README.md in this same
+directory for the full list of what must be done before this installer is used for a public
+release.
+
+Rebind's frozen distribution bundles the GTK3-Runtime-Win64 runtime (vendored DLLs under
+`gtk3-runtime\`), which aggregates multiple upstream open-source components including but not
+limited to GTK/GLib/Pango/Cairo (LGPL), HarfBuzz (MIT), FreeType (FTL), libpng, zlib, expat,
+and PCRE2. A per-component license text and attribution inventory has not yet been completed
+(tracked in docs/decisions/0002-phase-0-findings.md).
+
+Do not treat the presence of this file as evidence that Rebind's third-party license
+obligations have been satisfied. It exists so the installer has a LicenseFile to point at and
+so the obligation is structurally impossible to forget, not because the obligation is done.
