@@ -82,22 +82,38 @@ def test_license_inventory_matches_the_built_bundle(frozen_exe: Path):
 
 
 def test_frozen_exe_renders_a_real_pdf(frozen_exe: Path):
-    """Launch rebind.exe and confirm /render-smoke actually renders -- not just imports."""
+    """Launch rebind.exe and confirm /render-smoke actually renders -- not just imports.
+
+    DETACHED_PROCESS with no stdout/stderr redirection is load-bearing, not incidental. An
+    earlier version of this test used stdout=subprocess.PIPE, which hands the child a valid
+    stdout handle and therefore left `sys.stdout` non-None inside the console=False build. That
+    masked a crash-on-startup that every real launch hit -- see the use_colors comment in
+    `rebind.app.main`. The exe must be started the way a Start menu shortcut starts it: no
+    console, no inherited handles. The cost is that there is no captured output to report on
+    failure, which is what `rebind.log` next to the exe is for.
+    """
+    log_file = frozen_exe.parent / "rebind.log"
+    log_file.unlink(missing_ok=True)
     proc = subprocess.Popen(
         [str(frozen_exe)],
         cwd=frozen_exe.parent,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
     )
+
+    def _diagnostics() -> str:
+        if not log_file.exists():
+            return "no rebind.log was written -- the process died before logging started"
+        return log_file.read_text(encoding="utf-8", errors="replace")
+
     try:
         base_url = f"http://{HOST}:{PORT}"
         deadline = time.monotonic() + 30
         last_error: Exception | None = None
         while time.monotonic() < deadline:
             if proc.poll() is not None:
-                output = proc.stdout.read() if proc.stdout else ""
-                pytest.fail(f"rebind.exe exited early (code {proc.returncode}):\n{output}")
+                pytest.fail(
+                    f"rebind.exe exited early (code {proc.returncode}):\n{_diagnostics()}"
+                )
             try:
                 httpx.get(f"{base_url}/health", timeout=1).raise_for_status()
                 break
@@ -105,7 +121,10 @@ def test_frozen_exe_renders_a_real_pdf(frozen_exe: Path):
                 last_error = exc
                 time.sleep(0.5)
         else:
-            pytest.fail(f"rebind.exe never became ready to serve /health: {last_error}")
+            pytest.fail(
+                f"rebind.exe never became ready to serve /health: {last_error}\n"
+                f"{_diagnostics()}"
+            )
 
         response = httpx.post(f"{base_url}/render-smoke", timeout=30)
         response.raise_for_status()

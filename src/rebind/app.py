@@ -125,6 +125,14 @@ def main() -> None:
     import uvicorn
 
     log_config = uvicorn.config.LOGGING_CONFIG
+    # use_colors=None makes uvicorn's formatters call sys.stdout.isatty() at construction time.
+    # In the console=False frozen build sys.stdout is None whenever the process is launched
+    # without an inherited handle -- i.e. every real launch: double-click, Start menu shortcut,
+    # Start-Process. That raises AttributeError before the server ever starts, so the app dies
+    # instantly with a dialog no librarian can act on. Pinning use_colors=False keeps the
+    # formatters from touching stdout at all; the handlers below already write to a file.
+    log_config["formatters"]["default"]["use_colors"] = False
+    log_config["formatters"]["access"]["use_colors"] = False
     log_config["handlers"]["default"]["class"] = "logging.FileHandler"
     log_config["handlers"]["default"]["filename"] = str(_log_file_path())
     log_config["handlers"]["default"].pop("stream", None)

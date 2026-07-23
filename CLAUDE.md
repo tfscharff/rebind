@@ -36,7 +36,10 @@ diff layer over the model, so reprocessing with an improved pipeline never disca
 - **veraPDF 1.30.2** at `C:\veraPDF\verapdf.bat` (needs Java; Java 23 is installed).
 - **GTK3 runtime** installed system-wide at `C:\Program Files\GTK3-Runtime Win64` — required for
   WeasyPrint in development. The frozen build vendors its own copy.
-- **Inno Setup is NOT installed**, and building the installer needs admin rights.
+- **Inno Setup 6.7.3** installed **per-user** at `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` —
+  no admin rights needed, contrary to the earlier assumption. Installed via
+  `winget install --id JRSoftware.InnoSetup -e --scope user --override "/VERYSILENT /CURRENTUSER"`.
+  It is not on `PATH`; invoke it by full path.
 
 ## Commands
 
@@ -70,6 +73,13 @@ uv run python scripts/determinism_probe.py   # reproduces the nondeterminism fin
 - **`WEASYPRINT_DLL_DIRECTORIES` is silently ignored in frozen builds** (`ffi.py` guards it with
   `not hasattr(sys, 'frozen')`). We call `os.add_dll_directory` ourselves before importing
   weasyprint. Unreported upstream bug.
+- **`sys.stdout` is `None` in the `console=False` frozen build** whenever the process is launched
+  without an inherited handle — i.e. every real launch: double-click, Start menu, `Start-Process`.
+  Anything touching `sys.stdout` at import or config time crashes before the server starts.
+  uvicorn's formatters do exactly this via `use_colors=None`; `app.main` pins `use_colors=False`.
+  **Never launch the frozen exe in a test with `stdout=subprocess.PIPE`** — a pipe is a valid
+  handle, so `sys.stdout` is non-None and the test passes while every real launch fails. Use
+  `DETACHED_PROCESS` and read `rebind.log` for diagnostics.
 - **veraPDF exits non-zero for legitimately non-compliant documents.** Never treat returncode alone
   as failure — check `jobEndStatus`. `rebind.validate` raises `RuntimeError` only for genuine tool
   failures.
