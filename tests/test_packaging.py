@@ -61,6 +61,26 @@ def frozen_exe() -> Path:
     return exe
 
 
+def test_license_inventory_matches_the_built_bundle(frozen_exe: Path):
+    """Every DLL the build actually vendors must be accounted for in the license inventory.
+
+    The inventory is the installer's legal claim about what it redistributes, and it is written
+    against a DLL set that is expected to shrink (most vendored DLLs are never loaded). A trim
+    that is not reflected here would leave the installer over-claiming; adding a DLL without
+    mapping it would leave it under-claiming, which is the one that matters. `--check` fails on
+    drift in either direction, so this pins the two together at the point the bundle is built.
+    """
+    result = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "license_inventory.py"), "--check"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"License inventory drifted from the built bundle:\n{result.stdout}\n{result.stderr}"
+    )
+
+
 def test_frozen_exe_renders_a_real_pdf(frozen_exe: Path):
     """Launch rebind.exe and confirm /render-smoke actually renders -- not just imports."""
     proc = subprocess.Popen(

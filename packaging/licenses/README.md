@@ -1,45 +1,56 @@
-# Third-party license texts to bundle in the installer
+# Third-party license texts bundled in the installer
 
 This directory is installed into the app's `licenses\` folder (see `rebind.iss`'s `[Files]`
-section) and its `LICENSE-THIRD-PARTY.txt` is wired up as the installer's `LicenseFile`. Neither
-is complete yet -- this is the structure the license work lands in, not the finished work
-itself (see `docs/decisions/0002-phase-0-findings.md`, "Per-DLL license inventory not done").
+section) and its `LICENSE-THIRD-PARTY.txt` is wired up as the installer's `LicenseFile`.
 
-## What must be filled in before public release
+## What is here
 
-The frozen bundle vendors ~80 DLLs from the GTK3-Runtime-Win64 distribution
-(`packaging/rebind.spec`), which is itself an aggregation of several upstream projects under
-different licenses, at least:
+| File | What it is |
+|---|---|
+| `LICENSE-THIRD-PARTY.txt` | The notice shown in the setup wizard and installed with the app. **Generated** -- do not edit. |
+| `DLL-INVENTORY.md` | Per-DLL mapping: project, license expression, license text, and how each was determined. **Generated** -- do not edit. |
+| `LICENSE-*.txt` (28 files) | Canonical upstream license texts, fetched verbatim from the FSF, SPDX, or the project's own repository. Not paraphrases. |
 
-| Component | License | Notes |
-|---|---|---|
-| GTK, GLib, Pango, GdkPixbuf, ATK | LGPL-2.1+ | Core GTK3 stack |
-| Cairo | LGPL-2.1 / MPL-1.1 (dual) | |
-| HarfBuzz | MIT | Text shaping; also the suspected source of the ADR-0003 nondeterminism |
-| FreeType | FTL (or GPLv2, dual-licensed) | Confirm which FreeType chose for this build |
-| libpng | libpng license | |
-| zlib | zlib license | |
-| expat | MIT | |
-| PCRE2 | BSD-3-Clause | |
+Both generated files come from `scripts/license_inventory.py`, which holds the DLL-to-license
+mapping and is the source of truth for it:
 
-Before a public release:
+```bash
+uv run python scripts/license_inventory.py           # regenerate both
+uv run python scripts/license_inventory.py --check   # verify only
+```
 
-1. Enumerate the actual DLLs in a built `dist/rebind/gtk3-runtime/bin/` (the exact file list,
-   not the table above, which is illustrative) and map each to its upstream project.
-2. Obtain the canonical license text for each distinct license identified (not a paraphrase),
-   and place each as its own file in this directory (e.g. `LICENSE-LGPL-2.1.txt`,
-   `LICENSE-HarfBuzz-MIT.txt`).
-3. Write `LICENSE-THIRD-PARTY.txt` (referenced by `rebind.iss`'s `LicenseFile`) as an index:
-   which DLL/component uses which license file in this directory, plus attribution text any
-   license requires (e.g. copyright notices).
-4. LGPL specifically requires either dynamic linking (already true here -- these are separate
-   DLLs, not statically linked) or an offer to allow relinking against a different version;
-   confirm rebind's distribution mechanism satisfies this (dynamic linking generally does) and
-   document that conclusion here rather than leaving it implicit.
-5. Rebind's own `LICENSE` (repo root) should also be included in the installed payload for
-   completeness, separate from the third-party notices.
+The script reads the DLLs actually present in a built bundle and **fails** if the set on disk
+and the set it maps disagree in either direction, so the vendored set cannot change without the
+inventory being brought along with it. Rebind's own `LICENSE` is installed separately as
+`LICENSE-Rebind.txt` by `rebind.iss`.
 
-## Current state
+## Status
 
-`LICENSE-THIRD-PARTY.txt` in this directory is a placeholder that names the obligation and
-points back to this README; it is not a substitute for doing the above.
+The inventory is complete for the bundle as currently built: all 80 DLLs in
+`packaging/dist/rebind/_internal/gtk3-runtime/bin/` are mapped, every referenced license text is
+present, and the LGPL dynamic-linking conclusion is documented in `DLL-INVENTORY.md` rather than
+left implicit. This satisfies the pre-release license obligation.
+
+It will need regenerating -- not redoing -- when the vendored DLL set is trimmed. Most of these
+libraries are never loaded: WeasyPrint 69 dlopens six (gobject, pango, harfbuzz, harfbuzz-subset,
+fontconfig, pangoft2), and `packaging/rebind.spec` vendors the GTK runtime's entire `bin\`
+directory regardless. Trimming to the actual dependency closure would drop roughly two thirds of
+these entries, including every LGPL-3 component. Run the script afterwards and it will report
+exactly which entries became stale.
+
+## Corrections to earlier assumptions
+
+An earlier draft of this file guessed at the mapping from a partial list. Two entries were wrong,
+and both are now determined from the binaries themselves:
+
+- **`libiconv-2.dll` is GNU libiconv (LGPL-2.1-or-later), not win-iconv (MIT).** The upstream
+  packager's `license.txt` credits win-iconv, but the DLL exports `_libiconv_version` /
+  `libiconv_open` and its version resource reads "libiconv ... 1.16 ... Free Software Foundation".
+  This is a materially heavier obligation than the one previously assumed.
+- **`libpcre-1.dll` is PCRE1, not PCRE2.** Both are BSD-3-Clause, so the conclusion is unchanged,
+  but the text supplied is PCRE1's own `LICENCE`.
+
+More generally, the runtime's own `gtk3-runtime/license.txt` cannot be relied on: it names 13
+projects while the runtime ships 80 DLLs, and omits GnuTLS, Nettle, GMP, libidn2, libunistring,
+SQLite, libtiff, JasPer, librsvg, gtksourceview and libsoup entirely. Four of those omissions are
+LGPL-3, the heaviest obligations in the bundle.
