@@ -12,11 +12,14 @@ from hashlib import blake2b
 
 BBox = tuple[float, float, float, float]
 
-# Bboxes are quantized before hashing so a re-extraction that shifts a box by a fraction of a
-# point produces the same id. Node identity has to survive reprocessing for corrections to be
-# storable as a diff layer over the model (governing design 5.7); an id that churns on jitter
-# would silently orphan every human edit.
-_BBOX_QUANTUM = 0.5
+# Bboxes are normalized to a fraction of the page dimension, then quantized in that fraction
+# space, before hashing. That makes the id tolerant of both sub-point extraction jitter and of
+# re-extraction at a different page scale (e.g. OCR at a different DPI). Node identity has to
+# survive reprocessing for corrections to be storable as a diff layer over the model (governing
+# design 5.7); an id that churns on jitter or rescan resolution would silently orphan every human
+# edit. 0.001 of a page dimension is about 0.6pt horizontally and 0.8pt vertically on US Letter --
+# comfortably coarser than sub-point jitter and far finer than any real content boundary.
+_BBOX_QUANTUM_FRACTION = 0.001
 
 
 @dataclass
@@ -85,15 +88,15 @@ _NODE_TYPES = {
 def node_id(*, page: int, bbox: BBox, page_width: float, page_height: float, text: str) -> str:
     """A stable id from page, normalized bbox and content fingerprint.
 
-    Normalizing by page dimensions means the id does not change if the same content is later
-    extracted from a page recorded at a different scale.
+    The bbox is converted to a fraction of the page dimensions before quantizing, so the id does
+    not change if the same content is later extracted from a page recorded at a different scale.
     """
     x0, y0, x1, y1 = bbox
     normalized = (
-        round(x0 / page_width / _BBOX_QUANTUM * page_width) if page_width else 0,
-        round(y0 / page_height / _BBOX_QUANTUM * page_height) if page_height else 0,
-        round(x1 / page_width / _BBOX_QUANTUM * page_width) if page_width else 0,
-        round(y1 / page_height / _BBOX_QUANTUM * page_height) if page_height else 0,
+        round(x0 / page_width / _BBOX_QUANTUM_FRACTION) if page_width else 0,
+        round(y0 / page_height / _BBOX_QUANTUM_FRACTION) if page_height else 0,
+        round(x1 / page_width / _BBOX_QUANTUM_FRACTION) if page_width else 0,
+        round(y1 / page_height / _BBOX_QUANTUM_FRACTION) if page_height else 0,
     )
     digest = blake2b(digest_size=8)
     digest.update(f"{page}|{normalized}|{text}".encode("utf-8"))
