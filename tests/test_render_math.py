@@ -67,12 +67,31 @@ def test_mathml_glyphs_are_present_in_content_stream(tmp_path: Path):
 
     rendered_text = "".join(mcid_text.values())
 
-    # The equation's variables, digits, and operators, distinct from the surrounding prose
-    # ("The quadratic formula is given below.") which shares none of these characters.
-    for expected_char in ("x", "=", "b", "2", "4", "a", "c", "-"):
+    # NOTE: the prose paragraph "The quadratic formula is given below." itself already
+    # contains the letters a, b, c, and the digit sequence isn't present but "=", "x" etc.
+    # are not either -- still, several of the equation's own characters (a, b, c) are *not*
+    # unique to the equation and would trivially pass even if the equation's glyphs were
+    # never rendered at all, since they'd be satisfied by the prose alone. Assert only on
+    # characters that are genuinely equation-only: the digits (absent from the prose, which
+    # contains no numerals) and "±", the one character that appears nowhere else in this
+    # document and therefore actually distinguishes "the equation rendered" from "the prose
+    # rendered but the equation silently dropped".
+    for expected_char in ("2", "4", "±"):
         assert expected_char in rendered_text, (
             f"expected {expected_char!r} from the rendered equation in the page content "
             f"stream; got MCID text {mcid_text!r}"
+        )
+
+    # And confirm the converse holds for the shared letters: they must appear in the prose
+    # MCID specifically (not merely somewhere in the page), so this test cannot be satisfied
+    # by, say, only the prose paragraph rendering and the equation being dropped entirely --
+    # the digit/± assertion above already rules that out, but this makes the reasoning explicit
+    # rather than relying on the reader to notice a, b, c are ambiguous on their own.
+    prose_text = mcid_text.get(0, "")
+    for shared_char in ("a", "b", "c"):
+        assert shared_char in prose_text, (
+            f"expected {shared_char!r} in the prose MCID as a sanity check on the fixture "
+            f"itself; got {prose_text!r}"
         )
 
 
