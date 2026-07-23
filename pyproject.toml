@@ -23,7 +23,7 @@ dev = [
 ]
 
 [project.scripts]
-rebind = "rebind.app:main"
+rebind = "rebind.cli:main"
 
 [build-system]
 requires = ["hatchling"]
