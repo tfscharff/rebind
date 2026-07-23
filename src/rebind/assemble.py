@@ -25,7 +25,23 @@ from .model import (
 from .profile import TypographicProfile, style_of
 
 BULLET_PREFIXES = ("•", "‣", "◦", "-", "*")
-ORDERED_RE = re.compile(r"^(\d+)[.)]\s+(.*)$")
+
+# Matches an ordered-list marker, with or without trailing content on the same line:
+#   "1. first"  -> digits="1", content="first"   (content already on the marker's line)
+#   "1."        -> digits="1", content=None       (WeasyPrint's <ol> marker-only glyph)
+#   "2)"        -> digits="2", content=None
+#
+# The digit run is capped at 3 characters on purpose. Because \d{1,3} cannot skip over a digit
+# (a regex match is contiguous), a longer run such as "1996" never matches at all -- taking a
+# 1-3 digit prefix of it still leaves a digit as the next character, which fails the literal
+# "[.)]" that must follow. That is what keeps "1996. It was a good year" from being misread as
+# list item 1996: there is no layout information in a bare line of text to tell a list marker
+# from a sentence that happens to start with a number, so the width of the digit run is the only
+# signal available, and real list markers are essentially never more than three digits. This is
+# a heuristic disambiguator, not a document size limit (invariant 5) -- a numbered list item
+# past #999 would fail to match and fall back to being flagged as a plain paragraph, a known,
+# documented limitation of text-only disambiguation, not an enforced ceiling.
+ORDERED_RE = re.compile(r"^(\d{1,3})[.)](?:\s+(.*))?$")
 
 _STAGE = "assemble"
 
@@ -105,14 +121,45 @@ def _looks_multi_column(lines: Iterable[TextLine]) -> bool:
 
 
 def _list_item_text(text: str) -> tuple[str, bool] | None:
-    """Return (item text, ordered) if the line looks like a list item, else None."""
+    """Return (item text, ordered) if the line looks like a list item, else None.
+
+    The returned item text is empty when the line is only the marker glyph (a bare bullet, or a
+    bare "1." / "2)" with nothing after it) -- the caller holds those and waits for the content to
+    arrive as the next line; see `pending_marker` in `assemble`.
+    """
     for bullet in BULLET_PREFIXES:
         if text.startswith(bullet):
             return text[len(bullet):].strip(), False
     match = ORDERED_RE.match(text)
     if match:
-        return match.group(2).strip(), True
+        content = match.group(2)
+        return (content.strip() if content is not None else ""), True
     return None
+
+
+# Tolerance, in points, when comparing a candidate line's left edge against a held marker's right
+# edge to decide whether the candidate is plausibly the marker's own content rather than an
+# unrelated line that merely came next in reading order. WeasyPrint abuts the two exactly (marker
+# x1 == content x0); this allows a hair of slack for sub-point float jitter from the layout engine
+# without being loose enough to accept a genuinely separate line.
+_MARKER_MERGE_X_TOLERANCE = 0.5
+
+
+def _marker_merges_with(marker: TextLine, candidate: TextLine) -> bool:
+    """Whether `candidate` is plausibly the marker's own content, not just the next line in
+    reading order.
+
+    True only when the two lines' y-ranges overlap (they sit on the same visual line) and the
+    candidate starts at or after the marker's right edge (it is the content the marker
+    introduces, rather than an unrelated line -- a decorative separator, a footnote marker -- that
+    the bare marker glyph merely happened to precede).
+    """
+    _, m_y0, m_x1, m_y1 = marker.bbox
+    c_x0, c_y0, _, c_y1 = candidate.bbox
+    vertical_overlap = min(m_y1, c_y1) - max(m_y0, c_y0)
+    if vertical_overlap <= 0:
+        return False
+    return c_x0 >= m_x1 - _MARKER_MERGE_X_TOLERANCE
 
 
 def assemble(
@@ -172,9 +219,12 @@ def assemble(
             # Some renderers (WeasyPrint's native <ul>/<ol> markers among them) place the bullet
             # or number glyph in its own text box, separate from the item's content, which
             # pdfminer then yields as the *next* line rather than a prefix of the same one. A
-            # marker-only line is held here and merged with whatever comes next, rather than
-            # being emitted as a ListItem with empty text and letting its content fall through
-            # as an ordinary Paragraph -- which would both scramble the list and lose the item.
+            # marker-only line is held here and merged with whatever comes next -- but only when
+            # that next line is plausibly the marker's own content (see `_marker_merges_with`).
+            # An unrelated line that merely follows the marker in reading order (a decorative
+            # separator, a footnote marker, the next heading) must not be swallowed into a
+            # fictional list item with a fabricated bbox; the held marker is flushed honestly
+            # instead, as its own degenerate item, rather than being dropped or over-merged.
             pending_marker: tuple[TextLine, float, bool] | None = None
 
             def flush_pending_marker() -> None:
@@ -265,7 +315,7 @@ def assemble(
                         pending_marker = (line, confidence, ordered)
                     continue
 
-                if pending_marker is not None:
+                if pending_marker is not None and _marker_merges_with(pending_marker[0], line):
                     marker, marker_confidence, ordered = pending_marker
                     pending_marker = None
                     x0 = min(marker.bbox[0], line.bbox[0])
@@ -285,6 +335,11 @@ def assemble(
                         )
                     )
                     continue
+
+                # A held marker that this line does not plausibly belong to (too far away, or
+                # starting to its left) must still be accounted for -- flush it as its own
+                # degenerate item rather than silently discarding it or fabricating a merge.
+                flush_pending_marker()
 
                 flush_list()
                 flags = [] if confidence >= 0.5 else ["degraded-region"]

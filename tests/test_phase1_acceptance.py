@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from rebind.model import Document
+from rebind.model import Document, Heading, ListNode
 from rebind.pipeline import convert
 from tests.fixtures import born_digital_pdf
 
@@ -105,6 +105,56 @@ def test_model_matches_the_golden_file(tmp_path: Path):
         pytest.fail(f"golden file missing; create it with the model at {result.model_path}")
     expected = Document.from_json(GOLDEN.read_text(encoding="utf-8"))
     assert result.document == expected
+
+    # Whole-document equality against the golden file only proves "matches whatever was last
+    # blessed" -- it says nothing about whether that blessing was correct. These assertions
+    # encode the structural properties a human actually reviewed, so regenerating the golden file
+    # can never silently re-bless a regression without someone re-checking these by hand.
+    document = result.document
+    heading = next(n for n in document.nodes if isinstance(n, Heading))
+    assert heading.level == 1, "the top-level heading must be level 1"
+
+    lists = [n for n in document.nodes if isinstance(n, ListNode)]
+    assert len(lists) == 1, "alpha/beta must be recovered as a single list, not scattered items"
+    assert [item.text for item in lists[0].items] == ["alpha", "beta"]
+
+    for node in document.nodes:
+        assert node.id, f"{node.kind} node is missing an id"
+        assert isinstance(node.page, int) and node.page >= 1, f"{node.kind} node has no page"
+        assert isinstance(node.bbox, tuple) and len(node.bbox) == 4, (
+            f"{node.kind} node's bbox is not a 4-tuple"
+        )
+        if isinstance(node, ListNode):
+            for item in node.items:
+                assert item.id, "list item is missing an id"
+                assert item.page >= 1, "list item has no page"
+                assert isinstance(item.bbox, tuple) and len(item.bbox) == 4, (
+                    "list item's bbox is not a 4-tuple"
+                )
+
+
+def test_ordered_list_from_real_weasyprint_output_is_recognized(tmp_path: Path):
+    """Regression guard for Finding 3: WeasyPrint emits an <ol> marker glyph as its own line with
+    no trailing space ("1.", not "1. "). `ORDERED_RE` originally required trailing whitespace, so
+    no ListNode was ever produced and the bare numerals leaked into the reading order as
+    Paragraphs -- exactly the kind of thing a screen reader should never announce. Nothing in the
+    original suite rendered a real <ol> through WeasyPrint, which is how this shipped unnoticed.
+    """
+    source = born_digital_pdf(
+        "<h1>Doc</h1><ol><li>first</li><li>second</li></ol>", tmp_path / "in.pdf"
+    )
+
+    result = convert(source, tmp_path / "out.pdf", title="T")
+
+    lists = [n for n in result.document.nodes if isinstance(n, ListNode)]
+    assert len(lists) == 1, "the ordered list must be recovered as a single ListNode"
+    assert lists[0].ordered is True
+    assert [item.text for item in lists[0].items] == ["first", "second"]
+
+    paragraphs = [n.text for n in result.document.nodes if n.kind == "Paragraph"]
+    assert not any(text.strip() in ("1.", "2.") for text in paragraphs), (
+        "the bare ordinal markers must not leak into the reading order as paragraphs"
+    )
 
 
 @pytest.mark.slow

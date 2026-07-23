@@ -199,6 +199,149 @@ def test_centered_heading_above_full_width_body_is_not_flagged_multi_column():
     assert all("multi-column-suspected" not in p.flags for p in paragraphs)
 
 
+def test_marker_and_content_on_separate_lines_merge_into_one_item():
+    """WeasyPrint's native <ul>/<ol> markers arrive as their own TextLine, sharing the content
+    line's y-range and abutting its left edge -- this is the real-world shape the merge exists
+    for, as opposed to the single synthetic "• first" line the older tests exercise."""
+    marker1 = custom_line("•", 98.02, 108.0, 613.74)
+    content1 = custom_line("alpha", 108.0, 138.75, 613.74)
+    marker2 = custom_line("•", 98.02, 108.0, 598.34)
+    content2 = custom_line("beta", 108.0, 138.75, 598.34)
+    lines = [line("body", y=650.0 - i) for i in range(10)] + [marker1, content1, marker2, content2]
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    lists = [n for n in doc.nodes if isinstance(n, ListNode)]
+    assert len(lists) == 1
+    assert [item.text for item in lists[0].items] == ["alpha", "beta"]
+
+
+def test_stray_marker_far_from_unrelated_paragraph_is_not_merged():
+    """A decorative bullet or footnote marker must not annex a later, unrelated paragraph into a
+    fictional list item with a fabricated bbox (Finding 1). The marker itself must still surface
+    somewhere honest (Finding 2) -- not silently dropped."""
+    marker = custom_line("•", 98.02, 108.0, 700.0)
+    unrelated = custom_line("Some unrelated paragraph.", 72.0, 400.0, 500.0)
+    lines = [line("body", y=650.0 - i) for i in range(10)] + [marker, unrelated]
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    para = next((p for p in paragraphs if p.text == "Some unrelated paragraph."), None)
+    assert para is not None, "the unrelated paragraph must not be absorbed into a list item"
+    assert para.bbox == unrelated.bbox, "the paragraph's bbox must describe only itself"
+
+    lists = [n for n in doc.nodes if isinstance(n, ListNode)]
+    assert lists, "the stray marker must not be silently dropped"
+    assert any(item.text == "" for item in lists[0].items)
+
+
+def test_marker_followed_by_heading_is_not_lost():
+    lines = [line("body", y=500.0 - i) for i in range(20)]
+    lines.append(line("•", y=300.0))
+    lines.append(line("Chapter Two", size=24.0, bold=True, y=280.0))
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    heading = next(n for n in doc.nodes if isinstance(n, Heading))
+    assert heading.text == "Chapter Two"
+    lists = [n for n in doc.nodes if isinstance(n, ListNode)]
+    assert lists, "the marker preceding a heading must not be dropped"
+    assert any(item.text == "" for item in lists[0].items)
+
+
+def test_marker_followed_by_artifact_is_not_lost():
+    def footer_page(number, body_y):
+        return page_of(
+            [line("body", page=number, y=body_y), line("Footer", page=number, y=30.0, size=9.0)],
+            number=number,
+        )
+
+    page1_lines = [line("body", y=500.0 - i) for i in range(5)]
+    page1_lines.append(line("•", y=90.0))
+    page1_lines.append(line("Footer", y=30.0, size=9.0))
+    pages = [page_of(page1_lines, number=1), footer_page(2, 500.0), footer_page(3, 500.0)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    artifacts = [n for n in doc.nodes if isinstance(n, Artifact)]
+    assert any(a.page == 1 for a in artifacts), "the footer must be recognized as an artifact"
+    lists = [n for n in doc.nodes if isinstance(n, ListNode)]
+    assert lists, "the marker preceding the artifact must not be dropped"
+    assert any(item.text == "" for item in lists[0].items)
+
+
+def test_marker_followed_immediately_by_another_marker_keeps_both():
+    lines = [line("body", y=500.0 - i) for i in range(20)]
+    lines.append(line("•", y=300.0))
+    lines.append(line("*", y=280.0))
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    lists = [n for n in doc.nodes if isinstance(n, ListNode)]
+    assert lists, "both stray markers must surface, not be dropped"
+    assert [item.text for item in lists[0].items] == ["", ""]
+
+
+def test_marker_at_end_of_page_with_content_on_next_page_keeps_both():
+    page1_lines = [line("body", y=500.0 - i, page=1) for i in range(20)]
+    page1_lines.append(line("•", y=100.0, page=1))
+    page2_lines = [line("Next page content", y=700.0, page=2)]
+    pages = [page_of(page1_lines, number=1), page_of(page2_lines, number=2)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    lists = [n for n in doc.nodes if isinstance(n, ListNode)]
+    assert lists, "the marker stranded at end of page must not be dropped"
+    assert any(item.text == "" for item in lists[0].items)
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    assert any(p.text == "Next page content" for p in paragraphs), (
+        "content on the following page must not be merged into the previous page's marker"
+    )
+
+
+def test_ordered_marker_only_line_becomes_ordered_list():
+    """WeasyPrint's native <ol> marker glyph has no trailing space ("1.", not "1. "), unlike the
+    combined form the older test exercises."""
+    marker1 = custom_line("1.", 98.02, 108.0, 613.74)
+    content1 = custom_line("alpha", 108.0, 138.75, 613.74)
+    marker2 = custom_line("2.", 98.02, 108.0, 598.34)
+    content2 = custom_line("beta", 108.0, 138.75, 598.34)
+    lines = [line("body", y=650.0 - i) for i in range(10)] + [marker1, content1, marker2, content2]
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    lists = [n for n in doc.nodes if isinstance(n, ListNode)]
+    assert len(lists) == 1
+    assert lists[0].ordered is True
+    assert [item.text for item in lists[0].items] == ["alpha", "beta"]
+
+
+def test_year_starting_a_sentence_is_not_mistaken_for_a_list_marker():
+    lines = [line("body", y=500.0 - i) for i in range(20)]
+    lines.append(line("1996. It was a good year.", y=300.0))
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    assert not any(isinstance(n, ListNode) for n in doc.nodes)
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    assert any(p.text == "1996. It was a good year." for p in paragraphs)
+
+
 def test_list_id_is_deterministic_and_content_derived():
     def make_lines():
         lines = [line("body", y=500.0 - i) for i in range(20)]
