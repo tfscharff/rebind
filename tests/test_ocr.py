@@ -82,3 +82,24 @@ def test_deskew_tightens_line_boxes_on_a_crooked_scan(tmp_path):
     assert h_with < h_without * 0.7, (
         f"deskew did not tighten the tilted line boxes: with={h_with:.1f} without={h_without:.1f}"
     )
+
+
+def test_ocr_body_text_is_not_fabricated_into_headings(tmp_path):
+    # OCR box height is a noisy crop, not a reliable font size, so the typographic profile's
+    # "larger than body => heading" rule manufactures spurious headings from OCR body text (a real
+    # book's body line can OCR to a taller box than its actual heading). OCR-sourced text must
+    # therefore not be inferred into headings -- an honest flat paragraph structure over a
+    # fabricated hierarchy. This body-only scan must yield NO headings.
+    body = "".join(
+        f"<p>Sentence number {i} of ordinary body prose, of typical length and weight.</p>"
+        for i in range(8)
+    )
+    source = pdf_image_only_scan(body, tmp_path / "scan.pdf", dpi=200)
+
+    result = convert(source, tmp_path / "out.pdf", title="scan")
+
+    headings = [n for n in result.document.nodes if n.kind == "Heading"]
+    assert headings == [], f"OCR body text was fabricated into headings: {[h.text for h in headings]}"
+    # The text is still recovered, as paragraphs.
+    paras = [n for n in result.document.nodes if n.kind == "Paragraph"]
+    assert any("ordinary body prose" in p.text for p in paras)
