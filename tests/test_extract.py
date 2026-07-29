@@ -117,3 +117,33 @@ def test_text_inside_a_form_xobject_is_extracted_not_reported_as_an_image(tmp_pa
     # opaque whole-figure ImageRegion (the double-counting rule: text and image are independent
     # signals, and a text-only figure contributes no image region at all).
     assert page.images == ()
+
+
+def test_text_lines_treats_a_bare_top_level_line_as_a_line_not_a_box():
+    """A top-level bare LTTextLine must be yielded as one line, not descended into.
+
+    pdfminer usually wraps text lines in an LTTextBox, but on some OCR'd PDFs (confirmed against a
+    real 16-page OCR sample, page 8) it emits a bare LTTextLine at the page's top level. An
+    LTTextLine is itself an LTTextContainer, so the old code -- which iterated every top-level
+    LTTextContainer expecting line children -- descended into it and handed its LTChars to
+    `_line_from_container`, which then crashed trying to iterate an LTChar. `_text_lines` must
+    treat a line as a line: yield it whole rather than yielding its characters.
+    """
+    from pdfminer.layout import LTAnno, LTTextBoxHorizontal, LTTextLineHorizontal
+
+    from rebind.extract import _text_lines
+
+    bare_line = LTTextLineHorizontal(0.1)
+    bare_line._objs.append(LTAnno(" "))  # a child, so wrongly descending would be observable
+    assert list(_text_lines(bare_line)) == [bare_line]
+
+    box = LTTextBoxHorizontal()
+    inner = LTTextLineHorizontal(0.1)
+    box._objs.append(inner)
+    assert list(_text_lines(box)) == [inner]
+
+    # A stray non-line child directly inside a box (an ungrouped LTAnno/LTChar) is skipped, never
+    # passed on as if it were a line.
+    box_with_stray = LTTextBoxHorizontal()
+    box_with_stray._objs.append(LTAnno(" "))
+    assert list(_text_lines(box_with_stray)) == []
