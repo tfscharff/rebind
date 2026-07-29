@@ -126,6 +126,13 @@ def test_frozen_exe_renders_a_real_pdf(frozen_exe: Path):
                 f"{_diagnostics()}"
             )
 
+        # The librarian-facing UI must serve from the frozen exe (it is inlined, so this also
+        # confirms nothing UI-related failed to freeze).
+        home = httpx.get(f"{base_url}/", timeout=10)
+        home.raise_for_status()
+        assert "<!doctype html>" in home.text.lower()
+        assert "Rebind" in home.text
+
         response = httpx.post(f"{base_url}/render-smoke", timeout=30)
         response.raise_for_status()
         body = response.json()
