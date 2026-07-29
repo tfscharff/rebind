@@ -146,6 +146,10 @@ def assemble(
     for page in pages:
         page_covered_by_scan = _is_ocr_over_scan(page)
         page_ocr_confident = any(ln.ocr_confidence is not None for ln in page.lines)
+        # Text that is recognizer output -- Rebind's own OCR, or a hidden OCR layer over a scan --
+        # has corrupted structure signals (font size, leading markers), so structure is inferred
+        # from it only conservatively (see the heading suppression and the single-item-list rule).
+        page_is_ocr_sourced = page_ocr_confident or page_covered_by_scan
         if page_ocr_confident:
             ocr_confident_pages.add(page.number)
         elif page_covered_by_scan:
@@ -238,6 +242,22 @@ def assemble(
                 flush_pending_marker()
                 if not pending_items:
                     return
+                # A single-item "list" on an OCR-sourced page is almost always noise -- a stray
+                # marker glyph ('-', '+', '---') or a reference entry mis-read as a numbered item --
+                # not a real list. OCR corrupts the leading-marker signal the same way it corrupts
+                # font size, so the lone item is emitted as a paragraph rather than fabricating list
+                # structure (the pernambuco thesis produced 28 lists, most of them single-item
+                # noise). A genuine multi-item OCR list, with its marker repeating down the rows, is
+                # kept.
+                if page_is_ocr_sourced and len(pending_items) == 1:
+                    only = pending_items[0]
+                    nodes.append(
+                        Paragraph(id=only.id, page=only.page, bbox=only.bbox,
+                                  confidence=only.confidence, stage=_STAGE, flags=[], text=only.text)
+                    )
+                    pending_items = []
+                    pending_ordered = False
+                    return
                 # The list's own bbox is the union of its items' bboxes, not just the first
                 # item's -- a downstream consumer reading ListNode.bbox as "the region this
                 # list occupies" would otherwise get only the first line's rectangle.
@@ -267,17 +287,20 @@ def assemble(
             for placed in page_layout.lines:
                 line = placed.line
                 role = profile.role_of(line, page_height=page.height)
-                # OCR gives no reliable type size: a line's "size" is its bounding-box height, a
-                # noisy crop that varies line to line, so a real book's body line routinely OCRs to
-                # a taller box than its actual heading. The profile's "larger than body => heading"
-                # rule therefore manufactures spurious headings from OCR body text. Emitting a
-                # confident heading for body text fabricates document structure -- exactly what the
-                # never-fabricate invariant forbids -- so heading inference is suppressed for
-                # OCR-sourced lines. They become paragraphs (an honest flat structure); recovering
+                # OCR gives no reliable type size, whether Rebind ran the OCR (ocr_confidence set)
+                # or the source arrived with a hidden OCR layer over a page-covering scan
+                # (page_covered_by_scan). Either way a line's "size" is a noisy crop or a garbled
+                # recognizer artifact, so a body line routinely out-measures the real heading (the
+                # pernambuco thesis produced 50 headings, 44 of them collapsed past h6). The
+                # profile's "larger than body => heading" rule therefore manufactures confident
+                # spurious headings from recognizer output -- fabricating document structure, which
+                # the never-fabricate invariant forbids -- so heading inference is suppressed for any
+                # OCR-sourced line. They become paragraphs (an honest flat structure); recovering
                 # real headings from a scan needs a reliable signal (size + isolation + short line)
                 # that is a later slice. Artifact and list classification are unaffected: those come
                 # from position/recurrence and text patterns, not from the size signal.
-                if line.ocr_confidence is not None and role == "heading":
+                line_is_ocr_sourced = line.ocr_confidence is not None or page_covered_by_scan
+                if line_is_ocr_sourced and role == "heading":
                     role = "body"
                 # A line Rebind OCR'd carries the recognizer's real confidence; style-match
                 # cleanliness is meaningless for it (it has no real font). Born-digital text keeps
