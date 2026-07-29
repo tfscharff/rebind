@@ -8,26 +8,32 @@ needs no API key, GPU or network at runtime -- see docs/decisions/0005-ocr-engin
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
-from .extract import TextLine
+from .extract import Page, TextLine
 
 
 class OcrEngine:
     """Holds the RapidOCR handle so its (expensive) model load happens once per run.
 
-    RapidOCR is imported lazily inside `__init__` so that importing `rebind.ocr` -- and therefore
-    the born-digital path, which never touches OCR -- does not pay the onnxruntime import cost.
+    The handle is created on first use, not at construction, so a born-digital document -- which
+    never OCRs a page -- pays neither the onnxruntime import nor the model-load cost. Constructing
+    an `OcrEngine` is therefore cheap; the pipeline can always make one and only pages that need it
+    trigger the load.
     """
 
     def __init__(self) -> None:
-        from rapidocr_onnxruntime import RapidOCR
-
-        self._engine = RapidOCR()
+        self._engine = None
 
     def __call__(self, image: np.ndarray):
+        if self._engine is None:
+            from rapidocr_onnxruntime import RapidOCR
+
+            self._engine = RapidOCR()
         result, _elapsed = self._engine(image)
         return result or []
 
@@ -95,3 +101,32 @@ def recognize(
             )
         )
     return lines
+
+
+def ocr_pages(
+    source: Path,
+    pages: Iterable[Page],
+    *,
+    engine: OcrEngine,
+    cache: dict[int, list[TextLine]],
+    dpi: int = 200,
+) -> Iterator[Page]:
+    """Yield each page unchanged if it has a text layer, or with OCR'd lines if it does not.
+
+    OCR is expensive, and the pipeline reads the pages twice (profile pass, then assemble pass), so
+    a page's recognized lines are memoized in `cache` on first sight and reused on the second pass.
+    The cache holds only text (never images) and only for scanned pages, so a born-digital document
+    leaves it empty and keeps streaming with bounded memory (invariant 5). A blank or unrecoverable
+    scan simply yields no lines and stays a no-text-layer page downstream.
+    """
+    for page in pages:
+        if page.has_text_layer:
+            yield page
+            continue
+        if page.number not in cache:
+            image = render_page_to_image(source, page.number, dpi=dpi)
+            cache[page.number] = recognize(
+                image, page_number=page.number, page_width=page.width,
+                page_height=page.height, engine=engine,
+            )
+        yield replace(page, lines=tuple(cache[page.number]))

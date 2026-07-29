@@ -51,11 +51,15 @@ _STAGE = "assemble"
 # born-digital text. Measured against real samples, genuine scans cover ~100% and born-digital
 # decorative images top out at a few percent, so 0.6 separates them with wide margin.
 OCR_SCAN_COVERAGE = 0.6
-# OCR-sourced text is recognizer output of unknown accuracy, so its confidence -- which otherwise
-# means style-match cleanliness -- is capped here rather than left at a misleading 1.0. This is a
-# coarse placeholder; a calibrated per-character confidence only becomes possible once Rebind runs
-# its own OCR. Capping never raises confidence.
+# A hidden OCR text layer (slice 2) carries no per-line confidence, so its text -- whose confidence
+# would otherwise be a misleading style-match 1.0 -- is capped to this coarse placeholder. Text that
+# Rebind OCRs itself (the OCR branch) instead carries the recognizer's real per-line confidence and
+# is NOT capped. Capping never raises confidence.
 OCR_SOURCE_CONFIDENCE = 0.5
+
+# A line Rebind OCRs whose recognizer confidence is below this becomes an honest placeholder rather
+# than being emitted as text -- a confident lie is worse than an admitted gap (invariant 1).
+OCR_TEXT_MIN_CONFIDENCE = 0.5
 
 # Node types whose text is carried into the output; these are the ones labelled 'ocr-source' and
 # confidence-capped on an OCR-over-scan page.
@@ -133,12 +137,19 @@ def assemble(
 ) -> Document:
     nodes: list[Node] = []
     scanned: list[int] = []
-    ocr_pages: set[int] = set()
+    # Pages Rebind OCR'd itself (lines carry a real confidence) vs. pages that arrived with a hidden
+    # OCR layer (text over a page-covering scan, no per-line confidence). Both are labelled
+    # 'ocr-source'; only the latter has its confidence capped, because the former already has one.
+    ocr_confident_pages: set[int] = set()
+    hidden_ocr_pages: set[int] = set()
 
     for page in pages:
-        page_is_ocr = _is_ocr_over_scan(page)
-        if page_is_ocr:
-            ocr_pages.add(page.number)
+        page_covered_by_scan = _is_ocr_over_scan(page)
+        page_ocr_confident = any(ln.ocr_confidence is not None for ln in page.lines)
+        if page_ocr_confident:
+            ocr_confident_pages.add(page.number)
+        elif page_covered_by_scan:
+            hidden_ocr_pages.add(page.number)
         nodes.append(
             PageBreak(
                 id=node_id(page=page.number, bbox=(0.0, 0.0, page.width, page.height),
@@ -256,12 +267,34 @@ def assemble(
             for placed in page_layout.lines:
                 line = placed.line
                 role = profile.role_of(line, page_height=page.height)
-                confidence = profile.confidence_for(line, page_height=page.height)
+                # A line Rebind OCR'd carries the recognizer's real confidence; style-match
+                # cleanliness is meaningless for it (it has no real font). Born-digital text keeps
+                # the style-match score.
+                confidence = (
+                    line.ocr_confidence if line.ocr_confidence is not None
+                    else profile.confidence_for(line, page_height=page.height)
+                )
                 provenance = (
                     [f"column-{placed.column}"]
                     if column_count > 1 and placed.column >= 0
                     else []
                 )
+
+                # Recognizer output below the confidence floor is not trustworthy as text: emit an
+                # honest placeholder rather than a guess (invariant 1). Born-digital lines
+                # (ocr_confidence is None) never take this path.
+                if line.ocr_confidence is not None and line.ocr_confidence < OCR_TEXT_MIN_CONFIDENCE:
+                    flush_pending_marker()
+                    flush_list()
+                    nodes.append(
+                        Placeholder(
+                            id=_ids(line, page), page=line.page, bbox=line.bbox,
+                            confidence=line.ocr_confidence, stage=_STAGE,
+                            flags=["ocr-source", "text-unrecoverable"],
+                            reason=f"[text not recoverable from source scan, p. {line.page}]",
+                        )
+                    )
+                    continue
 
                 if role == "artifact":
                     flush_list()
@@ -351,7 +384,7 @@ def assemble(
             # On an OCR-over-scan page the page-covering image IS the scanned page, already
             # represented by the recovered text -- emitting it as an undescribed figure placeholder
             # would be misleading. Genuinely smaller embedded images are still placeholdered.
-            if page_is_ocr and _image_covers_page(image, page):
+            if page_covered_by_scan and _image_covers_page(image, page):
                 continue
             nodes.append(
                 Placeholder(
@@ -367,29 +400,38 @@ def assemble(
                 )
             )
 
-    _mark_ocr_source(nodes, ocr_pages)
+    _mark_ocr_source(nodes, ocr_confident_pages, hidden_ocr_pages)
 
     return Document(title=title, lang=lang, nodes=nodes, scanned_pages=tuple(scanned),
                     source_was_tagged=source_was_tagged)
 
 
-def _mark_ocr_source(nodes: list[Node], ocr_pages: set[int]) -> None:
-    """Flag every content node on an OCR-over-scan page 'ocr-source' and cap its confidence.
+def _flag_ocr_source(node: Node, *, cap: bool) -> None:
+    if "ocr-source" not in node.flags:
+        node.flags.append("ocr-source")
+    if cap:
+        node.confidence = min(node.confidence, OCR_SOURCE_CONFIDENCE)
+
+
+def _mark_ocr_source(
+    nodes: list[Node], ocr_confident_pages: set[int], hidden_ocr_pages: set[int]
+) -> None:
+    """Flag every content node on an OCR-sourced page 'ocr-source'; cap confidence only where the
+    OCR layer was hidden (no per-line score of its own).
 
     Done as a post-pass over the assembled nodes rather than threaded through every creation site:
     list items in particular are built in several places, and a single pass keeps the honesty rule
-    in one obvious spot. Capping only ever lowers confidence.
+    in one obvious spot. Capping only ever lowers confidence, and never touches a page Rebind OCR'd
+    itself -- those nodes already carry the recognizer's real confidence.
     """
-    if not ocr_pages:
+    flagged = ocr_confident_pages | hidden_ocr_pages
+    if not flagged:
         return
     for node in nodes:
-        if node.page not in ocr_pages or not isinstance(node, _OCR_MARKABLE):
+        if node.page not in flagged or not isinstance(node, _OCR_MARKABLE):
             continue
-        if "ocr-source" not in node.flags:
-            node.flags.append("ocr-source")
-        node.confidence = min(node.confidence, OCR_SOURCE_CONFIDENCE)
+        cap = node.page in hidden_ocr_pages
+        _flag_ocr_source(node, cap=cap)
         if isinstance(node, ListNode):
             for item in node.items:
-                if "ocr-source" not in item.flags:
-                    item.flags.append("ocr-source")
-                item.confidence = min(item.confidence, OCR_SOURCE_CONFIDENCE)
+                _flag_ocr_source(item, cap=cap)

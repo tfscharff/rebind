@@ -138,6 +138,32 @@ def test_ocr_over_scan_page_text_is_flagged_and_confidence_capped():
     assert any(p.bbox == (100.0, 100.0, 160.0, 160.0) for p in placeholders)
 
 
+def _ocr_line(text, y, conf):
+    return TextLine(text=text, page=1, bbox=(72.0, y, 400.0, y + 12.0), font="", size=12.0,
+                    bold=False, italic=False, ocr_confidence=conf)
+
+
+def test_low_confidence_ocr_line_becomes_an_honest_placeholder():
+    # Recognizer output below the confidence floor must not be emitted as text -- it becomes a
+    # placeholder saying so, while a confidently-recognized neighbour is kept as a paragraph.
+    good = _ocr_line("clear recovered sentence", 400.0, 0.96)
+    bad = _ocr_line("gArбlе d nonsense", 380.0, 0.20)
+    pages = [page_of([good, bad])]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    unrecoverable = [n for n in doc.nodes
+                     if isinstance(n, Placeholder) and "text-unrecoverable" in n.flags]
+    assert unrecoverable, "the low-confidence line must become a placeholder"
+    assert "not recoverable from source scan" in unrecoverable[0].reason
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    assert any("clear recovered sentence" in p.text for p in paragraphs)
+    # The kept OCR paragraph carries real (uncapped) confidence and the ocr-source label.
+    kept = next(p for p in paragraphs if "clear recovered sentence" in p.text)
+    assert kept.confidence == 0.96 and "ocr-source" in kept.flags
+
+
 def test_born_digital_page_is_not_treated_as_ocr_source():
     # No page-covering image: ordinary born-digital text is untouched -- no flag, exact confidence,
     # and its small images are still placeholdered.
