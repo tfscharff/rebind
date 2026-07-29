@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pikepdf
 from pdfminer.high_level import extract_pages as _pdfminer_pages
-from pdfminer.layout import LAParams, LTChar, LTFigure, LTImage, LTTextContainer
+from pdfminer.layout import LAParams, LTChar, LTFigure, LTImage, LTTextContainer, LTTextLine
 from pdfminer.pdfdocument import PDFEncryptionError
 from pdfminer.pdfparser import PDFSyntaxError
 
@@ -74,6 +74,24 @@ def _dominant_font(chars: list[LTChar]) -> tuple[str, float]:
     return max(counts.items(), key=lambda item: item[1])[0]
 
 
+def _text_lines(element: LTTextContainer):
+    """Yield the LTTextLine objects to turn into `TextLine`s from a top-level text element.
+
+    A top-level text element is usually an `LTTextBox` whose children are `LTTextLine`s. But
+    pdfminer also emits a bare `LTTextLine` at the top level on some OCR'd PDFs -- and because
+    `LTTextLine` is itself an `LTTextContainer`, iterating it yields `LTChar`s, not lines. Passing
+    an `LTChar` to `_line_from_container` (which iterates its argument) crashes with
+    "'LTChar' object is not iterable". So a line is yielded whole; only a box is descended into,
+    and any stray non-line child of a box (an ungrouped `LTChar`/`LTAnno`) is skipped.
+    """
+    if isinstance(element, LTTextLine):
+        yield element
+        return
+    for child in element:
+        if isinstance(child, LTTextLine):
+            yield child
+
+
 def _line_from_container(container, page_number: int) -> TextLine | None:
     text = container.get_text().strip()
     if not text:
@@ -124,7 +142,7 @@ def _collect_figure(
     found_image = False
     for child in figure:
         if isinstance(child, LTTextContainer):
-            for container in child:
+            for container in _text_lines(child):
                 line = _line_from_container(container, page_number)
                 if line is not None:
                     lines.append(line)
@@ -163,7 +181,7 @@ def extract_pages(source: Path) -> Iterator[Page]:
             images: list[ImageRegion] = []
             for element in layout:
                 if isinstance(element, LTTextContainer):
-                    for container in element:
+                    for container in _text_lines(element):
                         line = _line_from_container(container, index)
                         if line is not None:
                             lines.append(line)
