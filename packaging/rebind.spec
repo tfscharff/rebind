@@ -28,7 +28,15 @@ from PyInstaller.utils.hooks import collect_all
 GTK_RUNTIME_ROOT = os.environ.get("REBIND_GTK_RUNTIME", r"C:\Program Files\GTK3-Runtime Win64")
 
 datas, binaries, hiddenimports = [], [], []
-for package in ("weasyprint", "pikepdf", "fastapi", "uvicorn"):
+# rapidocr_onnxruntime + onnxruntime + cv2 are the OCR engine (ADR 0005); pypdfium2 rasterizes
+# scanned pages. collect_all pulls their native binaries AND data (the bundled ONNX models and
+# YAML config live inside rapidocr_onnxruntime, so they must be collected as data or the frozen
+# exe finds no models). ADR 0005 proved a standalone probe bundles and OCRs offline; the real
+# bundle is guarded by `pytest -m packaging`.
+for package in (
+    "weasyprint", "pikepdf", "fastapi", "uvicorn",
+    "rapidocr_onnxruntime", "onnxruntime", "cv2", "pypdfium2",
+):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
     datas += pkg_datas
     binaries += pkg_binaries
