@@ -36,6 +36,10 @@ class TextLine:
     size: float
     bold: bool
     italic: bool
+    # Set only for lines recovered by OCR: the recognizer's per-line confidence (0.0-1.0). None for
+    # born-digital text, which is exact by construction. `assemble` uses it as the node's confidence
+    # and, below a threshold, replaces the line with an honest placeholder rather than a guess.
+    ocr_confidence: float | None = None
 
 
 @dataclass(frozen=True)

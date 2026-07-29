@@ -12,6 +12,8 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "pdfminer.six>=20240706",
+    "rapidocr-onnxruntime>=1.4",
+    "pypdfium2>=4",
 ]
 
 [project.optional-dependencies]
