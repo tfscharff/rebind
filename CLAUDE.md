@@ -149,10 +149,26 @@ dense ~0.93) plus a regularity requirement (≥3 rows each spanning ≥3 shared 
 combination that separates a real table from dense multi-column text. Validated on real samples
 (Failure.pdf's Table 7.5, the bulletin's roster) with no false positives on flowing columns.
 
-Follow-ups still open: table *reconstruction* (rebuild the grid into a tagged HTML `<table>` —
-harder, needs multi-line-cell and header handling), OCR speed (~13s/page CPU), re-OCR of poor
-existing OCR layers, and full dewarp. **Next candidates: table reconstruction, figure/caption
-handling, or full dewarp** for spine-curved book scans.
+**OCR heading fabrication is fixed.** OCR gives no reliable type size (a line's "size" is a noisy
+box-height crop — on Failure.pdf a body line OCR'd to 40pt while the real heading was 36pt), so
+`assemble` no longer infers headings from OCR-sourced lines; they become paragraphs. Failure.pdf
+went from 13 fabricated L5/L9/L13 headings to 0. Real OCR heading recovery needs a size+isolation+
+short-line signal — a later slice.
+
+Measured facts to avoid re-chasing: **OCR is ~4s/page once warm**, not 13s — the 13s was the
+one-time RapidOCR model load, amortized across the run since the engine is cached. OCR speed is not
+a bottleneck worth optimizing. Downscaling the page image below the 200-DPI render does not speed
+recognition and is not worth the accuracy risk.
+
+**The 5 samples no longer ground further structural slices** (none have `/PageLabels`, detected
+footer page numbers, real captioned figures, warping, or a clean reconstructable table). Remaining
+candidates each need either more representative samples or a product decision: table *reconstruction*
+(rebuild the grid into a tagged `<table>` — fabrication risk on messy real tables), figure/caption
+association (samples lack real captioned figures), full **dewarp** for spine-curved scans (needs a
+learned model or grid estimator — a dependency/approach decision for Thomas), printed page-label
+extraction (needs docs that print page numbers in detectable footers). Known minor gap: OCR
+fragments beginning with `-` or `N.` can form spurious single-item lists (low harm; a ≥2-item rule
+would risk born-digital regressions).
 
 Full progress ledger, including every deferred finding: `.superpowers/sdd/progress.md`.
 
