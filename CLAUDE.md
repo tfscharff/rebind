@@ -129,11 +129,21 @@ two passes); a scanned document now converts instead of being refused. Sub-thres
 becomes an honest placeholder. The engine bundles into the frozen build and runs offline (proven in
 ADR 0005's spike).
 
-Follow-ups still open: the OCR dependencies' licenses (onnxruntime/opencv/pdfium/numpy + the PP-OCR
-models) are not yet in the third-party notice — `scripts/license_inventory.py` only covers the GTK
-DLLs under `gtk3-runtime/bin/`; extend it before an actual release. Also: OCR speed (~13s/page CPU),
-re-OCR of poor existing OCR layers, and dewarp/restoration. **Next major piece: dewarp/restoration**
-(deskew, dewarp, denoise) to improve OCR on the worst scans.
+**Phase 2 slice 4 — image restoration — is complete.** `restoration.py` (pure OpenCV, no new
+dependency) deskews each scanned page (minAreaRect over an Otsu text mask) and applies a gentle 3×3
+median denoise before OCR; `ocr_pages` calls it. Empirically RapidOCR reads moderately rotated text
+unaided, so deskew's reliable benefit is *geometry* — a tilted line's axis-aligned box is inflated
+by the tilt (52pt vs 18pt at 6°), which would scramble XY-cut reading order; deskew tightens it.
+Full page **dewarp** (spine curvature) is deliberately deferred (needs a learned model or grid
+estimator).
+
+The `/ocr-smoke` endpoint + packaging test now prove the *shipping* frozen bundle OCRs (not just a
+standalone probe). The license inventory (`scripts/license_inventory.py`) now covers all 43 bundled
+Python distributions + the PP-OCR models, not only the GTK DLLs; `--check` fails if any bundled
+runtime distribution lacks a license text.
+
+Follow-ups still open: OCR speed (~13s/page CPU), re-OCR of poor existing OCR layers, and full
+dewarp. **Next major piece: full dewarp** for spine-curved book scans, or figure/caption handling.
 
 Full progress ledger, including every deferred finding: `.superpowers/sdd/progress.md`.
 
