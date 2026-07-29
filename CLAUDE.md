@@ -98,19 +98,33 @@ PDF/UA generation works; the frozen bundle renders using vendored DLLs with noth
 outside it. The installer itself has never been built.
 
 **Phase 1's born-digital spine is complete.** `rebind convert input.pdf output.pdf` takes a
-born-digital PDF through `extract` → `profile` → `assemble` → `emit` → render → validate
+born-digital PDF through `extract` → `profile` → `layout` → `assemble` → `emit` → render → validate
 (orchestrated by `pipeline`, driven by `cli`) and produces a tagged PDF/UA document that veraPDF
 passes, plus `output.model.json`. Headings, paragraphs and lists are recovered from a
 document-global typographic profile; running headers/footers/page numbers are detected and
 excluded from reading order; source page labels are preserved. Images become `Placeholder` nodes,
 not figures, so images are not reproduced in the output — there is no honest way yet to produce
-the alt text PDF/UA requires. Multi-column pages are flagged `multi-column-suspected` rather than
-reconstructed. Pages with no text layer become placeholders and are reported; a document with no
-text layer anywhere is refused as a scan. Tables, figures, formulae, chemistry, music and footnote
-linking are not implemented.
+the alt text PDF/UA requires. Pages with no text layer become placeholders and are reported; a
+document with no text layer anywhere is refused as a scan. Tables, figures, formulae, chemistry,
+music and footnote linking are not implemented.
 
-**Next: Phase 2 — restoration, layout analysis and reading order**, which is what the scanned
-branch (OCR, dewarping, multi-column reconstruction) needs.
+**Phase 2 slice 1 — layout analysis and reading order — is complete.** `layout.py` runs recursive
+XY-cut over the extracted line boxes: each page is segmented into columns and blocks and its text
+emitted in correct reading order, replacing the naive top-to-bottom sort. The gutter detector is a
+coverage-valley finder tuned against the real 1905 bulletin (tolerates a few straddling lines,
+absolute-point gutter widths); a marginal gutter flags `multi-column-suspected`. Multi-column body
+nodes carry `column-{n}` provenance.
+
+**Phase 2 slice 2 — honest hidden-OCR-layer handling — is complete.** A page with a text layer AND
+a page-covering raster image is detected as an OCR'd scan (`_is_ocr_over_scan` in `assemble.py`):
+its text is flagged `ocr-source` and confidence-capped, the redundant background scan is not
+emitted as a figure placeholder, and the CLI reports it. This only labels an OCR layer that is
+*already present*.
+
+**Next: the OCR branch itself** — recognizing text on pages with no text layer at all
+(`Failure.pdf`). This is gated on choosing a bundle-able-on-Windows, no-GPU/no-network OCR engine
+(invariants 4 and 6) — a product-constraint decision to make with Thomas, not unilaterally. Also
+open: dewarp/restoration, and re-OCR of poor existing OCR layers.
 
 Full progress ledger, including every deferred finding: `.superpowers/sdd/progress.md`.
 

@@ -86,10 +86,19 @@ page labels is later work.
 
 Images become placeholders rather than figures — PDF/UA requires alt text on every figure, and
 there is currently no honest way to generate it, so **images are not reproduced in the output**.
-Pages that look multi-column are flagged in the model rather than reconstructed into columns; real
-column detection is a later phase. **Tables are not detected at all.** A table's cell text is kept,
-but it is emitted as ordinary paragraphs in naive reading order, with no flag — cell text can come
-out in the wrong order with nothing to warn you. Real table structuring is a later phase.
+Multi-column pages **are** reconstructed: each page is segmented into columns and blocks and its
+text emitted in correct reading order (left-to-right across columns, top-to-bottom within them). A
+page whose column gutter is only marginal is flagged rather than trusted. **Tables are not detected
+at all.** A table's cell text is kept, but it is emitted as ordinary paragraphs in naive reading
+order, with no flag — cell text can come out in the wrong order with nothing to warn you. Real
+table structuring is a later phase.
+
+Some scans arrive as a page image with an invisible OCR text layer already on top (many
+interlibrary-loan deliveries are like this). Rebind detects these, reuses the existing text but
+**marks it as recognizer output** — flagged `ocr-source`, with capped confidence — and reports the
+affected pages, rather than presenting possibly-garbled OCR as a clean transcription. It does not
+yet re-recognize such text or OCR pages that have *no* text layer at all; that is the OCR branch, a
+later phase.
 
 Pages without a text layer become honest placeholders and are listed on stderr, so a later OCR
 pass knows which pages to revisit. A document with no text layer on any page is a scan, and is
