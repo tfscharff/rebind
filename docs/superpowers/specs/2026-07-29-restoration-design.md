@@ -75,9 +75,13 @@ directly (a clean synthetic scan's recovered text is unchanged with restoration 
 
 1. **Deskew estimation** — a synthetic text image rotated by a known angle (e.g. 7°) is deskewed to
    within a small tolerance of 0°.
-2. **Deskew improves OCR** — a synthetic scan rotated enough to hurt recognition is recovered
-   correctly after `restore`, and the same text is *not* fully recovered without it (guarding that
-   the step does real work).
+2. **Deskew tightens line geometry** — on a rotated synthetic scan, the recovered line boxes are
+   much tighter (closer to the true text height) after `restore` than without it. Note, confirmed
+   empirically: RapidOCR reads moderately rotated text without help, so deskew's reliable,
+   measurable benefit is *geometry* (a tilted line's axis-aligned box is inflated by the tilt,
+   which scrambles the downstream XY-cut reading order and bbox provenance), not raw word recovery.
+   The word-recovery win only appears at rotations severe enough that forcing them would be
+   contriving the test; the geometry benefit is real at every angle.
 3. **Clean scan is left alone** — an unrotated synthetic scan runs through `restore` with a
    near-zero reported angle, and OCR still recovers the known text (no regression).
 4. **Denoise keeps text** — speckle added to a synthetic scan is reduced without losing the text

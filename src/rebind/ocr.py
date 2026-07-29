@@ -110,14 +110,16 @@ def ocr_pages(
     engine: OcrEngine,
     cache: dict[int, list[TextLine]],
     dpi: int = 200,
+    restore_images: bool = True,
 ) -> Iterator[Page]:
     """Yield each page unchanged if it has a text layer, or with OCR'd lines if it does not.
 
-    OCR is expensive, and the pipeline reads the pages twice (profile pass, then assemble pass), so
-    a page's recognized lines are memoized in `cache` on first sight and reused on the second pass.
-    The cache holds only text (never images) and only for scanned pages, so a born-digital document
-    leaves it empty and keeps streaming with bounded memory (invariant 5). A blank or unrecoverable
-    scan simply yields no lines and stays a no-text-layer page downstream.
+    A scanned page is rasterized, restored (deskew + gentle denoise, unless `restore_images` is
+    False), then recognized. OCR is expensive, and the pipeline reads the pages twice (profile pass,
+    then assemble pass), so a page's recognized lines are memoized in `cache` on first sight and
+    reused on the second pass. The cache holds only text (never images) and only for scanned pages,
+    so a born-digital document leaves it empty and keeps streaming with bounded memory (invariant 5).
+    A blank or unrecoverable scan simply yields no lines and stays a no-text-layer page downstream.
     """
     for page in pages:
         if page.has_text_layer:
@@ -125,6 +127,10 @@ def ocr_pages(
             continue
         if page.number not in cache:
             image = render_page_to_image(source, page.number, dpi=dpi)
+            if restore_images:
+                from .restoration import restore
+
+                image = restore(image).image
             cache[page.number] = recognize(
                 image, page_number=page.number, page_width=page.width,
                 page_height=page.height, engine=engine,
