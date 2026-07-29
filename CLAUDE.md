@@ -184,6 +184,23 @@ builds**: `& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" packaging\rebind
 first (`uv run pytest -m packaging` or `uv run pyinstaller packaging/rebind.spec`). Thomas installs
 and tests builds himself; don't run the installer.
 
+**App icon.** `packaging/make_icon.py` generates `packaging/rebind.ico` (16–256px) and the browser
+favicon reproducibly (a bound-book mark in buckram teal). It is wired into the frozen exe
+(`icon="rebind.ico"` in `rebind.spec`, so shortcuts and the pinned taskbar item show it) and inlined
+as a data-URI favicon in `ui.py`. **Gotcha:** Pillow's ICO writer ignores `append_images` — save
+from the 256px master with `sizes=[...]` or you get a 16px-only icon. `rebind.ico` is committed as a
+source asset. Rerun `make_icon.py` and rebuild the exe if the mark changes. **Signing:** decided
+against — the installer is unsigned, so Windows SmartScreen warns on first run (accepted).
+
+**Recognizer output gets minimal structure inference (assemble.py).** Text that is OCR output —
+Rebind's own OCR (`ocr_confidence` set) *or* a hidden OCR layer over a page-covering scan
+(`page_covered_by_scan`, `ocr_confidence` is None) — has corrupted structure signals, so: heading
+inference is suppressed (font-size box-height is noise) and a single-item list falls back to a
+paragraph (stray `-`/`+`/mis-read markers). This fixed the pernambuco thesis, a hidden-OCR scan that
+had come back as 50 fabricated headings + 28 junk lists. Born-digital docs (real font sizes, real
+markers) are unaffected. Recovering *real* headings from a scan (size + isolation + short-line
+signal) is still a later slice.
+
 Full progress ledger, including every deferred finding: `.superpowers/sdd/progress.md`.
 
 ## Skills
