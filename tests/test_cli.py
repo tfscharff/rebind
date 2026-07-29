@@ -3,7 +3,7 @@ from pathlib import Path
 import pikepdf
 
 from rebind.cli import main
-from tests.fixtures import born_digital_pdf
+from tests.fixtures import born_digital_pdf, pdf_scan_with_ocr_layer
 
 
 def test_convert_subcommand_writes_a_pdf(tmp_path: Path):
@@ -52,6 +52,18 @@ def test_convert_does_not_nag_about_cleanly_reconstructed_columns(tmp_path: Path
 
     assert code == 0
     assert "multi-column" not in capsys.readouterr().err.lower()
+
+
+def test_convert_reports_ocr_scanned_pages_to_the_librarian(tmp_path: Path, capsys):
+    # A page-covering scan image with a text layer on top is an OCR'd scan: the librarian must be
+    # told the text is recognizer output, not a clean born-digital transcription.
+    source = pdf_scan_with_ocr_layer(tmp_path / "scan.pdf", text="recognized text")
+
+    code = main(["convert", str(source), str(tmp_path / "out.pdf")])
+
+    assert code == 0
+    err = capsys.readouterr().err.lower()
+    assert "ocr" in err and "recognizer output" in err
 
 
 def test_convert_does_not_report_multi_column_for_a_clean_single_column_source(

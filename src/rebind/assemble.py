@@ -46,6 +46,35 @@ ORDERED_RE = re.compile(r"^(\d{1,3})[.)](?:\s+(.*))?$")
 
 _STAGE = "assemble"
 
+# A page with a text layer AND a raster image covering at least this fraction of its area is an
+# OCR-over-scan page: the image is the scanned page, and the text on top is recognizer output, not
+# born-digital text. Measured against real samples, genuine scans cover ~100% and born-digital
+# decorative images top out at a few percent, so 0.6 separates them with wide margin.
+OCR_SCAN_COVERAGE = 0.6
+# OCR-sourced text is recognizer output of unknown accuracy, so its confidence -- which otherwise
+# means style-match cleanliness -- is capped here rather than left at a misleading 1.0. This is a
+# coarse placeholder; a calibrated per-character confidence only becomes possible once Rebind runs
+# its own OCR. Capping never raises confidence.
+OCR_SOURCE_CONFIDENCE = 0.5
+
+# Node types whose text is carried into the output; these are the ones labelled 'ocr-source' and
+# confidence-capped on an OCR-over-scan page.
+_OCR_MARKABLE = (Heading, Paragraph, ListItem, ListNode)
+
+
+def _image_covers_page(image, page: Page) -> bool:
+    """Whether an image covers enough of the page to be its background scan rather than a figure."""
+    page_area = page.width * page.height
+    if page_area <= 0:
+        return False
+    x0, y0, x1, y1 = image.bbox
+    return (x1 - x0) * (y1 - y0) >= page_area * OCR_SCAN_COVERAGE
+
+
+def _is_ocr_over_scan(page: Page) -> bool:
+    """A text layer sitting on top of a page-covering scan image."""
+    return page.has_text_layer and any(_image_covers_page(im, page) for im in page.images)
+
 
 def _ids(line: TextLine, page: Page) -> str:
     return node_id(page=line.page, bbox=line.bbox, page_width=page.width,
@@ -104,8 +133,12 @@ def assemble(
 ) -> Document:
     nodes: list[Node] = []
     scanned: list[int] = []
+    ocr_pages: set[int] = set()
 
     for page in pages:
+        page_is_ocr = _is_ocr_over_scan(page)
+        if page_is_ocr:
+            ocr_pages.add(page.number)
         nodes.append(
             PageBreak(
                 id=node_id(page=page.number, bbox=(0.0, 0.0, page.width, page.height),
@@ -315,6 +348,11 @@ def assemble(
             flush_list()
 
         for image in page.images:
+            # On an OCR-over-scan page the page-covering image IS the scanned page, already
+            # represented by the recovered text -- emitting it as an undescribed figure placeholder
+            # would be misleading. Genuinely smaller embedded images are still placeholdered.
+            if page_is_ocr and _image_covers_page(image, page):
+                continue
             nodes.append(
                 Placeholder(
                     id=node_id(page=image.page, bbox=image.bbox, page_width=page.width,
@@ -329,5 +367,29 @@ def assemble(
                 )
             )
 
+    _mark_ocr_source(nodes, ocr_pages)
+
     return Document(title=title, lang=lang, nodes=nodes, scanned_pages=tuple(scanned),
                     source_was_tagged=source_was_tagged)
+
+
+def _mark_ocr_source(nodes: list[Node], ocr_pages: set[int]) -> None:
+    """Flag every content node on an OCR-over-scan page 'ocr-source' and cap its confidence.
+
+    Done as a post-pass over the assembled nodes rather than threaded through every creation site:
+    list items in particular are built in several places, and a single pass keeps the honesty rule
+    in one obvious spot. Capping only ever lowers confidence.
+    """
+    if not ocr_pages:
+        return
+    for node in nodes:
+        if node.page not in ocr_pages or not isinstance(node, _OCR_MARKABLE):
+            continue
+        if "ocr-source" not in node.flags:
+            node.flags.append("ocr-source")
+        node.confidence = min(node.confidence, OCR_SOURCE_CONFIDENCE)
+        if isinstance(node, ListNode):
+            for item in node.items:
+                if "ocr-source" not in item.flags:
+                    item.flags.append("ocr-source")
+                item.confidence = min(item.confidence, OCR_SOURCE_CONFIDENCE)

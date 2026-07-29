@@ -115,6 +115,47 @@ def test_image_region_becomes_a_placeholder_never_a_figure():
     assert "Figure" not in kinds(doc)
 
 
+def test_ocr_over_scan_page_text_is_flagged_and_confidence_capped():
+    # A page with a text layer AND a page-covering image is an OCR'd scan: the text is recognizer
+    # output, so it must be flagged 'ocr-source' and its confidence capped, not presented as exact.
+    lines = [line("body text", y=400.0 - i) for i in range(20)]
+    full_page = ImageRegion(page=1, bbox=(0.0, 0.0, 612.0, 792.0))
+    small = ImageRegion(page=1, bbox=(100.0, 100.0, 160.0, 160.0))
+    pages = [page_of(lines, images=[full_page, small])]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    assert paragraphs
+    assert all("ocr-source" in p.flags for p in paragraphs)
+    assert all(p.confidence <= 0.5 for p in paragraphs)
+
+    placeholders = [n for n in doc.nodes if isinstance(n, Placeholder)]
+    # The background scan (page-covering image) is NOT emitted as a figure placeholder...
+    assert not any(p.bbox == (0.0, 0.0, 612.0, 792.0) for p in placeholders)
+    # ...but a genuinely smaller embedded image still is.
+    assert any(p.bbox == (100.0, 100.0, 160.0, 160.0) for p in placeholders)
+
+
+def test_born_digital_page_is_not_treated_as_ocr_source():
+    # No page-covering image: ordinary born-digital text is untouched -- no flag, exact confidence,
+    # and its small images are still placeholdered.
+    lines = [line("body text", y=400.0 - i) for i in range(20)]
+    small = ImageRegion(page=1, bbox=(100.0, 100.0, 160.0, 160.0))
+    pages = [page_of(lines, images=[small])]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    assert paragraphs
+    assert all("ocr-source" not in p.flags for p in paragraphs)
+    assert any(p.confidence == 1.0 for p in paragraphs)
+    assert any(isinstance(n, Placeholder) and n.bbox == (100.0, 100.0, 160.0, 160.0)
+               for n in doc.nodes)
+
+
 def test_scanned_page_with_images_gets_both_the_page_and_image_placeholders():
     pages = [page_of([], number=1, images=[ImageRegion(page=1, bbox=(50.0, 60.0, 200.0, 300.0))])]
     profile = build_profile(pages)
