@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import tempfile
 import threading
+import time
 import traceback
+import uuid
 import webbrowser
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # Explicit, even though other imports below would eventually pull `rebind` in transitively:
@@ -19,7 +22,8 @@ from pathlib import Path
 # imported) has already run, unless something in this module says so explicitly.
 import rebind  # noqa: F401
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 HOST = "127.0.0.1"
 PORT = 8756
@@ -59,8 +63,126 @@ def _renderer_available() -> bool:
     return True
 
 
+@dataclass
+class _Job:
+    """One conversion, run on a background thread. Rebind is a single-user local app, so an
+    in-memory job store is enough -- there is no second user and no persistence requirement."""
+
+    id: str
+    filename: str
+    status: str = "running"           # running | done | error
+    stage: str = "Reading the document..."
+    started: float = field(default_factory=time.monotonic)
+    workdir: Path | None = None
+    pdf_path: Path | None = None
+    model_path: Path | None = None
+    review: dict | None = None
+    error: str | None = None
+
+
+class _JobStore:
+    def __init__(self) -> None:
+        self._jobs: dict[str, _Job] = {}
+        self._lock = threading.Lock()
+
+    def create(self, filename: str) -> _Job:
+        job = _Job(id=uuid.uuid4().hex, filename=filename)
+        with self._lock:
+            self._jobs[job.id] = job
+        return job
+
+    def get(self, job_id: str) -> _Job | None:
+        with self._lock:
+            return self._jobs.get(job_id)
+
+
+def _run_conversion(job: _Job, source: Path) -> None:
+    """Convert `source` on a worker thread, recording the outcome on `job`.
+
+    Everything is caught and turned into an honest job error rather than crashing the worker
+    thread silently, so the UI always gets a status it can show the librarian.
+    """
+    # Absolute imports, not relative: when PyInstaller freezes app.py as the __main__ entry
+    # script, a relative import has no parent package and raises ImportError (see /render-smoke,
+    # which uses the same absolute form for the same reason).
+    from rebind.extract import ExtractionError
+    from rebind.pipeline import NoTextLayerError, convert
+    from rebind.ui import build_review
+
+    try:
+        job.stage = "Recognizing text (scans are read page by page)..."
+        target = job.workdir / (Path(job.filename).stem + ".rebound.pdf")
+        result = convert(source, target, title=Path(job.filename).stem)
+        job.pdf_path = result.pdf_path
+        job.model_path = result.model_path
+        job.review = build_review(
+            result.document, scanned_pages=result.scanned_pages,
+            source_was_tagged=result.source_was_tagged,
+        )
+        job.status = "done"
+    except NoTextLayerError as exc:
+        job.status = "error"
+        job.error = str(exc)
+    except ExtractionError as exc:
+        job.status = "error"
+        job.error = str(exc)
+    except Exception as exc:  # noqa: BLE001 -- surface any failure honestly, never hang the job
+        job.status = "error"
+        job.error = f"Rebind could not convert this document: {exc}"
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Rebind", version="0.0.1")
+    jobs = _JobStore()
+
+    @app.get("/", response_class=HTMLResponse)
+    def index() -> str:
+        from rebind.ui import index_html  # absolute: relative imports fail in the frozen __main__
+
+        return index_html()
+
+    @app.post("/convert")
+    async def convert_endpoint(request: Request, filename: str = "document.pdf") -> JSONResponse:
+        """Accept the PDF as the raw request body (no multipart dependency) and start a job."""
+        data = await request.body()
+        if not data:
+            return JSONResponse({"error": "No file was received. Choose a PDF and try again."},
+                                status_code=400)
+        job = jobs.create(filename=filename)
+        job.workdir = Path(tempfile.mkdtemp(prefix="rebind-job-"))
+        source = job.workdir / "source.pdf"
+        source.write_bytes(data)
+        threading.Thread(target=_run_conversion, args=(job, source), daemon=True).start()
+        return JSONResponse({"job_id": job.id})
+
+    @app.get("/jobs/{job_id}")
+    def job_status(job_id: str) -> JSONResponse:
+        job = jobs.get(job_id)
+        if job is None:
+            return JSONResponse({"error": "No such job."}, status_code=404)
+        body: dict = {"status": job.status, "stage": job.stage,
+                      "elapsed": round(time.monotonic() - job.started, 1)}
+        if job.status == "done":
+            body["review"] = job.review
+        if job.status == "error":
+            body["error"] = job.error
+        return JSONResponse(body)
+
+    @app.get("/jobs/{job_id}/pdf")
+    def job_pdf(job_id: str):
+        job = jobs.get(job_id)
+        if job is None or job.pdf_path is None or not job.pdf_path.exists():
+            return JSONResponse({"error": "That result is not ready."}, status_code=404)
+        return FileResponse(job.pdf_path, media_type="application/pdf",
+                            filename=Path(job.filename).stem + ".rebound.pdf")
+
+    @app.get("/jobs/{job_id}/model")
+    def job_model(job_id: str):
+        job = jobs.get(job_id)
+        if job is None or job.model_path is None or not job.model_path.exists():
+            return JSONResponse({"error": "That model is not ready."}, status_code=404)
+        return FileResponse(job.model_path, media_type="application/json",
+                            filename=Path(job.filename).stem + ".model.json")
 
     @app.get("/health")
     def health() -> dict:
@@ -182,7 +304,7 @@ def main() -> None:
     log_config["handlers"]["access"]["filename"] = str(_log_file_path())
     log_config["handlers"]["access"].pop("stream", None)
 
-    threading.Timer(1.5, lambda: webbrowser.open(f"http://{HOST}:{PORT}/health")).start()
+    threading.Timer(1.5, lambda: webbrowser.open(f"http://{HOST}:{PORT}/")).start()
     uvicorn.run(create_app(), host=HOST, port=PORT, log_level="info", log_config=log_config)
 
 
