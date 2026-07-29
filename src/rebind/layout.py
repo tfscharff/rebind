@@ -38,6 +38,28 @@ GUTTER_MIN_HEIGHT_FRACTION = 0.5    # text on both sides must each span this muc
 COLUMN_MIN_LINES = 2
 BLOCK_GAP_MIN_FRACTION = 0.02       # a block break must be this tall (fraction of region height)
 
+# Table detection (honest flagging only, no reconstruction). A table is a grid: rows that each
+# split into the same recurring column positions. These separate a grid of short cells from prose
+# (one long line per row) and from a single-column list. Tuned against Failure.pdf's Table 7.5.
+ROW_BAND_FRACTION = 0.6        # lines whose centers are within this * median height share a row
+COLUMN_ALIGN_TOLERANCE_PT = 12.0   # cell left-edges within this are the same column
+# A table is distinguished from flowing multi-column text by REGULARITY, not by cell width (a wide
+# gutter defeats any width test). A real table has several rows that each span the same set of
+# aligned columns; flowing text aligns only coincidentally, so its "rows" rarely span three shared
+# columns and almost never do so repeatedly. Both thresholds are three: a qualifying row must have
+# cells on at least MIN_COLUMNS_FOR_TABLE recurring columns, and there must be at least
+# MIN_ROWS_FOR_TABLE such rows. Tuned so Failure.pdf's Table 7.5 is caught while the 1905 bulletin's
+# two- and three-column articles are not.
+MIN_COLUMNS_FOR_TABLE = 3
+MIN_ROWS_FOR_TABLE = 3
+# A table row is *sparse*: its cells are short and separated by wide gaps, so they cover only part
+# of the row's horizontal span. A flowing multi-column row is *dense*: each line fills its column,
+# covering most of the span. Measured across the samples, real table rows fill <=0.8 of their span
+# (Failure.pdf's Table 7.5: median 0.67) while flowing three-column newspaper rows fill ~0.93. This
+# gate removes the dense flowing rows before the regularity test, which is what finally separates a
+# table from dense multi-column text -- geometry alone (alignment) could not.
+TABLE_ROW_MAX_FILL = 0.8
+
 
 @dataclass(frozen=True)
 class PlacedLine:
@@ -57,6 +79,10 @@ class Region:
 class PageLayout:
     lines: list[PlacedLine]
     flags: list[str]
+    # id() of each line that belongs to a detected table grid, so assemble can flag exactly those
+    # paragraphs `table-suspected`. Detection runs per column region (see order_page), so a
+    # multi-column page layout is not mistaken for a table.
+    table_line_ids: set[int] = field(default_factory=set)
 
 
 def _gutter_spans_height(lines: list[TextLine], gap_left: float, gap_right: float) -> bool:
@@ -242,8 +268,114 @@ def order_page(page: Page, profile: TypographicProfile) -> PageLayout:
     region = _xy_cut(body, (0.0, 0.0, page.width, page.height), marginal)
     placed = _reading_order(region)
 
+    # Table detection runs on all body lines (a table's inter-cell gaps look like column gutters to
+    # XY-cut, which fragments the grid, so per-column detection would miss it). It only *flags*;
+    # ordering is unchanged, so running independently of the cut is correct. The three-column and
+    # short-cell guards are what keep a genuine multi-column *layout* from being read as a table.
+    table_line_ids = detect_table_lines(body)
+
     artifacts_ordered = sorted(artifacts, key=lambda ln: (-ln.bbox[3], ln.bbox[0]))
     placed.extend(PlacedLine(line=ln, column=-1) for ln in artifacts_ordered)
 
     flags = ["multi-column-suspected"] if any(marginal) else []
-    return PageLayout(lines=placed, flags=flags)
+    return PageLayout(lines=placed, flags=flags, table_line_ids=table_line_ids)
+
+
+def _rows_by_band(lines: list[TextLine]) -> list[list[TextLine]]:
+    """Group lines into rows by their vertical center, top to bottom.
+
+    A new row starts when a line's center drops more than ROW_BAND_FRACTION * median line height
+    below the current row's center -- so lines that sit on the same visual row (a table's cells)
+    stay together while successive rows separate.
+    """
+    if not lines:
+        return []
+    heights = sorted(ln.bbox[3] - ln.bbox[1] for ln in lines)
+    median_h = heights[len(heights) // 2] or 1.0
+    band = median_h * ROW_BAND_FRACTION
+    ordered = sorted(lines, key=lambda ln: -((ln.bbox[1] + ln.bbox[3]) / 2))
+    rows: list[list[TextLine]] = []
+    current: list[TextLine] = []
+    current_center = None
+    for ln in ordered:
+        center = (ln.bbox[1] + ln.bbox[3]) / 2
+        if current_center is None or current_center - center <= band:
+            current.append(ln)
+            current_center = center if current_center is None else current_center
+        else:
+            rows.append(current)
+            current = [ln]
+            current_center = center
+    if current:
+        rows.append(current)
+    return rows
+
+
+def detect_table_lines(lines: list[TextLine]) -> set[int]:
+    """Return the ids() of lines that belong to a detected table grid, or an empty set.
+
+    A region is a table when its lines form a grid: at least MIN_ROWS_FOR_TABLE rows that each hold
+    at least MIN_CELLS_PER_ROW side-by-side cells, landing on at least MIN_COLUMNS_FOR_TABLE column
+    positions that recur across rows. Conservative by construction -- prose (one long line per row)
+    yields no side-by-side cells, and a single-column list yields no recurring second column.
+
+    Line identity is `id(line)` so the caller can match the returned set against its own lines
+    without depending on bbox/text equality.
+    """
+    rows = _rows_by_band(lines)
+    # Each row's horizontally-disjoint cells (a cell starts at/after the previous cell's right edge).
+    # A dense row -- cells covering more than TABLE_ROW_MAX_FILL of the row span -- is flowing
+    # multi-column text, not a table row, and contributes no cells. This is what removes the 1905
+    # bulletin's dense three-column articles before the regularity test below.
+    row_cells: list[list[TextLine]] = []
+    for row in rows:
+        cells = sorted(row, key=lambda ln: ln.bbox[0])
+        disjoint = [cells[0]] if cells else []
+        for ln in cells[1:]:
+            if ln.bbox[0] >= disjoint[-1].bbox[2]:
+                disjoint.append(ln)
+        if len(disjoint) >= MIN_COLUMNS_FOR_TABLE:
+            span = disjoint[-1].bbox[2] - disjoint[0].bbox[0]
+            fill = sum(c.bbox[2] - c.bbox[0] for c in disjoint) / span if span > 0 else 1.0
+            if fill > TABLE_ROW_MAX_FILL:
+                disjoint = []
+        row_cells.append(disjoint)
+
+    # Cluster every cell's left edge into candidate columns, and record which rows touch each.
+    column_x: list[float] = []
+    column_rows: list[set[int]] = []
+    for row_index, cells in enumerate(row_cells):
+        for cell in cells:
+            for i, cx in enumerate(column_x):
+                if abs(cell.bbox[0] - cx) <= COLUMN_ALIGN_TOLERANCE_PT:
+                    column_rows[i].add(row_index)
+                    break
+            else:
+                column_x.append(cell.bbox[0])
+                column_rows.append({row_index})
+
+    # A recurring column appears in at least MIN_ROWS_FOR_TABLE rows. Regularity is the whole signal:
+    # a qualifying (table) row must have cells on at least MIN_COLUMNS_FOR_TABLE recurring columns,
+    # and there must be at least MIN_ROWS_FOR_TABLE such rows. Flowing multi-column text aligns only
+    # coincidentally, so it almost never produces several rows that each span three shared columns.
+    recurring = {i for i, seen in enumerate(column_rows) if len(seen) >= MIN_ROWS_FOR_TABLE}
+    if len(recurring) < MIN_COLUMNS_FOR_TABLE:
+        return set()
+    recurring_x = [column_x[i] for i in recurring]
+
+    def cells_on_recurring(cells: list[TextLine]) -> list[TextLine]:
+        return [c for c in cells if any(abs(c.bbox[0] - cx) <= COLUMN_ALIGN_TOLERANCE_PT
+                                        for cx in recurring_x)]
+
+    table_rows = [
+        row_index for row_index, cells in enumerate(row_cells)
+        if len(cells_on_recurring(cells)) >= MIN_COLUMNS_FOR_TABLE
+    ]
+    if len(table_rows) < MIN_ROWS_FOR_TABLE:
+        return set()
+
+    flagged: set[int] = set()
+    for row_index in table_rows:
+        for cell in cells_on_recurring(row_cells[row_index]):
+            flagged.add(id(cell))
+    return flagged

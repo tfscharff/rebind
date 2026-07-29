@@ -88,10 +88,10 @@ Images become placeholders rather than figures — PDF/UA requires alt text on e
 there is currently no honest way to generate it, so **images are not reproduced in the output**.
 Multi-column pages **are** reconstructed: each page is segmented into columns and blocks and its
 text emitted in correct reading order (left-to-right across columns, top-to-bottom within them). A
-page whose column gutter is only marginal is flagged rather than trusted. **Tables are not detected
-at all.** A table's cell text is kept, but it is emitted as ordinary paragraphs in naive reading
-order, with no flag — cell text can come out in the wrong order with nothing to warn you. Real
-table structuring is a later phase.
+page whose column gutter is only marginal is flagged rather than trusted. **Tables are detected but
+not yet reconstructed.** A grid-shaped region is flagged `table-suspected` so you are warned its
+cell reading order may be wrong, rather than being handed silently scrambled cells; the cell text is
+kept and emitted as paragraphs. Rebuilding the grid into a real table is a later phase.
 
 Some scans arrive as a page image with an invisible OCR text layer already on top (many
 interlibrary-loan deliveries are like this). Rebind detects these, reuses the existing text but

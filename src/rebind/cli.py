@@ -81,6 +81,15 @@ def main(argv: list[str] | None = None) -> int:
             "recognizer output and may contain errors",
             file=sys.stderr,
         )
+    table_pages = {
+        node.page for node in result.document.nodes if "table-suspected" in node.flags
+    }
+    if table_pages:
+        print(
+            f"note: {len(table_pages)} page(s) contain a suspected table; cell reading order may "
+            "be wrong (Rebind does not reconstruct tables yet) -- check them by hand",
+            file=sys.stderr,
+        )
     multi_column_pages = {
         node.page for node in result.document.nodes if "multi-column-suspected" in node.flags
     }
