@@ -274,7 +274,11 @@ def assemble(
                     line.ocr_confidence if line.ocr_confidence is not None
                     else profile.confidence_for(line, page_height=page.height)
                 )
-                provenance = (
+                if id(line) in page_layout.table_line_ids:
+                    provenance = ["table-suspected"]
+                else:
+                    provenance = []
+                provenance += (
                     [f"column-{placed.column}"]
                     if column_count > 1 and placed.column >= 0
                     else []

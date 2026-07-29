@@ -29,24 +29,29 @@ rebuilt safely. This slice only makes the existing gap honest.
 ## 3. Detection signal
 
 Operates per page on the body lines (artifacts already held out by the layout stage). A region is
-table-like when its lines form a **grid**: rows that each split into the same recurring column
-positions. Concretely:
+table-like when its lines form a **regular grid of sparse rows**. Two signals together — neither
+sufficient alone — separate a table from dense flowing multi-column text, which geometric alignment
+alone cannot (a three-column newspaper's baselines align across columns exactly as a table's do):
 
-1. Group lines into **rows** by clustering their vertical centers into y-bands (a band is lines
-   whose centers fall within `ROW_BAND_FRACTION` of the median line height).
-2. A **candidate row** is a band containing at least `MIN_CELLS_PER_ROW` (2) lines at distinct,
-   non-overlapping x-positions — i.e. multiple short cells side by side, not one continuous line.
-3. The **column x-positions** (each candidate cell's left edge) are collected across all candidate
-   rows and clustered (tolerance `COLUMN_ALIGN_TOLERANCE_PT`). A column is *recurring* if cells land
-   on it in at least `MIN_ROWS_FOR_TABLE` (2) distinct rows.
-4. A region is a table when there are at least `MIN_COLUMNS_FOR_TABLE` (2) recurring columns and at
-   least `MIN_ROWS_FOR_TABLE` (2) rows participating in them. The table's lines are exactly the
-   cells in those participating rows and columns.
+1. Group lines into **rows** by clustering their vertical centers into y-bands (`ROW_BAND_FRACTION`
+   of the median line height).
+2. Split each row into horizontally-disjoint **cells**. A **sparse row** has at least
+   `MIN_COLUMNS_FOR_TABLE` (3) cells whose total width is at most `TABLE_ROW_MAX_FILL` (0.8) of the
+   row's span — short cells with wide gaps. A dense row (each cell fills its column) is flowing
+   column text and contributes nothing. *This fill gate is the key discriminator:* measured across
+   the samples, real table rows fill ≈0.67 of their span while flowing three-column rows fill ≈0.93.
+3. Cluster all cells' left edges into columns (`COLUMN_ALIGN_TOLERANCE_PT`). A column is *recurring*
+   if cells land on it in at least `MIN_ROWS_FOR_TABLE` (3) rows.
+4. A **table row** has cells on at least `MIN_COLUMNS_FOR_TABLE` (3) recurring columns. A region is a
+   table when there are at least `MIN_ROWS_FOR_TABLE` (3) table rows. **Regularity is the second
+   discriminator:** flowing text aligns only coincidentally, so its sparse rows rarely span three
+   *shared* columns, and almost never do so across three rows.
 
-This is conservative by construction: ordinary prose (one long line per row) never produces
-multiple side-by-side cells, and a two-column page *layout* is already separated by XY-cut into
-single-column regions before this runs, so flowing columns do not look like a table. The thresholds
-are named constants, expected to be tuned against `Failure.pdf`'s real table.
+Conservative by construction, and validated on real samples: it catches `Failure.pdf`'s Table 7.5
+and the 1905 bulletin's team-roster table while flagging none of the bulletin's flowing two- and
+three-column articles. The bias is deliberately toward missing an ambiguous table (falling back to
+today's no-detection behavior) rather than crying wolf, since a noisy flag would train reviewers to
+ignore it. Thresholds are named constants, tuned against these samples.
 
 ### 3.1 Why not reuse the multi-column detector
 
@@ -73,8 +78,8 @@ Synthetic fixtures (no real sample in CI):
    cell lines are returned.
 2. **Negative — prose**: ordinary single-line-per-row paragraphs are *not* detected as a table.
 3. **Negative — list**: a bulleted/numbered list (one item per row) is not a table.
-4. **Negative — two-column flowing text**: within a single column region, flowing prose is not a
-   table (guards the false positive that would turn columns into tables).
+4. **Negative — two-column flowing text**: aligned two-column prose is not a table (the fill gate
+   plus the three-column requirement guard the false positive that would turn columns into tables).
 5. **Assemble**: paragraphs on the grid rows carry `table-suspected`; surrounding prose does not.
 6. **CLI**: the suspected-table note is printed for a document containing a grid.
 

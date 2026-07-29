@@ -95,3 +95,21 @@ def test_unexpected_exception_is_reported_not_raised(tmp_path: Path, capsys, mon
     assert code == 1
     assert str(source) in err
     assert "boom" in err
+
+
+def test_convert_reports_a_suspected_table(tmp_path: Path, capsys):
+    # A full-width table renders as a grid of short cells with wide inter-column gaps (as a real
+    # scanned table does); Rebind should detect and warn. A tightly-packed table gets merged into
+    # one line per row by pdfminer and is out of scope for geometric detection.
+    cells = "".join(
+        "<tr>" + "".join(f"<td>r{r}c{c}</td>" for c in range(3)) + "</tr>"
+        for r in range(4)
+    )
+    html = (f"<h1>Doc</h1><table style='width:100%;table-layout:fixed'>{cells}</table>"
+            "<p>Following prose paragraph.</p>")
+    source = born_digital_pdf(html, tmp_path / "in.pdf")
+
+    code = main(["convert", str(source), str(tmp_path / "out.pdf")])
+
+    assert code == 0
+    assert "table" in capsys.readouterr().err.lower()

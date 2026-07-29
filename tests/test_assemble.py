@@ -494,3 +494,25 @@ def test_list_id_is_deterministic_and_content_derived():
     list_c = next(n for n in assemble(pages_c, profile_c, title="T").nodes
                   if isinstance(n, ListNode))
     assert list_c.id != list_a.id
+
+
+def test_table_grid_paragraphs_are_flagged_table_suspected():
+    # A grid of short cells (3 columns x 3 rows) plus a normal paragraph. Only the grid cells get
+    # the table-suspected flag; the prose paragraph does not.
+    grid = []
+    for r in range(3):
+        for c in range(3):
+            x0 = 80 + c * 120
+            y = 600 - r * 24
+            grid.append(custom_line(f"r{r}c{c}", x0, x0 + 60, y))
+    prose = [line("An ordinary paragraph of flowing text here.", y=400.0 - i) for i in range(6)]
+    pages = [page_of(grid + prose)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    table_cells = [p for p in paragraphs if "table-suspected" in p.flags]
+    assert len(table_cells) == 9, f"all 9 grid cells should be flagged, got {len(table_cells)}"
+    prose_paras = [p for p in paragraphs if p.text.startswith("An ordinary")]
+    assert prose_paras and all("table-suspected" not in p.flags for p in prose_paras)

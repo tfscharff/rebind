@@ -122,3 +122,54 @@ def test_order_page_excludes_artifacts_and_orders_body():
     assert body_lines == ["para one", "para two"]
     assert artifact_lines == ["page 3"]
     assert "multi-column-suspected" not in layout.flags
+
+
+def _grid_line(col, row, text, *, cell_w=60, cell_h=14, x0=80, y_top=700, row_gap=24, col_gap=120):
+    # cell_w / col_gap = 0.5: short cells, as in a real table (Failure.pdf's are ~0.5-0.66).
+    x = x0 + col * col_gap
+    y = y_top - row * row_gap
+    return _line(x, y, x + cell_w, y + cell_h, text)
+
+
+def test_detect_table_finds_a_grid():
+    from rebind.layout import detect_table_lines
+    # 3 rows x 3 columns of short cells aligned in a grid.
+    lines = [_grid_line(c, r, f"r{r}c{c}") for r in range(3) for c in range(3)]
+    flagged = detect_table_lines(lines)
+    assert len(flagged) == 9, f"all 9 grid cells should be flagged, got {len(flagged)}"
+
+
+def test_prose_is_not_a_table():
+    from rebind.layout import detect_table_lines
+    # One long line per row -- ordinary paragraphs, no side-by-side cells.
+    lines = [_line(80, 700 - i * 20, 520, 714 - i * 20, f"A full sentence of prose number {i}.")
+             for i in range(8)]
+    assert detect_table_lines(lines) == set()
+
+
+def test_single_column_list_is_not_a_table():
+    from rebind.layout import detect_table_lines
+    # One item per row, all at the same x -- a list, not a grid (no recurring 2nd column).
+    lines = [_line(80, 700 - i * 20, 300, 714 - i * 20, f"item {i}") for i in range(6)]
+    assert detect_table_lines(lines) == set()
+
+
+def test_two_column_flowing_text_is_not_a_table_via_order_page():
+    # A genuine two-column page layout must not be flagged as a table: order_page runs table
+    # detection per column, so the two columns' lines never pair into spurious grid rows.
+    left = [_line(72, 700 - i * 20, 250, 714 - i * 20, f"left flowing sentence {i}")
+            for i in range(8)]
+    right = [_line(320, 700 - i * 20, 500, 714 - i * 20, f"right flowing sentence {i}")
+             for i in range(8)]
+    page = Page(number=1, width=612, height=792, lines=tuple(left + right), images=())
+    profile = build_profile([page])
+    layout = order_page(page, profile)
+    assert layout.table_line_ids == set(), "two-column layout was mistaken for a table"
+
+
+def test_order_page_flags_a_real_table_grid():
+    grid = [_grid_line(c, r, f"r{r}c{c}") for r in range(4) for c in range(3)]
+    page = Page(number=1, width=612, height=792, lines=tuple(grid), images=())
+    profile = build_profile([page])
+    layout = order_page(page, profile)
+    assert len(layout.table_line_ids) == 12, f"expected 12 table cells, got {len(layout.table_line_ids)}"
