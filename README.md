@@ -2,13 +2,14 @@
 
 **Accessible PDF reconstruction for damaged library scans.**
 
-> ⚠️ **Status: pre-alpha.** Phase 0 (feasibility spikes) complete — see
-> [ADR 0002](docs/decisions/0002-phase-0-findings.md). WeasyPrint reliably produces PDF/UA-1
-> tagged output (headings, lists, tables with header associations, figures with alt text, page
-> labels) and a frozen, no-system-Python build has been proven to render real PDFs from bundled
-> DLLs — but the double-click installer itself has not yet been built or tested end-to-end, and
-> output is not byte-reproducible (see ADR 0002/0003). Phase 1 (end-to-end pipeline spine) in
-> progress.
+> ⚠️ **Status: alpha.** Both the born-digital and scanned branches work end to end. A scanned or
+> born-digital PDF goes in; a tagged PDF/UA document that veraPDF passes comes out, plus a
+> source-of-truth model. Scanned pages are restored (deskew/denoise) and recognized with on-device
+> OCR (no API key, GPU or network). Layout analysis reconstructs multi-column reading order;
+> suspected tables and other uncertain regions are flagged for review, never silently trusted. A
+> local browser app drives the whole thing, and the double-click Windows installer now builds. Not
+> yet done: full page dewarp, table reconstruction, and tuning against a wider range of real scans.
+> Output is not byte-reproducible (see ADR 0003).
 
 Rebind takes a badly scanned PDF — skewed, warped, low-contrast, fingers in frame, multi-column with
 sidebars, full of tables and equations — and produces a **new**, born-accessible PDF that conforms to
@@ -68,7 +69,14 @@ built — see [Usage](#usage) below for exactly what works and what does not.
 
 ## Usage
 
-Convert a born-digital PDF (one with a real text layer) to a tagged PDF/UA document:
+**The app.** Install with the Windows installer (`rebind-setup.exe`, built from `packaging/`) or
+run `rebind serve`, then open the local page it launches. Drop a PDF in, and Rebind rebuilds it as
+a tagged PDF/UA document you can download alongside its model. When anything is uncertain — text it
+could not recognize, a suspected table, an ambiguous column order — it appears in a short review
+queue with the pages to check, rather than being silently trusted. Everything runs on your machine;
+nothing is uploaded.
+
+**The command line.** The same pipeline, scriptable:
 
 ```
 rebind convert input.pdf output.pdf

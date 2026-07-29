@@ -170,6 +170,20 @@ extraction (needs docs that print page numbers in detectable footers). Known min
 fragments beginning with `-` or `N.` can form spurious single-item lists (low harm; a ≥2-item rule
 would risk born-digital regressions).
 
+**The browser UI and the installer are built.** `rebind serve` (and the frozen exe on double-click)
+now open a real local app at `/` — drop a PDF, convert, download the tagged PDF + model, and see a
+review queue of what needs a human's eye (the "know what you don't know" signature). The UI is
+inline HTML/CSS/JS in `src/rebind/ui.py` (no static files, no new dependency; upload is a raw
+request body, no python-multipart). `build_review` groups node flags into a librarian-facing
+condition report. The packaging test now asserts the frozen exe serves `/`. **Gotcha:** lazy imports
+inside `app.py` routes must be **absolute** (`from rebind.ui import ...`), never relative — app.py
+is PyInstaller's `__main__` entry, so a relative import raises "attempted relative import with no
+known parent package" only in the frozen build (unfrozen tests pass). The **Inno Setup installer
+builds**: `& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" packaging\rebind.iss` →
+`packaging\Output\rebind-setup.exe` (~109MB, LZMA2 from the 306MB bundle). Build the frozen bundle
+first (`uv run pytest -m packaging` or `uv run pyinstaller packaging/rebind.spec`). Thomas installs
+and tests builds himself; don't run the installer.
+
 Full progress ledger, including every deferred finding: `.superpowers/sdd/progress.md`.
 
 ## Skills
