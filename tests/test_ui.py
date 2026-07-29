@@ -69,6 +69,8 @@ def test_index_page_serves_accessible_html():
     assert "<!doctype html>" in body.lower()
     assert "<main" in body and 'lang="en"' in body
     assert "Rebind" in body
+    # A self-contained favicon (inline data URI) so the browser tab is identifiable offline.
+    assert 'rel="icon"' in body and "data:image/png;base64," in body
 
 
 def test_convert_flow_end_to_end(tmp_path: Path):

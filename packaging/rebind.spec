@@ -146,5 +146,5 @@ pyz = PYZ(a.pure)
 # of everything else about this binary that already looks suspicious (unsigned, large, packed,
 # bundling native DLLs, opens a local listener). See packaging/version_info.txt.
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="rebind",
-          console=False, icon=None, version="version_info.txt")
+          console=False, icon="rebind.ico", version="version_info.txt")
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="rebind")
