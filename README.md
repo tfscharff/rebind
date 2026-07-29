@@ -100,9 +100,12 @@ affected pages, rather than presenting possibly-garbled OCR as a clean transcrip
 yet re-recognize such text or OCR pages that have *no* text layer at all; that is the OCR branch, a
 later phase.
 
-Pages without a text layer become honest placeholders and are listed on stderr, so a later OCR
-pass knows which pages to revisit. A document with no text layer on any page is a scan, and is
-refused outright — the OCR branch is not implemented yet.
+Pages with no text layer are recognized with on-device OCR (RapidOCR, running on the CPU with
+models bundled in the application — no API key, GPU or network). The recognized text carries the
+recognizer's real per-line confidence and is flagged `ocr-source`; anything below the confidence
+floor becomes an honest `[text not recoverable from source scan, p. N]` placeholder rather than a
+guess. A scanned document therefore now converts instead of being refused; only a page where OCR
+recovers nothing at all stays a placeholder.
 
 Set `REBIND_DEBUG=1` to print a full traceback on an unexpected conversion failure, for bug
 reports.
