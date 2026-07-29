@@ -33,3 +33,14 @@ def test_render_smoke_endpoint_renders_a_real_pdf():
     assert body["error"] is None
     assert isinstance(body["size_bytes"], int)
     assert body["size_bytes"] > 0
+
+
+def test_ocr_smoke_endpoint_recognizes_text():
+    """Fast in-process check of the OCR smoke path; the frozen-bundle version lives in
+    test_packaging.py and proves the shipping bundle can OCR."""
+    client = TestClient(create_app())
+
+    body = client.post("/ocr-smoke").json()
+
+    assert body["success"] is True, body.get("error")
+    assert "REBIND" in (body["recovered"] or "").upper()

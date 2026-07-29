@@ -103,6 +103,48 @@ def create_app() -> FastAPI:
                 "traceback": traceback.format_exc(),
             }
 
+    @app.post("/ocr-smoke")
+    @app.get("/ocr-smoke")
+    def ocr_smoke() -> dict:
+        """Recognize known text through the real OCR path, from the frozen bundle.
+
+        The OCR engine (RapidOCR + onnxruntime + the bundled ONNX models) is the heaviest native
+        dependency in the bundle and, unlike the renderer, is never touched by server startup
+        (its import is lazy). ADR 0005 proved a standalone frozen probe OCRs offline; this proves
+        the *shipping* bundle does too. Text is drawn with Pillow and recognized; the endpoint
+        reports what it read.
+        """
+        import numpy as np
+        from PIL import Image, ImageDraw, ImageFont
+
+        from rebind.ocr import OcrEngine, recognize
+
+        expected = "REBIND OCR SMOKE 12345"
+        try:
+            image = Image.new("RGB", (760, 120), "white")
+            ImageDraw.Draw(image).text(
+                (20, 30), expected, fill="black", font=ImageFont.load_default(size=48)
+            )
+            lines = recognize(
+                np.asarray(image), page_number=1, page_width=760.0, page_height=120.0,
+                engine=OcrEngine(),
+            )
+            recovered = " ".join(line.text for line in lines)
+            return {
+                "status": "ok",
+                "success": "REBIND" in recovered.upper(),
+                "recovered": recovered,
+                "error": None,
+            }
+        except Exception as exc:  # noqa: BLE001 -- surface the real error, do not mask it
+            return {
+                "status": "error",
+                "success": False,
+                "recovered": None,
+                "error": f"{type(exc).__name__}: {exc}",
+                "traceback": traceback.format_exc(),
+            }
+
     return app
 
 

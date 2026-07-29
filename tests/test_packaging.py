@@ -133,6 +133,15 @@ def test_frozen_exe_renders_a_real_pdf(frozen_exe: Path):
         assert body["success"] is True, body.get("error")
         assert isinstance(body["size_bytes"], int)
         assert body["size_bytes"] > 0
+
+        # The OCR engine is the heaviest bundled native dependency and is never exercised by
+        # startup or rendering (its import is lazy). Prove the shipping bundle can actually OCR --
+        # models, onnxruntime and opencv all resolving from inside the frozen exe.
+        ocr = httpx.post(f"{base_url}/ocr-smoke", timeout=60)
+        ocr.raise_for_status()
+        ocr_body = ocr.json()
+        assert ocr_body["success"] is True, ocr_body.get("error")
+        assert "REBIND" in (ocr_body["recovered"] or "").upper()
     finally:
         proc.terminate()
         try:
