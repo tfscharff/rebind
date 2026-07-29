@@ -37,7 +37,10 @@ def test_missing_source_is_reported_cleanly(tmp_path: Path, capsys):
     assert "nope.pdf" in capsys.readouterr().err
 
 
-def test_convert_reports_multi_column_pages_to_the_librarian(tmp_path: Path, capsys):
+def test_convert_does_not_nag_about_cleanly_reconstructed_columns(tmp_path: Path, capsys):
+    # A clean, wide two-column gutter is now reconstructed into correct reading order, so the
+    # librarian is NOT warned -- the multi-column note is reserved for marginal gutters where the
+    # reconstructed order is genuinely uncertain (exercised at the unit level in test_layout).
     source = born_digital_pdf(
         "<h1>Doc</h1><div style='column-count:2'>"
         + "".join(f"<p>Paragraph {i} of the column test.</p>" for i in range(40))
@@ -48,7 +51,7 @@ def test_convert_reports_multi_column_pages_to_the_librarian(tmp_path: Path, cap
     code = main(["convert", str(source), str(tmp_path / "out.pdf")])
 
     assert code == 0
-    assert "multi-column" in capsys.readouterr().err.lower()
+    assert "multi-column" not in capsys.readouterr().err.lower()
 
 
 def test_convert_does_not_report_multi_column_for_a_clean_single_column_source(

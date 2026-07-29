@@ -13,6 +13,7 @@ from rebind.pipeline import convert
 from tests.fixtures import born_digital_pdf
 
 GOLDEN = Path(__file__).parent / "golden" / "simple_document.model.json"
+GOLDEN_TWO_COLUMN = Path(__file__).parent / "golden" / "two_column_document.model.json"
 
 
 def test_skipped_heading_levels_are_normalized(tmp_path: Path, verapdf_exe: Path):
@@ -84,17 +85,20 @@ def test_body_style_at_page_edge_is_never_classified_as_an_artifact(tmp_path: Pa
     )
 
 
-def test_two_column_text_is_flagged_not_silently_trusted(tmp_path: Path):
-    """A genuinely two-column source must have its paragraphs flagged 'multi-column-suspected'.
+def test_two_column_text_is_reconstructed_in_reading_order(tmp_path: Path):
+    """A genuinely two-column source must be reconstructed into correct reading order.
 
-    Phase 1's reading order is naive top-to-bottom, left-to-right with no column awareness, so a
-    two-column page silently scrambles reading order unless flagged. A test that only asserts
-    "some Paragraph exists" would pass even if the flagging code were entirely absent -- it has to
-    assert the flag is actually present.
+    CSS `column-count:2` fills the left column top-to-bottom before the right, so the source's
+    paragraph order is left-column-then-right-column per page -- exactly what XY-cut recovers. The
+    naive top-to-bottom/left-to-right sort this replaced would interleave the two columns at each
+    y, scrambling the numbers; asserting the recovered indices are non-decreasing is what proves
+    the columns were actually reconstructed rather than read straight across.
     """
+    import re
+
     source = born_digital_pdf(
         "<h1>Doc</h1><div style='column-count:2'>"
-        + "".join(f"<p>Paragraph {i} of the column test.</p>" for i in range(40))
+        + "".join(f"<p>Paragraph {i:02d} of the column test.</p>" for i in range(40))
         + "</div>",
         tmp_path / "in.pdf",
     )
@@ -103,9 +107,13 @@ def test_two_column_text_is_flagged_not_silently_trusted(tmp_path: Path):
 
     paragraphs = [n for n in result.document.nodes if n.kind == "Paragraph"]
     assert paragraphs, "expected at least one paragraph"
-    assert all("multi-column-suspected" in n.flags for n in paragraphs), (
-        "two-column source did not trip the multi-column heuristic"
+    indices = [int(re.search(r"Paragraph (\d+)", p.text).group(1)) for p in paragraphs]
+    assert indices == sorted(indices), (
+        f"columns were not reconstructed in reading order: {indices}"
     )
+    # Multi-column pages record column provenance so a reviewer can trace the interleaving.
+    assert any("column-0" in p.flags for p in paragraphs)
+    assert any("column-1" in p.flags for p in paragraphs)
 
 
 def test_single_column_text_is_not_flagged(tmp_path: Path):
@@ -164,6 +172,35 @@ def test_model_matches_the_golden_file(tmp_path: Path):
                 assert isinstance(item.bbox, tuple) and len(item.bbox) == 4, (
                     "list item's bbox is not a 4-tuple"
                 )
+
+
+def test_two_column_model_matches_the_golden_file(tmp_path: Path):
+    """Golden-file test on a reconstructed two-column model. Never on PDF bytes -- see ADR 0003."""
+    import re
+
+    source = born_digital_pdf(
+        "<h1>Two Columns</h1><div style='column-count:2'>"
+        + "".join(f"<p>Paragraph {i:02d}.</p>" for i in range(8))
+        + "</div>",
+        tmp_path / "in.pdf",
+    )
+
+    result = convert(source, tmp_path / "out.pdf", title="Two Columns")
+
+    if not GOLDEN_TWO_COLUMN.exists():
+        pytest.fail(f"golden file missing; create it with the model at {result.model_path}")
+    expected = Document.from_json(GOLDEN_TWO_COLUMN.read_text(encoding="utf-8"))
+    assert result.document == expected
+
+    # As with the simple golden: whole-document equality only proves "matches whatever was last
+    # blessed". These assertions encode the properties a human reviewed, so a regenerated golden
+    # cannot silently re-bless a scrambled reading order.
+    document = result.document
+    paragraphs = [n for n in document.nodes if n.kind == "Paragraph"]
+    indices = [int(re.search(r"Paragraph (\d+)", p.text).group(1)) for p in paragraphs]
+    assert indices == sorted(indices), f"reading order is not column-ordered: {indices}"
+    assert any("column-0" in p.flags for p in paragraphs), "left column provenance missing"
+    assert any("column-1" in p.flags for p in paragraphs), "right column provenance missing"
 
 
 def test_ordered_list_from_real_weasyprint_output_is_recognized(tmp_path: Path):

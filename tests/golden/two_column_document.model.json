@@ -1,0 +1,177 @@
+{
+  "lang": "en",
+  "nodes": [
+    {
+      "bbox": [
+        0.0,
+        0.0,
+        612.0,
+        792.0
+      ],
+      "confidence": 1.0,
+      "flags": [],
+      "id": "07b71b0621155a8d",
+      "kind": "PageBreak",
+      "label": "1",
+      "page": 1,
+      "stage": "assemble"
+    },
+    {
+      "bbox": [
+        78.0,
+        673.0185,
+        256.29600000000005,
+        697.0185
+      ],
+      "confidence": 0.974,
+      "flags": [
+        "column-0"
+      ],
+      "id": "1319dbfe1f1b01b2",
+      "kind": "Heading",
+      "level": 1,
+      "page": 1,
+      "stage": "assemble",
+      "text": "Two Columns"
+    },
+    {
+      "bbox": [
+        78.0,
+        629.136253668,
+        157.24048444800002,
+        640.135765668
+      ],
+      "confidence": 1.0,
+      "flags": [
+        "column-0"
+      ],
+      "id": "c6eabe914fb6571c",
+      "kind": "Paragraph",
+      "page": 1,
+      "stage": "assemble",
+      "text": "Paragraph 00."
+    },
+    {
+      "bbox": [
+        78.0,
+        602.736253668,
+        157.24048444800002,
+        613.735765668
+      ],
+      "confidence": 1.0,
+      "flags": [
+        "column-0"
+      ],
+      "id": "52e90c578599cf4a",
+      "kind": "Paragraph",
+      "page": 1,
+      "stage": "assemble",
+      "text": "Paragraph 01."
+    },
+    {
+      "bbox": [
+        78.0,
+        576.336253668,
+        157.24048444800002,
+        587.335765668
+      ],
+      "confidence": 1.0,
+      "flags": [
+        "column-0"
+      ],
+      "id": "c8d825fe69f86f6c",
+      "kind": "Paragraph",
+      "page": 1,
+      "stage": "assemble",
+      "text": "Paragraph 02."
+    },
+    {
+      "bbox": [
+        78.0,
+        549.936253668,
+        157.24048444800002,
+        560.9357656679999
+      ],
+      "confidence": 1.0,
+      "flags": [
+        "column-0"
+      ],
+      "id": "069d694a9afb4f7a",
+      "kind": "Paragraph",
+      "page": 1,
+      "stage": "assemble",
+      "text": "Paragraph 03."
+    },
+    {
+      "bbox": [
+        311.49999975,
+        629.136253668,
+        390.740484198,
+        640.135765668
+      ],
+      "confidence": 1.0,
+      "flags": [
+        "column-1"
+      ],
+      "id": "c494948ee0d12d1e",
+      "kind": "Paragraph",
+      "page": 1,
+      "stage": "assemble",
+      "text": "Paragraph 04."
+    },
+    {
+      "bbox": [
+        311.49999975,
+        602.736253668,
+        390.740484198,
+        613.735765668
+      ],
+      "confidence": 1.0,
+      "flags": [
+        "column-1"
+      ],
+      "id": "578a9ff55103f559",
+      "kind": "Paragraph",
+      "page": 1,
+      "stage": "assemble",
+      "text": "Paragraph 05."
+    },
+    {
+      "bbox": [
+        311.49999975,
+        576.336253668,
+        390.740484198,
+        587.335765668
+      ],
+      "confidence": 1.0,
+      "flags": [
+        "column-1"
+      ],
+      "id": "7864c9465441d2d6",
+      "kind": "Paragraph",
+      "page": 1,
+      "stage": "assemble",
+      "text": "Paragraph 06."
+    },
+    {
+      "bbox": [
+        311.49999975,
+        549.936253668,
+        390.740484198,
+        560.9357656679999
+      ],
+      "confidence": 1.0,
+      "flags": [
+        "column-1"
+      ],
+      "id": "a9fe4e8469a024e5",
+      "kind": "Paragraph",
+      "page": 1,
+      "stage": "assemble",
+      "text": "Paragraph 07."
+    }
+  ],
+  "scanned_pages": [],
+  "source_was_tagged": false,
+  "title": "Two Columns"
+}

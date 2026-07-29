@@ -160,7 +160,9 @@ def test_list_bbox_is_the_union_of_its_items():
     assert list_node.bbox[3] == max(b[3] for b in item_bboxes)
 
 
-def test_two_column_page_paragraphs_are_flagged_multi_column_suspected():
+def test_two_column_page_is_reconstructed_in_column_order():
+    # A clean, wide gutter (250->300 on a 612pt page) is reconstructed, not merely flagged: the
+    # whole left column reads before the whole right column, and each paragraph records its column.
     left = [custom_line(f"left {i}", 72.0, 250.0, 300.0 + i * 20.0) for i in range(5)]
     right = [custom_line(f"right {i}", 300.0, 480.0, 300.0 + i * 20.0) for i in range(5)]
     pages = [page_of(left + right)]
@@ -169,8 +171,17 @@ def test_two_column_page_paragraphs_are_flagged_multi_column_suspected():
     doc = assemble(pages, profile, title="T")
 
     paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
-    assert paragraphs
-    assert all("multi-column-suspected" in p.flags for p in paragraphs)
+    texts = [p.text for p in paragraphs]
+    # Left column entirely before the right column (top-to-bottom within each, so "left 4" -- the
+    # highest y -- comes first among the lefts).
+    assert texts.index("left 0") < texts.index("right 0")
+    assert texts.index("left 1") < texts.index("right 0")
+    left_paras = [p for p in paragraphs if p.text.startswith("left")]
+    right_paras = [p for p in paragraphs if p.text.startswith("right")]
+    assert all("column-0" in p.flags for p in left_paras)
+    assert all("column-1" in p.flags for p in right_paras)
+    # A clean cut is confident: it must NOT raise the marginal-gutter warning.
+    assert all("multi-column-suspected" not in p.flags for p in paragraphs)
 
 
 def test_single_column_page_paragraphs_are_not_flagged_multi_column():
