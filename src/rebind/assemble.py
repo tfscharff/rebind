@@ -267,6 +267,18 @@ def assemble(
             for placed in page_layout.lines:
                 line = placed.line
                 role = profile.role_of(line, page_height=page.height)
+                # OCR gives no reliable type size: a line's "size" is its bounding-box height, a
+                # noisy crop that varies line to line, so a real book's body line routinely OCRs to
+                # a taller box than its actual heading. The profile's "larger than body => heading"
+                # rule therefore manufactures spurious headings from OCR body text. Emitting a
+                # confident heading for body text fabricates document structure -- exactly what the
+                # never-fabricate invariant forbids -- so heading inference is suppressed for
+                # OCR-sourced lines. They become paragraphs (an honest flat structure); recovering
+                # real headings from a scan needs a reliable signal (size + isolation + short line)
+                # that is a later slice. Artifact and list classification are unaffected: those come
+                # from position/recurrence and text patterns, not from the size signal.
+                if line.ocr_confidence is not None and role == "heading":
+                    role = "body"
                 # A line Rebind OCR'd carries the recognizer's real confidence; style-match
                 # cleanliness is meaningless for it (it has no real font). Born-digital text keeps
                 # the style-match score.
