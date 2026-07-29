@@ -1,0 +1,132 @@
+"""On-device OCR for pages with no text layer.
+
+Turns a scanned page into the same `TextLine` records the born-digital path produces, so
+`profile`, `layout` and `assemble` consume OCR output unchanged (the branch-agnostic interface the
+layout slice was built against). RapidOCR (onnxruntime) runs on CPU with in-package models, so this
+needs no API key, GPU or network at runtime -- see docs/decisions/0005-ocr-engine-selection.md.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Iterator
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+
+from .extract import Page, TextLine
+
+
+class OcrEngine:
+    """Holds the RapidOCR handle so its (expensive) model load happens once per run.
+
+    The handle is created on first use, not at construction, so a born-digital document -- which
+    never OCRs a page -- pays neither the onnxruntime import nor the model-load cost. Constructing
+    an `OcrEngine` is therefore cheap; the pipeline can always make one and only pages that need it
+    trigger the load.
+    """
+
+    def __init__(self) -> None:
+        self._engine = None
+
+    def __call__(self, image: np.ndarray):
+        if self._engine is None:
+            from rapidocr_onnxruntime import RapidOCR
+
+            self._engine = RapidOCR()
+        result, _elapsed = self._engine(image)
+        return result or []
+
+
+def render_page_to_image(source: Path, page_number: int, *, dpi: int = 200) -> np.ndarray:
+    """Rasterize one page (1-based) of `source` to an RGB array at `dpi`.
+
+    A scanned page is not always a single extractable image stream (CCITT G4, JBIG2 and tiled
+    strips are common), so the whole page is rendered rather than one image XObject pulled out.
+    """
+    import pypdfium2 as pdfium
+
+    document = pdfium.PdfDocument(str(source))
+    try:
+        page = document[page_number - 1]
+        bitmap = page.render(scale=dpi / 72.0)
+        return np.asarray(bitmap.to_pil().convert("RGB"))
+    finally:
+        document.close()
+
+
+def recognize(
+    image: np.ndarray,
+    *,
+    page_number: int,
+    page_width: float,
+    page_height: float,
+    engine: OcrEngine,
+) -> list[TextLine]:
+    """Recognize `image` and return `TextLine`s in PDF-point coordinates.
+
+    RapidOCR yields `(quad, text, confidence)` per line in top-left-origin pixel coordinates. Each
+    quad is reduced to its axis-aligned box and mapped to PDF points (y flipped to origin
+    bottom-left). `size` is the box height in points, so the typographic profile can still rank
+    headings; `font` is empty and bold/italic False because OCR yields no font metrics.
+    """
+    height_px, width_px = image.shape[:2]
+    if width_px == 0 or height_px == 0:
+        return []
+    scale_x = page_width / width_px
+    scale_y = page_height / height_px
+
+    lines: list[TextLine] = []
+    for quad, text, confidence in engine(image):
+        cleaned = text.strip()
+        if not cleaned:
+            continue
+        xs = [point[0] for point in quad]
+        ys = [point[1] for point in quad]
+        x0 = min(xs) * scale_x
+        x1 = max(xs) * scale_x
+        # y flip: the smallest pixel-y is the visual top, which is the largest PDF-y.
+        y_top = page_height - min(ys) * scale_y
+        y_bottom = page_height - max(ys) * scale_y
+        lines.append(
+            TextLine(
+                text=cleaned,
+                page=page_number,
+                bbox=(x0, y_bottom, x1, y_top),
+                font="",
+                size=max(y_top - y_bottom, 1.0),
+                bold=False,
+                italic=False,
+                ocr_confidence=float(confidence),
+            )
+        )
+    return lines
+
+
+def ocr_pages(
+    source: Path,
+    pages: Iterable[Page],
+    *,
+    engine: OcrEngine,
+    cache: dict[int, list[TextLine]],
+    dpi: int = 200,
+) -> Iterator[Page]:
+    """Yield each page unchanged if it has a text layer, or with OCR'd lines if it does not.
+
+    OCR is expensive, and the pipeline reads the pages twice (profile pass, then assemble pass), so
+    a page's recognized lines are memoized in `cache` on first sight and reused on the second pass.
+    The cache holds only text (never images) and only for scanned pages, so a born-digital document
+    leaves it empty and keeps streaming with bounded memory (invariant 5). A blank or unrecoverable
+    scan simply yields no lines and stays a no-text-layer page downstream.
+    """
+    for page in pages:
+        if page.has_text_layer:
+            yield page
+            continue
+        if page.number not in cache:
+            image = render_page_to_image(source, page.number, dpi=dpi)
+            cache[page.number] = recognize(
+                image, page_number=page.number, page_width=page.width,
+                page_height=page.height, engine=engine,
+            )
+        yield replace(page, lines=tuple(cache[page.number]))

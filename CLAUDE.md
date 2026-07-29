@@ -121,10 +121,19 @@ its text is flagged `ocr-source` and confidence-capped, the redundant background
 emitted as a figure placeholder, and the CLI reports it. This only labels an OCR layer that is
 *already present*.
 
-**Next: the OCR branch itself** — recognizing text on pages with no text layer at all
-(`Failure.pdf`). This is gated on choosing a bundle-able-on-Windows, no-GPU/no-network OCR engine
-(invariants 4 and 6) — a product-constraint decision to make with Thomas, not unilaterally. Also
-open: dewarp/restoration, and re-OCR of poor existing OCR layers.
+**Phase 2 slice 3 — the OCR branch — is complete.** Pages with no text layer are recognized with
+RapidOCR (onnxruntime, CPU, models bundled — ADR 0005); `pypdfium2` rasterizes the page. `ocr.py`
+maps recognizer output to `TextLine`s (real per-line confidence), which flow through the unchanged
+`profile`/`layout`/`assemble` interface. OCR runs once per page (cache shared across the pipeline's
+two passes); a scanned document now converts instead of being refused. Sub-threshold recognition
+becomes an honest placeholder. The engine bundles into the frozen build and runs offline (proven in
+ADR 0005's spike).
+
+Follow-ups still open: the OCR dependencies' licenses (onnxruntime/opencv/pdfium/numpy + the PP-OCR
+models) are not yet in the third-party notice — `scripts/license_inventory.py` only covers the GTK
+DLLs under `gtk3-runtime/bin/`; extend it before an actual release. Also: OCR speed (~13s/page CPU),
+re-OCR of poor existing OCR layers, and dewarp/restoration. **Next major piece: dewarp/restoration**
+(deskew, dewarp, denoise) to improve OCR on the worst scans.
 
 Full progress ledger, including every deferred finding: `.superpowers/sdd/progress.md`.
 

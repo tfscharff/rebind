@@ -18,8 +18,9 @@ import pikepdf
 
 from .assemble import assemble
 from .emit import PAGE_ANCHOR_PREFIX, to_html
-from .extract import ExtractionError, Page, extract_pages, source_is_tagged
+from .extract import ExtractionError, Page, TextLine, extract_pages, source_is_tagged
 from .model import Document, PageBreak
+from .ocr import OcrEngine, ocr_pages
 from .pagelabels import set_page_labels
 from .profile import build_profile
 from .render import render_html_to_pdf_with_anchors
@@ -138,24 +139,36 @@ def convert(
         )
     tagged = source_is_tagged(source)
 
+    # OCR runs here for any page with no text layer, once per page: the engine and cache are shared
+    # across both passes below, so a scanned page is recognized in pass one and reused in pass two
+    # rather than OCR'd twice. Constructing the engine is cheap (the model loads on first use), so a
+    # born-digital document -- whose pages all have text layers -- never triggers the load and keeps
+    # streaming with bounded memory.
+    ocr_engine = OcrEngine()
+    ocr_cache: dict[int, list[TextLine]] = {}
+
     # Pass one. Only style statistics are retained, so this does not hold the document. A
     # source page count is tallied alongside it (O(1) extra state) purely to tell "zero pages"
     # apart from "pages with no extractable text" below -- both would otherwise present
     # identically as `profile.body is None`.
     page_count = [0]
-    profile = build_profile(_counting(extract_pages(source), page_count))
+    profile = build_profile(
+        _counting(ocr_pages(source, extract_pages(source), engine=ocr_engine, cache=ocr_cache),
+                  page_count)
+    )
     if page_count[0] == 0:
         raise ExtractionError(f"{source} has no pages to convert")
     if profile.body is None:
         raise NoTextLayerError(
-            f"{source} has no extractable text on any page. This is a scanned document; the "
-            "OCR branch is not implemented yet."
+            f"{source} has no text on any page, even after OCR. The scan may be blank or too "
+            "degraded to recognize."
         )
 
     # Pass two. `extract_pages` is a generator exhausted by pass one, so this is a fresh call,
-    # not the same iterator -- reusing the exhausted one would silently assemble zero nodes.
+    # not the same iterator -- reusing the exhausted one would silently assemble zero nodes. The
+    # OCR cache is shared, so scanned pages are not recognized a second time.
     document = assemble(
-        extract_pages(source),
+        ocr_pages(source, extract_pages(source), engine=ocr_engine, cache=ocr_cache),
         profile,
         title=title or source.stem,
         lang=lang,

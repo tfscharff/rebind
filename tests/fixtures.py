@@ -54,6 +54,51 @@ def born_digital_pdf(
     return target
 
 
+def pdf_image_only_scan(html_body: str, target: Path, *, dpi: int = 150) -> Path:
+    """Build an image-only scanned PDF (no text layer) from an HTML fragment.
+
+    Renders the HTML to a born-digital PDF, rasterizes its first page with pypdfium2, and embeds
+    that raster as a full-page JPEG image in a fresh PDF with no text -- the shape of a real scan
+    (`samples/Failure.pdf`). The known input text is recoverable only by OCR, which is the point.
+    """
+    import io
+
+    import pypdfium2 as pdfium
+
+    source_pdf = target.with_suffix(".source.pdf")
+    born_digital_pdf(html_body, source_pdf)
+
+    doc = pdfium.PdfDocument(str(source_pdf))
+    page = doc[0]
+    width_pt, height_pt = page.get_size()
+    bitmap = page.render(scale=dpi / 72.0)
+    pil_image = bitmap.to_pil().convert("RGB")
+    buffer = io.BytesIO()
+    pil_image.save(buffer, format="JPEG", quality=90)
+    jpeg = buffer.getvalue()
+    doc.close()
+
+    pdf = pikepdf.Pdf.new()
+    image = pdf.make_stream(jpeg)
+    image.Type = Name.XObject
+    image.Subtype = Name.Image
+    image.Width = pil_image.width
+    image.Height = pil_image.height
+    image.ColorSpace = Name.DeviceRGB
+    image.BitsPerComponent = 8
+    image.Filter = Name.DCTDecode
+    content = f"q {width_pt} 0 0 {height_pt} 0 0 cm /Im0 Do Q".encode("latin-1")
+    page_dict = Dictionary(
+        Type=Name.Page,
+        MediaBox=Array([0, 0, width_pt, height_pt]),
+        Resources=Dictionary(XObject=Dictionary(Im0=image)),
+        Contents=pdf.make_stream(content),
+    )
+    pdf.pages.append(pikepdf.Page(pdf.make_indirect(page_dict)))
+    pdf.save(target)
+    return target
+
+
 def pdf_scan_with_ocr_layer(target: Path, *, text: str = "recognized text over a scan") -> Path:
     """Build a PDF shaped like an OCR'd scan: a page-covering raster image with a text layer drawn
     on top, the way scanning + OCR tools (and the 1905 bulletin / Chapter 14 samples) produce.
