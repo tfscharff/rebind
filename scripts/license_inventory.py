@@ -24,13 +24,38 @@ silently under- or over-claims.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata as _md
 import sys
 from pathlib import Path
+
+from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BUNDLED_BIN = REPO_ROOT / "packaging/dist/rebind/_internal/gtk3-runtime/bin"
 LICENSES_DIR = REPO_ROOT / "packaging/licenses"
 INVENTORY = LICENSES_DIR / "DLL-INVENTORY.md"
+PYTHON_INVENTORY = LICENSES_DIR / "PYTHON-INVENTORY.md"
+PYTHON_LICENSES_DIR = LICENSES_DIR / "python"
+
+# The bundle also freezes the runtime Python dependency closure (the OCR engine, the PDF renderer's
+# Python layer, the web server, and everything they pull in) -- these are redistributed too and
+# were historically not in the notice. The closure is resolved from these top-level runtime deps.
+RUNTIME_ROOTS = [
+    "weasyprint", "pikepdf", "fastapi", "uvicorn", "pdfminer.six",
+    "rapidocr-onnxruntime", "pypdfium2",
+]
+# Distributions whose wheel ships no license file of its own -> a canonical fallback text.
+PY_FALLBACK: dict[str, tuple[str, str]] = {
+    "flatbuffers": ("Apache-2.0", "LICENSE-Apache-2.0.txt"),
+    "rapidocr-onnxruntime": ("Apache-2.0", "LICENSE-Apache-2.0.txt"),
+    "webencodings": ("BSD-3-Clause", "LICENSE-BSD-3-Clause.txt"),
+}
+# Redistributed data that is not a Python distribution: the OCR models bundled inside RapidOCR.
+BUNDLED_MODELS: list[tuple[str, str, str]] = [
+    ("PP-OCRv4 detection / recognition / classification models (PaddleOCR)", "Apache-2.0",
+     "shipped inside rapidocr_onnxruntime/models/*.onnx"),
+]
 # Shown in the Inno Setup wizard before install proceeds (`LicenseFile` in packaging/rebind.iss)
 # and installed into {app}\licenses\ so it remains available afterwards.
 THIRD_PARTY = LICENSES_DIR / "LICENSE-THIRD-PARTY.txt"
@@ -318,6 +343,143 @@ def _render_third_party(present: set[str]) -> str:
     return "\n".join(out)
 
 
+def _spdx(dist: _md.Distribution) -> str:
+    meta = dist.metadata
+    expression = meta.get("License-Expression")
+    if expression:
+        return expression
+    classifiers = [
+        c.split("::")[-1].strip()
+        for c in meta.get_all("Classifier") or []
+        if c.startswith("License") and "OSI Approved" not in c.split("::")[-1]
+    ]
+    if classifiers:
+        return "; ".join(classifiers)
+    first_line = (meta.get("License") or "").strip().splitlines()
+    return first_line[0] if first_line else "see license text"
+
+
+def _dist_license_text(dist: _md.Distribution) -> str | None:
+    """The license text a wheel ships in its dist-info, or None if it ships none."""
+    for entry in dist.files or []:
+        name = str(entry).upper()
+        if name.endswith(".PY"):
+            continue
+        if "LICENSE" in name or "LICENCE" in name or "COPYING" in name:
+            try:
+                text = dist.read_text(str(entry))
+                if not text:
+                    text = dist.locate_file(entry).read_text(encoding="utf-8", errors="replace")
+            except (OSError, UnicodeError):
+                continue
+            if text and len(text) > 50:
+                return text
+    return None
+
+
+def _runtime_distributions() -> dict[str, _md.Distribution]:
+    """The transitive runtime dependency closure that the frozen bundle vendors.
+
+    Resolved from RUNTIME_ROOTS via each distribution's own Requires-Dist, skipping requirements
+    whose environment marker is an extra (test/dev-only), so this matches what PyInstaller freezes
+    rather than the whole dev virtualenv.
+    """
+    seen: dict[str, _md.Distribution] = {}
+    stack = list(RUNTIME_ROOTS)
+    while stack:
+        name = canonicalize_name(stack.pop())
+        if name in seen:
+            continue
+        try:
+            dist = _md.distribution(name)
+        except _md.PackageNotFoundError:
+            continue
+        seen[name] = dist
+        for req_str in dist.requires or []:
+            req = Requirement(req_str)
+            # An empty `extra` evaluates a base requirement true and an extras-gated one false.
+            if req.marker and not req.marker.evaluate({"extra": ""}):
+                continue
+            stack.append(req.name)
+    return seen
+
+
+def _python_inventory() -> list[tuple[str, str, str, str | None]]:
+    """(name, version, spdx, license_text|None) for each bundled runtime distribution."""
+    rows = []
+    for name, dist in sorted(_runtime_distributions().items()):
+        text = _dist_license_text(dist)
+        spdx = _spdx(dist)
+        if text is None and name in PY_FALLBACK:
+            spdx, fallback_file = PY_FALLBACK[name]
+            text = (LICENSES_DIR / fallback_file).read_text(encoding="utf-8")
+        rows.append((name, dist.version, spdx, text))
+    return rows
+
+
+def _check_python(rows: list[tuple[str, str, str, str | None]]) -> list[str]:
+    return [
+        f"  runtime distribution with no discoverable license text: {name} {version} "
+        f"(add a PY_FALLBACK entry)"
+        for name, version, _spdx_, text in rows
+        if text is None
+    ]
+
+
+def _write_python_inventory(rows: list[tuple[str, str, str, str | None]]) -> None:
+    """Write each distribution's license text under packaging/licenses/python/ and an index."""
+    PYTHON_LICENSES_DIR.mkdir(parents=True, exist_ok=True)
+    for stale in PYTHON_LICENSES_DIR.glob("*.txt"):
+        stale.unlink()
+    lines = [
+        "# Bundled Python distributions -- license inventory",
+        "",
+        "**Generated by `scripts/license_inventory.py` -- do not edit by hand.**",
+        "",
+        f"Covers the {len(rows)} runtime Python distributions frozen into the bundle, plus the "
+        "bundled OCR models. Each distribution's own license text is written beside this file in "
+        "`python/`.",
+        "",
+        "| Distribution | Version | License | Text |",
+        "|---|---|---|---|",
+    ]
+    for name, version, spdx, text in rows:
+        assert text is not None  # _check_python guarantees this before we render
+        (PYTHON_LICENSES_DIR / f"{name}.txt").write_text(text, encoding="utf-8")
+        lines.append(f"| {name} | {version} | {spdx} | `python/{name}.txt` |")
+    lines += ["", "## Bundled models", "", "| Component | License | Location |", "|---|---|---|"]
+    for component, spdx, location in BUNDLED_MODELS:
+        lines.append(f"| {component} | {spdx} | {location} |")
+    lines.append("")
+    PYTHON_INVENTORY.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _render_python_third_party(rows: list[tuple[str, str, str, str | None]]) -> str:
+    out = [
+        "",
+        "=" * 80,
+        "",
+        "BUNDLED PYTHON DISTRIBUTIONS",
+        "",
+        "Rebind also freezes its runtime Python dependencies -- the OCR engine, the PDF",
+        "renderer's Python layer, the local web server, and their dependencies -- into the",
+        "application. Each is redistributed unmodified under its own license; the full text of",
+        "each is installed in the python/ subfolder of this directory.",
+        "",
+    ]
+    for name, version, spdx, _text in rows:
+        out.append(f"{name} {version}")
+        out.append(f"    License:  {spdx}")
+        out.append(f"    Text:     python/{name}.txt")
+        out.append("")
+    out.append("Bundled OCR models:")
+    for component, spdx, location in BUNDLED_MODELS:
+        out.append(f"    {component}")
+        out.append(f"        License: {spdx} ({location})")
+    out.append("")
+    return "\n".join(out)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true",
@@ -326,6 +488,8 @@ def main() -> int:
 
     present = _load_present()
     problems, stale = _check(present)
+    python_rows = _python_inventory()
+    problems += _check_python(python_rows)
     if problems:
         print("License inventory is out of sync with the built bundle:", file=sys.stderr)
         print("\n".join(problems), file=sys.stderr)
@@ -337,13 +501,18 @@ def main() -> int:
         print("\n".join(stale), file=sys.stderr)
 
     if args.check:
-        print(f"OK: {len(present)} vendored DLLs, all mapped, all license texts present.")
+        print(f"OK: {len(present)} vendored DLLs and {len(python_rows)} Python distributions, "
+              "all mapped, all license texts present.")
         return 0
 
     INVENTORY.write_text(_render(present), encoding="utf-8")
-    THIRD_PARTY.write_text(_render_third_party(present), encoding="utf-8")
-    print(f"Wrote {INVENTORY.relative_to(REPO_ROOT)} and "
-          f"{THIRD_PARTY.relative_to(REPO_ROOT)} ({len(present)} DLLs).")
+    _write_python_inventory(python_rows)
+    THIRD_PARTY.write_text(
+        _render_third_party(present) + _render_python_third_party(python_rows), encoding="utf-8"
+    )
+    print(f"Wrote {INVENTORY.relative_to(REPO_ROOT)}, {PYTHON_INVENTORY.relative_to(REPO_ROOT)} "
+          f"and {THIRD_PARTY.relative_to(REPO_ROOT)} "
+          f"({len(present)} DLLs, {len(python_rows)} Python distributions).")
     return 0
 
 
