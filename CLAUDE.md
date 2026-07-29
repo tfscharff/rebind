@@ -142,8 +142,17 @@ standalone probe). The license inventory (`scripts/license_inventory.py`) now co
 Python distributions + the PP-OCR models, not only the GTK DLLs; `--check` fails if any bundled
 runtime distribution lacks a license text.
 
-Follow-ups still open: OCR speed (~13s/page CPU), re-OCR of poor existing OCR layers, and full
-dewarp. **Next major piece: full dewarp** for spine-curved book scans, or figure/caption handling.
+**Phase 2 slice 5 — table detection — is complete.** `layout.detect_table_lines` flags grid-shaped
+regions `table-suspected` (the cells' reading order may be wrong) without reconstructing them —
+detection uses a row fill-fraction gate (table rows are sparse ~0.67, flowing multi-column rows
+dense ~0.93) plus a regularity requirement (≥3 rows each spanning ≥3 shared columns), the
+combination that separates a real table from dense multi-column text. Validated on real samples
+(Failure.pdf's Table 7.5, the bulletin's roster) with no false positives on flowing columns.
+
+Follow-ups still open: table *reconstruction* (rebuild the grid into a tagged HTML `<table>` —
+harder, needs multi-line-cell and header handling), OCR speed (~13s/page CPU), re-OCR of poor
+existing OCR layers, and full dewarp. **Next candidates: table reconstruction, figure/caption
+handling, or full dewarp** for spine-curved book scans.
 
 Full progress ledger, including every deferred finding: `.superpowers/sdd/progress.md`.
 
