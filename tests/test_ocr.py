@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rebind.ocr import OcrEngine, recognize, render_page_to_image
+from rebind.ocr import OcrEngine, ocr_pages, recognize, render_page_to_image
+from rebind.extract import extract_pages
 from rebind.pipeline import convert
 from tests.fixtures import pdf_image_only_scan
 
@@ -49,3 +50,35 @@ def test_image_only_scan_is_ocred_and_converts(tmp_path: Path):
     assert all("ocr-source" in n.flags for n in text_nodes)
     # Real OCR confidence flows through, not the hidden-layer 0.5 cap.
     assert any(n.confidence > 0.5 for n in text_nodes)
+
+
+def _ocr_lines(source, *, restore_images):
+    engine = OcrEngine()
+    cache = {}
+    pages = list(ocr_pages(source, extract_pages(source), engine=engine, cache=cache,
+                           restore_images=restore_images))
+    return [ln for pg in pages for ln in pg.lines]
+
+
+def test_deskew_tightens_line_boxes_on_a_crooked_scan(tmp_path):
+    # RapidOCR is robust enough to read moderately rotated text, so deskew's measurable, reliable
+    # benefit is geometry, not raw word recovery: a tilted line's axis-aligned bounding box is
+    # much taller than the text (it spans the tilt), which scrambles the downstream XY-cut reading
+    # order and bbox provenance. Deskew collapses those boxes to the true line height.
+    import statistics
+
+    body = ("<h1>Deskew Restoration Works</h1>"
+            "<p>Preventable failure is largely avoidable with attention.</p>")
+    crooked = pdf_image_only_scan(body, tmp_path / "crooked.pdf", dpi=200, rotate_deg=6.0)
+
+    with_restore = _ocr_lines(crooked, restore_images=True)
+    without_restore = _ocr_lines(crooked, restore_images=False)
+
+    text = " ".join(ln.text for ln in with_restore).lower()
+    assert "preventable" in text and "deskew" in text  # deskew must not lose text
+
+    h_with = statistics.median(ln.bbox[3] - ln.bbox[1] for ln in with_restore)
+    h_without = statistics.median(ln.bbox[3] - ln.bbox[1] for ln in without_restore)
+    assert h_with < h_without * 0.7, (
+        f"deskew did not tighten the tilted line boxes: with={h_with:.1f} without={h_without:.1f}"
+    )

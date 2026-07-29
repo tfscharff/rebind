@@ -54,12 +54,16 @@ def born_digital_pdf(
     return target
 
 
-def pdf_image_only_scan(html_body: str, target: Path, *, dpi: int = 150) -> Path:
+def pdf_image_only_scan(html_body: str, target: Path, *, dpi: int = 150,
+                        rotate_deg: float = 0.0) -> Path:
     """Build an image-only scanned PDF (no text layer) from an HTML fragment.
 
     Renders the HTML to a born-digital PDF, rasterizes its first page with pypdfium2, and embeds
     that raster as a full-page JPEG image in a fresh PDF with no text -- the shape of a real scan
     (`samples/Failure.pdf`). The known input text is recoverable only by OCR, which is the point.
+
+    `rotate_deg` skews the raster by that many degrees (white fill), to reproduce a crooked scan
+    for testing deskew.
     """
     import io
 
@@ -73,6 +77,8 @@ def pdf_image_only_scan(html_body: str, target: Path, *, dpi: int = 150) -> Path
     width_pt, height_pt = page.get_size()
     bitmap = page.render(scale=dpi / 72.0)
     pil_image = bitmap.to_pil().convert("RGB")
+    if rotate_deg:
+        pil_image = pil_image.rotate(rotate_deg, expand=False, fillcolor=(255, 255, 255))
     buffer = io.BytesIO()
     pil_image.save(buffer, format="JPEG", quality=90)
     jpeg = buffer.getvalue()

@@ -49,7 +49,9 @@ RUNTIME_ROOTS = [
 PY_FALLBACK: dict[str, tuple[str, str]] = {
     "flatbuffers": ("Apache-2.0", "LICENSE-Apache-2.0.txt"),
     "rapidocr-onnxruntime": ("Apache-2.0", "LICENSE-Apache-2.0.txt"),
-    "webencodings": ("BSD-3-Clause", "LICENSE-BSD-3-Clause.txt"),
+    # webencodings ships no LICENSE in its wheel; this is its actual upstream notice (BSD-3 with
+    # Simon Sapin's copyright), not a generic SPDX template -- see test_license_inventory.
+    "webencodings": ("BSD-3-Clause", "LICENSE-webencodings.txt"),
 }
 # Redistributed data that is not a Python distribution: the OCR models bundled inside RapidOCR.
 BUNDLED_MODELS: list[tuple[str, str, str]] = [
