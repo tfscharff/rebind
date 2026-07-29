@@ -516,3 +516,51 @@ def test_table_grid_paragraphs_are_flagged_table_suspected():
     assert len(table_cells) == 9, f"all 9 grid cells should be flagged, got {len(table_cells)}"
     prose_paras = [p for p in paragraphs if p.text.startswith("An ordinary")]
     assert prose_paras and all("table-suspected" not in p.flags for p in prose_paras)
+
+
+def test_hidden_ocr_layer_text_is_not_fabricated_into_headings():
+    # A page-covering scan image + a text layer with VARYING font sizes (a garbled hidden OCR
+    # layer, ocr_confidence is None because it came from the PDF text layer, not Rebind's OCR).
+    # Size-based heading inference must be suppressed here just as for Rebind's own OCR -- else a
+    # scanned thesis produces dozens of spurious headings from OCR size noise.
+    lines = [TextLine(text=f"body line {i}", page=1, bbox=(72.0, 700.0 - i * 14, 500.0, 712.0 - i * 14),
+                      font="ArialMT", size=float(10 + (i % 5)), bold=(i % 3 == 0), italic=False)
+             for i in range(12)]
+    full_page = ImageRegion(page=1, bbox=(0.0, 0.0, 612.0, 792.0))
+    pages = [page_of(lines, images=[full_page])]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    headings = [n for n in doc.nodes if isinstance(n, Heading)]
+    assert headings == [], f"hidden-OCR text fabricated headings: {[h.text for h in headings]}"
+    paragraphs = [n for n in doc.nodes if isinstance(n, Paragraph)]
+    assert paragraphs and all("ocr-source" in p.flags for p in paragraphs)
+
+
+def test_single_item_ocr_list_falls_back_to_paragraph():
+    # A stray marker fragment on an OCR page must not become a 1-item list. Two body lines, a full
+    # page image (hidden OCR), and a lone bullet-marked line -> the bullet line is a paragraph.
+    lines = [line("body one", y=500.0), line("body two", y=480.0), line("- stray dash line", y=300.0)]
+    full_page = ImageRegion(page=1, bbox=(0.0, 0.0, 612.0, 792.0))
+    pages = [page_of(lines, images=[full_page])]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    assert not any(isinstance(n, ListNode) for n in doc.nodes), "single OCR marker made a list"
+    assert any(isinstance(n, Paragraph) and "stray dash" in n.text for n in doc.nodes)
+
+
+def test_born_digital_single_item_list_is_kept():
+    # The fallback is OCR-only: a born-digital single-item list (no page-covering image) is a real
+    # list and must be preserved.
+    lines = [line("body", y=500.0 - i) for i in range(10)]
+    lines.append(line("- lonely but real", y=300.0))
+    pages = [page_of(lines)]
+    profile = build_profile(pages)
+
+    doc = assemble(pages, profile, title="T")
+
+    lists = [n for n in doc.nodes if isinstance(n, ListNode)]
+    assert lists and lists[0].items[0].text == "lonely but real"
