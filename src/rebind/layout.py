@@ -43,15 +43,23 @@ class PageLayout:
     flags: list[str]
 
 
-def _gutter_spans_height(lines: list[TextLine], gap_left: float, gap_right: float,
-                         region_h: float) -> bool:
-    """True when text on BOTH sides of the gutter each spans at least
-    GUTTER_MIN_HEIGHT_FRACTION of the region height. Guards against a lone page number or a
-    centered title manufacturing a false column out of what is really one text block.
+def _gutter_spans_height(lines: list[TextLine], gap_left: float, gap_right: float) -> bool:
+    """True when text on BOTH sides of the gutter each spans at least GUTTER_MIN_HEIGHT_FRACTION
+    of the region's *content* height. Guards against a lone page number or a centered title
+    manufacturing a false column out of what is really one text block.
+
+    The threshold is measured against the vertical extent of the text, not the page box: a real
+    column occupies only the text area, so measuring against the full page height (which includes
+    the margins order_page passes in) would reject every genuine gutter and silently disable
+    column detection on real pages.
     """
     left_lines = [ln for ln in lines if ln.bbox[2] <= gap_left]
     right_lines = [ln for ln in lines if ln.bbox[0] >= gap_right]
     if not left_lines or not right_lines:
+        return False
+
+    content_h = max(ln.bbox[3] for ln in lines) - min(ln.bbox[1] for ln in lines)
+    if content_h <= 0:
         return False
 
     def covered(side: list[TextLine]) -> float:
@@ -59,7 +67,7 @@ def _gutter_spans_height(lines: list[TextLine], gap_left: float, gap_right: floa
         bottom = min(ln.bbox[1] for ln in side)
         return top - bottom
 
-    return min(covered(left_lines), covered(right_lines)) >= region_h * GUTTER_MIN_HEIGHT_FRACTION
+    return min(covered(left_lines), covered(right_lines)) >= content_h * GUTTER_MIN_HEIGHT_FRACTION
 
 
 def _widest_vertical_gutter(lines: list[TextLine], bbox: BBox) -> tuple[float, float] | None:
@@ -72,8 +80,6 @@ def _widest_vertical_gutter(lines: list[TextLine], bbox: BBox) -> tuple[float, f
     """
     x0, _, x1, _ = bbox
     region_w = x1 - x0
-    _, y0, _, y1 = bbox
-    region_h = y1 - y0
     if region_w <= 0 or len(lines) < 2:
         return None
     spans = sorted(((ln.bbox[0], ln.bbox[2]) for ln in lines), key=lambda s: s[0])
@@ -81,7 +87,7 @@ def _widest_vertical_gutter(lines: list[TextLine], bbox: BBox) -> tuple[float, f
     running_max = spans[0][1]
     for left, right in spans[1:]:
         gap = left - running_max
-        if gap > 0 and _gutter_spans_height(lines, running_max, left, region_h):
+        if gap > 0 and _gutter_spans_height(lines, running_max, left):
             if best is None or gap > best[1]:
                 best = (running_max, gap)
         running_max = max(running_max, right)

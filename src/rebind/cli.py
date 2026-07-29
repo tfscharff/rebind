@@ -77,8 +77,8 @@ def main(argv: list[str] | None = None) -> int:
     }
     if multi_column_pages:
         print(
-            f"note: {len(multi_column_pages)} page(s) look multi-column and may have scrambled "
-            "reading order (Phase 1 does not reconstruct columns); check them by hand",
+            f"note: {len(multi_column_pages)} page(s) had a marginal column gutter, so the "
+            "reconstructed multi-column reading order is uncertain; check them by hand",
             file=sys.stderr,
         )
     degraded_count = sum(1 for node in result.document.nodes if "degraded-region" in node.flags)

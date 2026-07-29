@@ -74,6 +74,20 @@ def test_reading_order_is_input_order_independent():
         assert got == baseline
 
 
+def test_marginal_gutter_is_flagged_multi_column_suspected():
+    # Gutter width 36pt on a 612pt page: above GUTTER_MIN_FRACTION*612=30.6 (so the columns are
+    # reconstructed) but below GUTTER_MARGINAL_FRACTION*612=42.8 (so the cut is marginal and the
+    # reading order is flagged uncertain).
+    left = [_line(72, 300 + i * 20, 250, 310 + i * 20, f"L{i}") for i in range(5)]
+    right = [_line(286, 300 + i * 20, 480, 310 + i * 20, f"R{i}") for i in range(5)]
+    page = Page(number=1, width=612, height=792, lines=tuple(left + right), images=())
+    profile = build_profile([page])
+    layout = order_page(page, profile)
+    assert "multi-column-suspected" in layout.flags
+    # ...but it is still reconstructed: two distinct columns.
+    assert {p.column for p in layout.lines if p.column >= 0} == {0, 1}
+
+
 def test_order_page_excludes_artifacts_and_orders_body():
     body = [_line(72, 700, 500, 710, "para one"), _line(72, 680, 500, 690, "para two")]
     # The footer carries a distinct style; a footer sharing the body style is deliberately never
