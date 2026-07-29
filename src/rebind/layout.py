@@ -15,12 +15,28 @@ from .extract import Page, TextLine
 from .model import BBox
 from .profile import TypographicProfile
 
-# Named thresholds -- fractions of the CURRENT region's box, so they behave the same at any page
-# size or recursion depth. Expected to need tuning against the 1905 bulletin; that is planned work.
-GUTTER_MIN_FRACTION = 0.05          # a column gutter must be this wide (fraction of region width)
-GUTTER_MIN_HEIGHT_FRACTION = 0.5    # ...and text on both sides must span this much of the height
+# Named thresholds, tuned against the 1905 Wheaton Bulletin (a real two-column OCR'd scan).
+#
+# A column gutter is found as the widest interior *coverage valley* -- an x-range crossed by few
+# enough lines -- rather than a perfectly clear gap. On real (OCR'd, justified) text a handful of
+# lines overhang the gutter; on the bulletin every page had exactly one line straddling an
+# otherwise-clean column boundary, and requiring a zero-crossing gap missed the columns entirely.
+# A gutter may be crossed by up to this fraction of the region's lines (floored to an integer). At
+# 0.05 a ~5-line region tolerates none -- so a single full-width header still blocks a vertical cut
+# and is isolated by a horizontal one first -- while a ~20+ line region tolerates the odd overhang
+# that real column text always has (the bulletin's pages, ~110 lines, tolerate 5).
+COVERAGE_TOLERANCE_FRACTION = 0.05
+# Gutter width is measured in absolute points, not as a fraction of page width: a column gutter is
+# a typographic measure (the bulletin's are 7-11pt), and the old 5%-of-page rule (~25pt on Letter)
+# rejected every real newspaper gutter.
+GUTTER_MIN_WIDTH_PT = 4.0           # a valley narrower than this is not a column boundary
+GUTTER_MARGINAL_WIDTH_PT = 6.0      # a gutter narrower than this (but >= MIN) is a marginal cut
+GUTTER_MIN_HEIGHT_FRACTION = 0.5    # text on both sides must each span this much of the height
+# Both sides of a column cut must hold at least this many lines. Without it, XY-cut over-segments:
+# a heading gap isolates a line or two, and a coverage valley then splits those one-line fragments
+# into spurious "columns". A real column is many lines; two lines each side is the floor.
+COLUMN_MIN_LINES = 2
 BLOCK_GAP_MIN_FRACTION = 0.02       # a block break must be this tall (fraction of region height)
-GUTTER_MARGINAL_FRACTION = 0.07     # a gutter narrower than this (but >= MIN) is a marginal cut
 
 
 @dataclass(frozen=True)
@@ -70,29 +86,56 @@ def _gutter_spans_height(lines: list[TextLine], gap_left: float, gap_right: floa
     return min(covered(left_lines), covered(right_lines)) >= content_h * GUTTER_MIN_HEIGHT_FRACTION
 
 
-def _widest_vertical_gutter(lines: list[TextLine], bbox: BBox) -> tuple[float, float] | None:
-    """Widest valid whitespace band on the x-axis, as (gap_left, gap_width), or None.
+def _coverage_valleys(lines: list[TextLine], x0: float, x1: float,
+                      tolerance: int) -> list[tuple[float, float]]:
+    """Maximal x-ranges [a, b] within (x0, x1) crossed by at most `tolerance` lines.
 
-    A gap is open horizontal space that no line's x-interval crosses. The lines are swept left to
-    right tracking the running rightmost extent; a gap opens wherever the next line starts beyond
-    it. Only a gap wide enough (GUTTER_MIN_FRACTION) and with text spanning enough of the height on
-    both sides counts.
+    Coverage changes only at line edges, so it is evaluated once per elementary interval between
+    consecutive edges. Contiguous low-coverage intervals are merged into a single valley.
+    """
+    edges = sorted({x0, x1} | {ln.bbox[0] for ln in lines} | {ln.bbox[2] for ln in lines})
+    valleys: list[tuple[float, float]] = []
+    start: float | None = None
+    end: float = x0
+    for a, b in zip(edges, edges[1:]):
+        mid = (a + b) / 2
+        coverage = sum(1 for ln in lines if ln.bbox[0] < mid < ln.bbox[2])
+        if coverage <= tolerance:
+            if start is None:
+                start = a
+            end = b
+        elif start is not None:
+            valleys.append((start, end))
+            start = None
+    if start is not None:
+        valleys.append((start, end))
+    return valleys
+
+
+def _widest_vertical_gutter(lines: list[TextLine], bbox: BBox) -> tuple[float, float] | None:
+    """Widest valid column gutter as (gap_left, gap_width), or None.
+
+    The gutter is the widest interior coverage valley -- an x-range crossed by at most a small
+    fraction of the lines -- that is wide enough (GUTTER_MIN_WIDTH_PT) and has text spanning enough
+    of the height on both sides. Tolerating a few straddling lines is what lets a real, slightly
+    ragged column boundary be found; the height guard rejects valleys at the region's empty edges.
     """
     x0, _, x1, _ = bbox
-    region_w = x1 - x0
-    if region_w <= 0 or len(lines) < 2:
+    if x1 - x0 <= 0 or len(lines) < 2:
         return None
-    spans = sorted(((ln.bbox[0], ln.bbox[2]) for ln in lines), key=lambda s: s[0])
-    best: tuple[float, float] | None = None
-    running_max = spans[0][1]
-    for left, right in spans[1:]:
-        gap = left - running_max
-        if gap > 0 and _gutter_spans_height(lines, running_max, left):
-            if best is None or gap > best[1]:
-                best = (running_max, gap)
-        running_max = max(running_max, right)
-    if best is None or best[1] < region_w * GUTTER_MIN_FRACTION:
-        return None
+    tolerance = int(len(lines) * COVERAGE_TOLERANCE_FRACTION)
+    best: tuple[float, float] | None = None  # (gap_left, gap_width)
+    for a, b in _coverage_valleys(lines, x0, x1, tolerance):
+        width = b - a
+        if width < GUTTER_MIN_WIDTH_PT or not _gutter_spans_height(lines, a, b):
+            continue
+        left_count = sum(1 for ln in lines if ln.bbox[2] <= a)
+        right_count = sum(1 for ln in lines if ln.bbox[0] >= b)
+        if left_count < COLUMN_MIN_LINES or right_count < COLUMN_MIN_LINES:
+            continue
+        # Widest wins; ties break to the smaller left coordinate for determinism.
+        if best is None or width > best[1] or (width == best[1] and a < best[0]):
+            best = (a, width)
     return best
 
 
@@ -132,7 +175,7 @@ def _xy_cut(lines: list[TextLine], bbox: BBox, marginal: list[bool] | None = Non
     gutter = _widest_vertical_gutter(lines, bbox)
     if gutter is not None:
         gap_left, gap_width = gutter
-        if marginal is not None and gap_width < (x1 - x0) * GUTTER_MARGINAL_FRACTION:
+        if marginal is not None and gap_width < GUTTER_MARGINAL_WIDTH_PT:
             marginal.append(True)
         split_x = gap_left + gap_width / 2
         left = [ln for ln in lines if ln.bbox[0] < split_x]

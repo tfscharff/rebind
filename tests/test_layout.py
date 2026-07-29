@@ -35,12 +35,28 @@ def test_two_columns_interleave_by_column():
 
 
 def test_narrow_gap_is_not_a_column():
-    # Two blocks 2pt apart horizontally -- below GUTTER_MIN_FRACTION, must stay one column.
+    # Two blocks 2pt apart horizontally -- below GUTTER_MIN_WIDTH_PT, must stay one column.
     a = [_line(72, 700, 260, 710, "A1"), _line(72, 680, 260, 690, "A2")]
     b = [_line(262, 700, 400, 710, "B1"), _line(262, 680, 400, 690, "B2")]
     region = _xy_cut(a + b, (72, 680, 400, 710))
     placed = _reading_order(region)
     assert {p.column for p in placed} == {0}
+
+
+def test_column_gutter_crossed_by_one_overhang_is_still_found():
+    # A real column boundary is rarely perfectly clear: on the 1905 bulletin a single line
+    # overhangs the gutter on every page. Left column x in [72,250], right in [262,440], but one
+    # left-column line runs long to x=300, straddling the gutter. It must still split into two
+    # columns (the overhang tolerated), not collapse into one scrambled block.
+    left = [_line(72, 700 - i * 20, 250, 710 - i * 20, f"L{i}") for i in range(10)]
+    right = [_line(262, 700 - i * 20, 440, 710 - i * 20, f"R{i}") for i in range(10)]
+    left[3] = _line(72, 640, 300, 650, "L3-long")  # overhangs into the gutter
+    region = _xy_cut(left + right, (72, 500, 440, 710))
+    placed = _reading_order(region)
+    cols = {p.column for p in placed if p.column >= 0}
+    assert cols == {0, 1}, f"overhang collapsed the columns: {cols}"
+    texts = [p.line.text for p in placed]
+    assert texts.index("L0") < texts.index("R0")  # left column read before right
 
 
 def test_full_width_header_isolated_before_columns():
@@ -75,11 +91,11 @@ def test_reading_order_is_input_order_independent():
 
 
 def test_marginal_gutter_is_flagged_multi_column_suspected():
-    # Gutter width 36pt on a 612pt page: above GUTTER_MIN_FRACTION*612=30.6 (so the columns are
-    # reconstructed) but below GUTTER_MARGINAL_FRACTION*612=42.8 (so the cut is marginal and the
-    # reading order is flagged uncertain).
+    # Gutter width 5pt: above GUTTER_MIN_WIDTH_PT (4pt, so the columns are reconstructed) but below
+    # GUTTER_MARGINAL_WIDTH_PT (6pt, so the cut is marginal and the reading order is flagged
+    # uncertain).
     left = [_line(72, 300 + i * 20, 250, 310 + i * 20, f"L{i}") for i in range(5)]
-    right = [_line(286, 300 + i * 20, 480, 310 + i * 20, f"R{i}") for i in range(5)]
+    right = [_line(255, 300 + i * 20, 480, 310 + i * 20, f"R{i}") for i in range(5)]
     page = Page(number=1, width=612, height=792, lines=tuple(left + right), images=())
     profile = build_profile([page])
     layout = order_page(page, profile)
