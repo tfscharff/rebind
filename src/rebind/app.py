@@ -102,9 +102,12 @@ def _run_conversion(job: _Job, source: Path) -> None:
     Everything is caught and turned into an honest job error rather than crashing the worker
     thread silently, so the UI always gets a status it can show the librarian.
     """
-    from .extract import ExtractionError
-    from .pipeline import NoTextLayerError, convert
-    from .ui import build_review
+    # Absolute imports, not relative: when PyInstaller freezes app.py as the __main__ entry
+    # script, a relative import has no parent package and raises ImportError (see /render-smoke,
+    # which uses the same absolute form for the same reason).
+    from rebind.extract import ExtractionError
+    from rebind.pipeline import NoTextLayerError, convert
+    from rebind.ui import build_review
 
     try:
         job.stage = "Recognizing text (scans are read page by page)..."
@@ -134,7 +137,7 @@ def create_app() -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
-        from .ui import index_html
+        from rebind.ui import index_html  # absolute: relative imports fail in the frozen __main__
 
         return index_html()
 
