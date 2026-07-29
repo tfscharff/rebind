@@ -72,6 +72,15 @@ def main(argv: list[str] | None = None) -> int:
             "note: the source already declares a structure tree; it may already be accessible",
             file=sys.stderr,
         )
+    ocr_source_pages = {
+        node.page for node in result.document.nodes if "ocr-source" in node.flags
+    }
+    if ocr_source_pages:
+        print(
+            f"note: {len(ocr_source_pages)} page(s) look like OCR'd scans; their text is "
+            "recognizer output and may contain errors",
+            file=sys.stderr,
+        )
     multi_column_pages = {
         node.page for node in result.document.nodes if "multi-column-suspected" in node.flags
     }

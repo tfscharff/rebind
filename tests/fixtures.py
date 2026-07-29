@@ -54,6 +54,44 @@ def born_digital_pdf(
     return target
 
 
+def pdf_scan_with_ocr_layer(target: Path, *, text: str = "recognized text over a scan") -> Path:
+    """Build a PDF shaped like an OCR'd scan: a page-covering raster image with a text layer drawn
+    on top, the way scanning + OCR tools (and the 1905 bulletin / Chapter 14 samples) produce.
+
+    A 1x1 image scaled by the content-stream matrix to the full MediaBox is the whole "scan"; the
+    text is a real, extractable line above it. WeasyPrint cannot emit this shape, so it is built
+    from raw PDF objects with pikepdf.
+    """
+    escaped = text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+    pdf = pikepdf.Pdf.new()
+    image = pdf.make_stream(bytes([200, 200, 200]))  # one grey pixel, raw DeviceRGB
+    image.Type = Name.XObject
+    image.Subtype = Name.Image
+    image.Width = 1
+    image.Height = 1
+    image.ColorSpace = Name.DeviceRGB
+    image.BitsPerComponent = 8
+    # Draw the image across the whole page, then the OCR text line on top of it.
+    content = (
+        b"q 612 0 0 792 0 0 cm /Im0 Do Q "
+        + f"BT /F1 12 Tf 72 700 Td ({escaped}) Tj ET".encode("latin-1")
+    )
+    page_dict = Dictionary(
+        Type=Name.Page,
+        MediaBox=Array([0, 0, 612, 792]),
+        Resources=Dictionary(
+            XObject=Dictionary(Im0=image),
+            Font=Dictionary(
+                F1=Dictionary(Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica)
+            ),
+        ),
+        Contents=pdf.make_stream(content),
+    )
+    pdf.pages.append(pikepdf.Page(pdf.make_indirect(page_dict)))
+    pdf.save(target)
+    return target
+
+
 def pdf_with_text_in_form_xobject(target: Path, *, text: str = "Text inside a form xobject") -> Path:
     """Build a minimal PDF whose only content is drawn from inside a Form XObject (a PDF
     `/Subtype /Form`, invoked from the page content stream via the `Do` operator) -- the shape
