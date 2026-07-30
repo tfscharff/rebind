@@ -1,6 +1,6 @@
 [project]
 name = "rebind"
-version = "0.0.1"
+version = "0.2.0"
 description = "Accessible PDF reconstruction for damaged library scans"
 readme = "README.md"
 license = { file = "LICENSE" }

@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-__version__ = "0.0.1"
+__version__ = "0.2.0"
 
 
 def _bootstrap_bundled_dll_directory() -> None:

@@ -132,7 +132,7 @@ def _run_conversion(job: _Job, source: Path) -> None:
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Rebind", version="0.0.1")
+    app = FastAPI(title="Rebind", version=rebind.__version__)
     jobs = _JobStore()
 
     @app.get("/", response_class=HTMLResponse)
