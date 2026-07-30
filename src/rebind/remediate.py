@@ -71,29 +71,72 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int) -> tuple[lis
     return lines, used_ocr
 
 
-def _page_image_stream(pdf: pikepdf.Pdf, pil_image) -> pikepdf.Object:
+def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, font: pikepdf.Object, name: str) -> None:
+    resources = page.obj.get("/Resources")
+    if resources is None:
+        resources = pdf.make_indirect(Dictionary())
+        page.obj["/Resources"] = resources
+    fonts = resources.get("/Font")
+    if fonts is None:
+        fonts = Dictionary()
+        resources["/Font"] = fonts
+    fonts[Name("/" + name)] = font
+
+
+def _has_marked_content(page: pikepdf.Page) -> bool:
+    """Whether the page's content already contains marked-content operators.
+
+    Such a page cannot simply be wrapped in an artifact -- tagged content may not live inside an
+    artifact (veraPDF 7.1-2) -- so it is rebuilt from a clean render instead of kept verbatim.
+    """
+    try:
+        for _operands, operator in pikepdf.parse_content_stream(page):
+            if str(operator) in ("BDC", "BMC"):
+                return True
+    except (pikepdf.PdfError, Exception):  # noqa: BLE001 -- unparseable content -> rebuild clean
+        return True
+    return False
+
+
+def _rebuild_page_from_image(pdf: pikepdf.Pdf, page: pikepdf.Page, lines: list[TextLine],
+                             font: pikepdf.Object, source: Path, page_number: int,
+                             width_pt: float, height_pt: float, dpi: int) -> None:
+    """Replace the page's content with a rendered image (artifact) + tagged text -- a clean slate
+    that discards any pre-existing marked content while looking identical (rendered at `dpi`)."""
+    from PIL import Image
+
+    image = render_page_to_image(source, page_number, dpi=dpi)
+    pil = Image.fromarray(image).convert("RGB")
     buffer = io.BytesIO()
-    pil_image.save(buffer, format="JPEG", quality=90)
+    pil.save(buffer, format="JPEG", quality=90)
     image_obj = pdf.make_stream(buffer.getvalue())
     image_obj.Type = Name.XObject
     image_obj.Subtype = Name.Image
-    image_obj.Width = pil_image.width
-    image_obj.Height = pil_image.height
+    image_obj.Width = pil.width
+    image_obj.Height = pil.height
     image_obj.ColorSpace = Name.DeviceRGB
     image_obj.BitsPerComponent = 8
     image_obj.Filter = Name.DCTDecode
-    return image_obj
+    content = (
+        f"/Artifact BMC q {width_pt:.2f} 0 0 {height_pt:.2f} 0 0 cm /Im0 Do Q EMC\n".encode()
+        + _tagged_text_stream(lines, "RebindF")
+    )
+    page.obj.Contents = pdf.make_stream(content)
+    page.obj.Resources = Dictionary(XObject=Dictionary(Im0=image_obj), Font=Dictionary(RebindF=font))
 
 
 def remediate(source: Path, target: Path, *, title: str | None = None, lang: str = "en",
               dpi: int = 300) -> RemediationResult:
-    """Write `target`: the source made accessible, looking like the original."""
-    from PIL import Image
+    """Write `target`: the source made accessible, looking exactly like the original.
 
+    The original pages are kept verbatim (vector text stays crisp, a scan stays a scan) and marked
+    as an artifact; an invisible, tagged text layer is added over them and referenced from a PDF/UA
+    structure tree.
+    """
     source, target = Path(source), Path(target)
     source_pages = list(extract_pages(source))
 
-    pdf = pikepdf.Pdf.new()
+    pdf = pikepdf.open(source)
     engine = OcrEngine()
     ocr_pages: list[int] = []
     empty_pages: list[int] = []
@@ -109,11 +152,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     font = pdf.make_indirect(Dictionary(
         Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
 
-    for struct_parent, src_page in enumerate(source_pages):
-        width_pt, height_pt = src_page.width, src_page.height
-        image = render_page_to_image(source, src_page.number, dpi=dpi)
-        image_obj = _page_image_stream(pdf, Image.fromarray(image).convert("RGB"))
-
+    for struct_parent, (src_page, page) in enumerate(zip(source_pages, pdf.pages)):
         lines, used_ocr = _lines_for(source, src_page, engine, dpi)
         if used_ocr and lines:
             ocr_pages.append(src_page.number)
@@ -121,26 +160,25 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         elif used_ocr:
             empty_pages.append(src_page.number)
 
-        # `/Artifact BMC` (not BDC): a bare artifact marked-content sequence takes only a tag, no
-        # properties dictionary. `BDC` would expect two operands and the sequence would not open,
-        # leaving the image read as untagged content (veraPDF clause 7.1).
-        content = (
-            f"/Artifact BMC q {width_pt:.2f} 0 0 {height_pt:.2f} 0 0 cm /Im0 Do Q EMC\n".encode()
-            + _tagged_text_stream(lines, "RebindF")
-        )
-        page_obj = pdf.make_indirect(Dictionary(
-            Type=Name.Page,
-            MediaBox=Array([0, 0, width_pt, height_pt]),
-            Resources=Dictionary(XObject=Dictionary(Im0=image_obj), Font=Dictionary(RebindF=font)),
-            Contents=pdf.make_stream(content),
-            StructParents=struct_parent,
-            Tabs=Name.S,
-        ))
-        pdf.pages.append(pikepdf.Page(page_obj))
+        if _has_marked_content(page):
+            # Already carries marked content (e.g. a scan with a hidden OCR text layer): rebuild
+            # from a clean render so tagged content is never nested inside an artifact.
+            _rebuild_page_from_image(pdf, page, lines, font, source, src_page.number,
+                                     src_page.width, src_page.height, dpi)
+        else:
+            # Keep the page verbatim (vector text stays crisp): wrap its content as an artifact,
+            # then add the invisible tagged text over it. `/Artifact BMC` is a tag-only
+            # marked-content sequence -- `BDC` needs two operands and would leave content untagged.
+            page.contents_add(pdf.make_stream(b"/Artifact BMC\n"), prepend=True)
+            page.contents_add(pdf.make_stream(b"EMC\n" + _tagged_text_stream(lines, "RebindF")),
+                              prepend=False)
+            _add_font(pdf, page, font, "RebindF")
+        page.obj.StructParents = struct_parent
+        page.obj.Tabs = Name.S
 
         page_elems = [
             pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name.P, P=document_elem, Pg=page_obj, K=mcid))
+                Type=Name.StructElem, S=Name.P, P=document_elem, Pg=page.obj, K=mcid))
             for mcid in range(len(lines))
         ]
         document_elem.K.extend(page_elems)
