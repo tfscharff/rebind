@@ -79,6 +79,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
 header.site{border-bottom:1px solid var(--line);padding:1.4rem 0}
 .brand{display:flex;align-items:baseline;gap:.7rem}
 .brand h1{font-family:var(--serif);font-weight:600;font-size:1.7rem;margin:0;letter-spacing:-.01em}
+.brand .tag{color:var(--muted);font-size:.92rem}
 main{padding:2.4rem 0 4rem}
 /* Drop zone */
 .drop{position:relative;border:1.5px dashed var(--cloth);border-radius:var(--radius);
@@ -144,7 +145,7 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
 </head>
 <body>
 <header class="site"><div class="wrap brand">
-  <h1>Rebind</h1>
+  <h1>Rebind</h1><span class="tag">accessible PDF remediation</span>
 </div></header>
 
 <main class="wrap">
