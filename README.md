@@ -2,14 +2,15 @@
 
 **Accessible PDF remediation for damaged library scans.**
 
-> ⚠️ **Status: alpha.** Both the born-digital and scanned branches work end to end. A scanned or
-> born-digital PDF goes in; a tagged PDF/UA document that veraPDF passes comes out, plus a
-> source-of-truth model. Scanned pages are restored (deskew/denoise) and recognized with on-device
-> OCR (no API key, GPU or network). Layout analysis reconstructs multi-column reading order;
-> suspected tables and other uncertain regions are flagged for review, never silently trusted. A
-> local browser app drives the whole thing, and the double-click Windows installer now builds. Not
-> yet done: full page dewarp, table reconstruction, and tuning against a wider range of real scans.
-> Output is not byte-reproducible (see ADR 0003).
+> ⚠️ **Status: alpha (v0.3.0).** Any PDF — scanned or born-digital, tagged or not — goes in; a tagged
+> PDF/UA document that veraPDF passes (zero failures) comes out, looking exactly like the original.
+> Scanned pages are restored (deskew/denoise) and read with on-device OCR (no API key, GPU or
+> network). The tag tree carries headings (recovered from scans by geometry, not just font size),
+> paragraphs, lists, tables (with header cells scoped to their columns), and figures — images you
+> describe in the app become tagged figures with alt text. A local browser app drives the whole
+> thing, and a double-click Windows installer ships (~82 MB, unsigned). Not yet done: full page
+> dewarp for spine-curved scans, figure/caption association, and tuning against a wider range of
+> real scans. Output is not byte-reproducible (see ADR 0003).
 
 Rebind takes any PDF — a scan or a born-digital file, tagged or not — and produces an accessible
 PDF that **looks exactly like the original**, conforming to WCAG 2.1 AA, so it can still be read,
@@ -32,11 +33,11 @@ that makes a thousand-document backlog impossible.
 
 **Rebind preserves your original page and adds only the accessibility it's missing.**
 
-It does not reconstruct or reflow the document — that can never look like the original. Instead it
-keeps each page exactly as it is (vector text stays crisp; a scan stays a scan), lays an invisible,
-selectable text layer over it — from the page's own text where it has one, or from on-device OCR
-where it doesn't — and builds a real PDF/UA structure tree: reading order, headings, language and
-title. The output looks like the input but validates as **PDF/UA-1** (verified with veraPDF, zero
+It does not rebuild or reflow the page's *appearance* — that can never look like the original. It
+reconstructs the *structure* instead: it keeps each page exactly as it is (vector text stays crisp;
+a scan stays a scan), lays an invisible, selectable text layer over it — from the page's own text
+where it has one, or from on-device OCR where it doesn't — and builds a real PDF/UA structure tree:
+reading order, headings, lists, tables, figures, language and title. The output looks like the input but validates as **PDF/UA-1** (verified with veraPDF, zero
 failures), the standard behind WCAG 2.1 AA for PDFs.
 
 Everything runs on your own machine — no API key, no GPU, no cloud service, no per-document cost.
@@ -54,8 +55,9 @@ Everything runs on your own machine — no API key, no GPU, no cloud service, no
 ## Handles
 
 **This table is the long-term design target, not the current state.** Today Rebind preserves the
-page and adds a selectable text layer + PDF/UA structure (headings, reading order) — see
-[Usage](#usage) below for exactly what works and what does not yet.
+page and builds a PDF/UA tag tree — headings, paragraphs, lists, tables (with header cells), and
+figures you describe in the app — see [Usage](#usage) below for exactly what works and what does
+not yet.
 
 | | |
 |---|---|
