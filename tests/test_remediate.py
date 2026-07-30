@@ -175,6 +175,25 @@ def test_table_is_fully_tagged_with_header_cells(tmp_path: Path):
         assert len(widths) == 1, f"irregular table: rows have {widths} cells"
 
 
+def test_sparse_table_row_is_kept_as_a_row(tmp_path: Path):
+    # A subtotal-style row with an empty middle cell must not fragment the table or vanish: it stays
+    # one table, and the sparse row is a /TR with an empty cell filling the gap.
+    from tests.fixtures import born_digital_pdf_with_sparse_row_table
+    source = born_digital_pdf_with_sparse_row_table(tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        tables = [e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Table"]
+        assert len(tables) == 1, f"table fragmented into {len(tables)}"
+        rows = [tr for tr in tables[0].K if str(tr.get("/S")) == "/TR"]
+        assert len(rows) == 5, f"expected 5 rows (header + 4 data), got {len(rows)}"
+        assert {len(list(tr.K)) for tr in rows} == {3}, "every row should have 3 cells"
+    # The sparse row's values survive and are selectable.
+    text = _selectable_text(out)
+    assert "West" in text and "South" in text
+
+
 def test_tagged_table_is_pdf_ua_compliant(tmp_path: Path, verapdf_exe: Path):
     from rebind.validate import validate_pdf_ua
 

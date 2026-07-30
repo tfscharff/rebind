@@ -199,6 +199,27 @@ def born_digital_pdf_with_table(target: Path) -> Path:
     return born_digital_pdf(html, target, extra_css=css)
 
 
+def born_digital_pdf_with_sparse_row_table(target: Path) -> Path:
+    """A table whose third row is *sparse* (an empty middle cell), the shape of a subtotal row.
+
+    A sparse row has too few side-by-side cells to be detected as a table row on its own, so a naive
+    tagger drops it and fragments the table. It sits between full rows here to prove such internal
+    rows are still accounted for -- kept as a row of the one table, with an empty cell in the gap.
+    """
+    html = (
+        "<table>"
+        "<tr><th>Region</th><th>Sales</th><th>Growth</th></tr>"
+        "<tr><td>North</td><td>120</td><td>8</td></tr>"
+        "<tr><td>West</td><td></td><td>5</td></tr>"
+        "<tr><td>South</td><td>95</td><td>3</td></tr>"
+        "<tr><td>East</td><td>140</td><td>12</td></tr>"
+        "</table>"
+    )
+    css = ("table { width: 90%; border-collapse: collapse; } "
+           "td, th { border: 1px solid #000; padding: 10px 40px; text-align: left; }")
+    return born_digital_pdf(html, target, extra_css=css)
+
+
 def born_digital_pdf_with_image(target: Path) -> Path:
     """A born-digital PDF with a small embedded raster image (a figure)."""
     import base64

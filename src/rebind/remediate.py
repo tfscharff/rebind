@@ -42,6 +42,12 @@ OCR_HEADING_MAX_WIDTH_RATIO = 0.75  # a line filling more than this of the wides
 OCR_HEADING_ISOLATION_RATIO = 0.8   # whitespace above/below is at least this * the body height
 OCR_HEADING_TIER_TOLERANCE = 0.15   # heading heights within this fraction are the same level
 
+# A table spans from its first detected row to its last; lines in between that were not themselves
+# detected as table rows are sparse rows (a subtotal, or a row with an empty cell -- too few
+# side-by-side cells to detect alone) and are kept so no row is dropped. The gap is bounded so prose
+# between two separate tables cannot merge them: at most this many consecutive undetected lines.
+MAX_INTERNAL_TABLE_GAP = 2
+
 
 @dataclass
 class RemediationResult:
@@ -366,13 +372,19 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], page_roles: list[st
     i = 0
     while i < n:
         if is_table[i]:
-            j = i
-            while j < n and is_table[j]:
+            # Extend from the first detected row to the last, absorbing sparse rows in between
+            # (see MAX_INTERNAL_TABLE_GAP) so no row is dropped and the table is not fragmented.
+            last = i
+            j = i + 1
+            # (j - last - 1) is the count of undetected lines since the last detected row.
+            while j < n and (j - last - 1) <= MAX_INTERNAL_TABLE_GAP:
+                if is_table[j]:
+                    last = j
                 j += 1
-            table = _tagged_table(pdf, [(m, lines[m]) for m in range(i, j)],
+            table = _tagged_table(pdf, [(m, lines[m]) for m in range(i, last + 1)],
                                   document_elem, page_obj, leaf)
             tops.append(table)
-            i = j
+            i = last + 1
             continue
 
         if _is_list_item(lines[i].text):
