@@ -239,7 +239,6 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
     var review=s.review, figures=s.figures||[];
     var h='<h2 class="visually-hidden">Result</h2><div class="panel result">'+
       '<h2>Your accessible PDF is ready</h2>'+
-      '<p style="color:var(--muted);margin:.2rem 0 0">'+esc(name)+', made accessible — same document, now readable by assistive technology.</p>'+
       '<div class="downloads">'+
       '<a class="btn primary" href="/jobs/'+id+'/pdf" download>Download PDF</a>'+
       '</div></div>';
