@@ -20,8 +20,10 @@ from pathlib import Path
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
+from .assemble import _is_ocr_over_scan
 from .extract import TextLine, extract_pages
 from .ocr import OcrEngine, recognize, render_page_to_image
+from .profile import build_profile, style_of
 
 
 @dataclass
@@ -83,6 +85,35 @@ def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, font: pikepdf.Object, name: 
     fonts[Name("/" + name)] = font
 
 
+def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
+    """A structure type ('P' or 'H1'..'H6') for each line, per page.
+
+    Headings are detected from the document-global typographic profile -- but only on born-digital
+    text: recognizer output (Rebind's OCR, or a hidden OCR layer over a scan) has noisy font sizes
+    that manufacture spurious headings, so its lines are all paragraphs. Heading levels are then
+    normalized so the sequence starts at H1 and never skips a level, which PDF/UA requires (7.4.2).
+    """
+    raw: list[list[int]] = []   # per page: 0 for paragraph, or the raw heading level (>=1)
+    for src_page, lines, used_ocr in per_page:
+        page_is_ocr = used_ocr or _is_ocr_over_scan(src_page)
+        page_levels: list[int] = []
+        for line in lines:
+            if page_is_ocr or line.ocr_confidence is not None:
+                page_levels.append(0)
+            elif profile.role_of(line, page_height=src_page.height) == "heading":
+                page_levels.append(profile.heading_level(style_of(line)) or 1)
+            else:
+                page_levels.append(0)
+        raw.append(page_levels)
+
+    distinct = sorted({lvl for page in raw for lvl in page if lvl})
+    level_map = {lvl: i + 1 for i, lvl in enumerate(distinct)}   # -> 1,2,3... no skips, start at 1
+    return [
+        [f"H{min(level_map[lvl], 6)}" if lvl else "P" for lvl in page_levels]
+        for page_levels in raw
+    ]
+
+
 def _has_marked_content(page: pikepdf.Page) -> bool:
     """Whether the page's content already contains marked-content operators.
 
@@ -135,13 +166,27 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     """
     source, target = Path(source), Path(target)
     source_pages = list(extract_pages(source))
+    profile = build_profile(source_pages)
 
-    pdf = pikepdf.open(source)
     engine = OcrEngine()
     ocr_pages: list[int] = []
     empty_pages: list[int] = []
     added_layer = False
 
+    # Pass one: recover each page's text lines (from its text layer or OCR) in reading order.
+    per_page: list[tuple] = []
+    for src_page in source_pages:
+        lines, used_ocr = _lines_for(source, src_page, engine, dpi)
+        if used_ocr and lines:
+            ocr_pages.append(src_page.number)
+            added_layer = True
+        elif used_ocr:
+            empty_pages.append(src_page.number)
+        per_page.append((src_page, lines, used_ocr))
+    roles = _structure_roles(per_page, profile)
+
+    # Pass two: build the tagged, appearance-preserving output.
+    pdf = pikepdf.open(source)
     struct_root = pdf.make_indirect(Dictionary(Type=Name.StructTreeRoot))
     document_elem = pdf.make_indirect(
         Dictionary(Type=Name.StructElem, S=Name.Document, P=struct_root, K=Array([]))
@@ -152,14 +197,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     font = pdf.make_indirect(Dictionary(
         Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
 
-    for struct_parent, (src_page, page) in enumerate(zip(source_pages, pdf.pages)):
-        lines, used_ocr = _lines_for(source, src_page, engine, dpi)
-        if used_ocr and lines:
-            ocr_pages.append(src_page.number)
-            added_layer = True
-        elif used_ocr:
-            empty_pages.append(src_page.number)
-
+    for struct_parent, (page, (src_page, lines, used_ocr), page_roles) in enumerate(
+        zip(pdf.pages, per_page, roles)
+    ):
         if _has_marked_content(page):
             # Already carries marked content (e.g. a scan with a hidden OCR text layer): rebuild
             # from a clean render so tagged content is never nested inside an artifact.
@@ -178,7 +218,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
 
         page_elems = [
             pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name.P, P=document_elem, Pg=page.obj, K=mcid))
+                Type=Name.StructElem, S=Name("/" + page_roles[mcid]),
+                P=document_elem, Pg=page.obj, K=mcid))
             for mcid in range(len(lines))
         ]
         document_elem.K.extend(page_elems)

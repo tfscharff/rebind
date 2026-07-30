@@ -79,3 +79,18 @@ def test_remediated_output_is_tagged_and_pdf_ua_compliant(tmp_path: Path, verapd
 
     result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
     assert result.compliant, result.summary()
+
+
+def test_born_digital_headings_are_tagged_as_headings(tmp_path: Path):
+    source = born_digital_pdf(
+        "<h1>Chapter One</h1><p>Body paragraph here.</p><h2>A Section</h2><p>More body.</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        tags = [str(elem.S) for elem in pdf.Root.StructTreeRoot.K[0].K]
+    assert "/H1" in tags and "/H2" in tags and "/P" in tags
+    # A heading must not skip a level: the first heading is H1.
+    headings = [t for t in tags if t.startswith("/H")]
+    assert headings[0] == "/H1"
