@@ -11,9 +11,9 @@
 > yet done: full page dewarp, table reconstruction, and tuning against a wider range of real scans.
 > Output is not byte-reproducible (see ADR 0003).
 
-Rebind takes a badly scanned PDF — skewed, warped, low-contrast, fingers in frame, multi-column with
-sidebars, full of tables and equations — and produces a **new**, born-accessible PDF that conforms to
-WCAG 2.1 AA, with the original pagination preserved so it can still be cited.
+Rebind takes any PDF — a scan or a born-digital file, tagged or not — and produces an accessible
+PDF that **looks exactly like the original**, conforming to WCAG 2.1 AA, so it can still be read,
+cited and printed the way it always was.
 
 It runs entirely on your own machine. No API key, no GPU, no cloud service, no per-document cost.
 
@@ -28,17 +28,18 @@ platforms fall over on scale — one widely used product aborts at 999 structure
 300-page course catalog exceeds without trying. Manual remediation works, but at a cost per document
 that makes a thousand-document backlog impossible.
 
-## How it's different
+## How it works
 
-**Rebind does not remediate the source PDF. It reconstructs the document.**
+**Rebind preserves your original page and adds only the accessibility it's missing.**
 
-The scan is treated as *evidence* of a document rather than as the document itself. Rebind dewarps and
-cleans each page, recognizes the text, analyzes the layout, understands the reading order, and then
-**generates a new document** with real headings, real tables, real alt text, and a real structure tree.
+It does not reconstruct or reflow the document — that can never look like the original. Instead it
+keeps each page exactly as it is (vector text stays crisp; a scan stays a scan), lays an invisible,
+selectable text layer over it — from the page's own text where it has one, or from on-device OCR
+where it doesn't — and builds a real PDF/UA structure tree: reading order, headings, language and
+title. The output looks like the input but validates as **PDF/UA-1** (verified with veraPDF, zero
+failures), the standard behind WCAG 2.1 AA for PDFs.
 
-Because the output is generated rather than patched, much of WCAG 2.1 AA is satisfied by construction —
-including 1.4.5 (Images of Text), which no approach that preserves the scanned page can ever really
-escape.
+Everything runs on your own machine — no API key, no GPU, no cloud service, no per-document cost.
 
 ## Principles
 
@@ -52,8 +53,9 @@ escape.
 
 ## Handles
 
-**This table is the design target, not the current state.** Today only the born-digital branch is
-built — see [Usage](#usage) below for exactly what works and what does not.
+**This table is the long-term design target, not the current state.** Today Rebind preserves the
+page and adds a selectable text layer + PDF/UA structure (headings, reading order) — see
+[Usage](#usage) below for exactly what works and what does not yet.
 
 | | |
 |---|---|
@@ -70,53 +72,34 @@ built — see [Usage](#usage) below for exactly what works and what does not.
 ## Usage
 
 **The app.** Install with the Windows installer (`rebind-setup.exe`, built from `packaging/`) or
-run `rebind serve`, then open the local page it launches. Drop a PDF in, and Rebind rebuilds it as
-a tagged PDF/UA document you can download alongside its model. When anything is uncertain — text it
-could not recognize, a suspected table, an ambiguous column order — it appears in a short review
-queue with the pages to check, rather than being silently trusted. Everything runs on your machine;
+run `rebind serve`, then open the local page it launches. Drop a PDF in and download the accessible
+version. The page it hands back looks exactly like the one you gave it — the original is kept, not
+rebuilt — but its text is now selectable and readable by assistive technology, and it carries a
+PDF/UA structure tree (reading order, headings, language, title). Everything runs on your machine;
 nothing is uploaded.
 
-**The command line.** The same pipeline, scriptable:
+What it does, per page:
+
+- **A page that already has text** (born-digital) is kept verbatim — vector text stays crisp — and
+  its words are tagged with reading order and heading structure.
+- **A scanned page** keeps its image and gets an invisible, selectable OCR text layer laid over it
+  (on-device OCR — RapidOCR on the CPU, models bundled, no API key, GPU or network). The image
+  looks identical; the text is now there for a screen reader.
+- **A page where no text can be recovered** (blank, or an image with no words) is kept as-is and
+  reported, so you know it carries no readable text.
+
+The output validates as **PDF/UA-1** (checked with veraPDF), the standard behind WCAG 2.1 AA for
+PDFs. Headings are recovered from born-digital pages; scanned text stays flat paragraphs (its font
+sizes are OCR noise, and inventing a heading hierarchy from them would be fabrication). Lists,
+tables and figure alt-text are not yet distinguished in the tag tree — a refinement in progress.
+
+**The command line.** The same thing, scriptable:
 
 ```
 rebind convert input.pdf output.pdf
 ```
 
-This writes `output.pdf` and `output.model.json`. The model is the source of truth; the PDF is a
-build artifact regenerable from it.
-
-Recovered structure: headings (levels inferred from a document-wide typographic profile),
-paragraphs, and ordered/unordered lists. Running headers, footers and page numbers are detected
-and excluded from the reading order. Output pages carry the source's sequential page number (page
-1, 2, 3, ...), not the source's own printed pagination — a document with roman-numeral front
-matter or plate numbers does not yet get those labels back. Extracting the document's own printed
-page labels is later work.
-
-Images become placeholders rather than figures — PDF/UA requires alt text on every figure, and
-there is currently no honest way to generate it, so **images are not reproduced in the output**.
-Multi-column pages **are** reconstructed: each page is segmented into columns and blocks and its
-text emitted in correct reading order (left-to-right across columns, top-to-bottom within them). A
-page whose column gutter is only marginal is flagged rather than trusted. **Tables are detected but
-not yet reconstructed.** A grid-shaped region is flagged `table-suspected` so you are warned its
-cell reading order may be wrong, rather than being handed silently scrambled cells; the cell text is
-kept and emitted as paragraphs. Rebuilding the grid into a real table is a later phase.
-
-Some scans arrive as a page image with an invisible OCR text layer already on top (many
-interlibrary-loan deliveries are like this). Rebind detects these, reuses the existing text but
-**marks it as recognizer output** — flagged `ocr-source`, with capped confidence — and reports the
-affected pages, rather than presenting possibly-garbled OCR as a clean transcription. It does not
-yet re-recognize such text or OCR pages that have *no* text layer at all; that is the OCR branch, a
-later phase.
-
-Pages with no text layer are recognized with on-device OCR (RapidOCR, running on the CPU with
-models bundled in the application — no API key, GPU or network). The recognized text carries the
-recognizer's real per-line confidence and is flagged `ocr-source`; anything below the confidence
-floor becomes an honest `[text not recoverable from source scan, p. N]` placeholder rather than a
-guess. A scanned document therefore now converts instead of being refused; only a page where OCR
-recovers nothing at all stays a placeholder.
-
-Set `REBIND_DEBUG=1` to print a full traceback on an unexpected conversion failure, for bug
-reports.
+Set `REBIND_DEBUG=1` to print a full traceback on an unexpected failure, for bug reports.
 
 `rebind serve` starts the local server; this is also what the installed desktop application runs
 on double-click.
