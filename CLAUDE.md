@@ -27,8 +27,9 @@ homework list.
 
 **What the tag tree now contains** (`remediate.py`): headings (`/H1`–`/H6`, level-normalized),
 paragraphs (`/P`), lists (`/L`→`/LI`→`/LBody`, with a bare-marker-merge for renderers that box the
-bullet separately), tables (`/Table`→`/TR`→`/TD`, via `layout.detect_table_lines`), and figures
-(`/Figure` with `/Alt`). Figures default to decorative artifacts (compliant); the app surfaces each
+bullet separately), tables (fully tagged `/Table`→`/TR`→`/TD` via `layout.detect_table_lines`, with
+the top row as header cells `/TH` scoped to their column and empty cells filling gaps so the grid is
+regular — `_tagged_table`), and figures (`/Figure` with `/Alt`). Figures default to decorative artifacts (compliant); the app surfaces each
 with a thumbnail and the user's description promotes it to a tagged `/Figure` (`/jobs/{id}/describe`
 re-runs remediation with `alt_texts`). Born-digital pages are kept **verbatim** (crisp vector);
 only a page that already carries marked content (a scan with a hidden OCR layer) is rebuilt from a
@@ -173,11 +174,16 @@ dense ~0.93) plus a regularity requirement (≥3 rows each spanning ≥3 shared 
 combination that separates a real table from dense multi-column text. Validated on real samples
 (Failure.pdf's Table 7.5, the bulletin's roster) with no false positives on flowing columns.
 
-**OCR heading fabrication is fixed.** OCR gives no reliable type size (a line's "size" is a noisy
-box-height crop — on Failure.pdf a body line OCR'd to 40pt while the real heading was 36pt), so
-`assemble` no longer infers headings from OCR-sourced lines; they become paragraphs. Failure.pdf
-went from 13 fabricated L5/L9/L13 headings to 0. Real OCR heading recovery needs a size+isolation+
-short-line signal — a later slice.
+**OCR heading recovery — done (the size+isolation+short-line signal).** A single OCR line's "size"
+is a noisy box-height crop (on Failure.pdf a body line OCR'd to 40pt while the real heading was
+36pt), so no single signal is trusted. `remediate._ocr_heading_heights` recovers a heading only when
+its line is *markedly taller* than the page's body median **and** *set apart by whitespace* **and**
+*does not fill the column* — the conjunction an over-tall body line (still inside its full-width
+paragraph) cannot produce. Levels come from document-global size tiers (`_height_tiers`), then the
+usual no-skip normalization. Conservative by design: a missed heading stays an honest paragraph, and
+a body-only scan invents none (the old pernambuco/Failure.pdf fabrication is guarded by a test). The
+earlier blanket suppression in `assemble` (which flattened all OCR lines to paragraphs) is
+superseded for the remediation path.
 
 Measured facts to avoid re-chasing: **OCR is ~4s/page once warm**, not 13s — the 13s was the
 one-time RapidOCR model load, amortized across the run since the engine is cached. OCR speed is not

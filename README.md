@@ -90,10 +90,13 @@ What it does, per page:
 
 The output validates as **PDF/UA-1** (checked with veraPDF), the standard behind WCAG 2.1 AA for
 PDFs. The tag tree carries headings, paragraphs, lists and tables. Headings are recovered from
-born-digital pages; scanned text stays flat paragraphs (its font sizes are OCR noise, and inventing
-a heading hierarchy from them would be fabrication). **Figures** get the one thing a machine can't
-supply — a description: images are decorative by default, and the app shows each one so you can type
-what it depicts, which turns it into a described, screen-reader-visible figure.
+born-digital pages by font size, and from scans by geometry — a line is a heading only when it is
+distinctly larger than the body text, set apart by whitespace, and short enough not to fill the
+column, so an over-tall OCR line inside a paragraph is never mistaken for one. **Tables** are fully
+tagged: a regular grid whose top row is header cells scoped to their columns, so a screen reader can
+read each value against its column heading. **Figures** get the one thing a machine can't supply — a
+description: images are decorative by default, and the app shows each one so you can type what it
+depicts, which turns it into a described, screen-reader-visible figure.
 
 **The command line.** The same thing, scriptable:
 
