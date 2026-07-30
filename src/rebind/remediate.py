@@ -14,16 +14,19 @@ never reflowed or restyled.
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
-from .assemble import _is_ocr_over_scan
+from .assemble import _is_ocr_over_scan, _list_item_text
 from .extract import TextLine, extract_pages
+from .layout import detect_table_lines
 from .ocr import OcrEngine, recognize, render_page_to_image
 from .profile import build_profile, style_of
+
+MIN_LIST_ITEMS = 2   # a run of at least this many marked lines becomes a list, not paragraphs
 
 
 @dataclass
@@ -59,6 +62,34 @@ def _tagged_text_stream(lines: list[TextLine], font_name: str) -> bytes:
     return out.getvalue()
 
 
+def _merge_bare_markers(lines: list[TextLine]) -> list[TextLine]:
+    """Merge a lone list-marker line ('•', '-', '1.') into the item text that follows it.
+
+    Some renderers (WeasyPrint's <ul>, Word) draw the bullet in its own text box, so pdfminer
+    yields the marker and its content as separate lines. Merging them (when they sit on the same
+    row) lets the list detector see a real list item rather than a stray marker plus a paragraph.
+    """
+    out: list[TextLine] = []
+    i = 0
+    while i < len(lines):
+        cur = lines[i]
+        item = _list_item_text(cur.text)
+        bare = item is not None and not item[0]
+        if bare and i + 1 < len(lines):
+            nxt = lines[i + 1]
+            same_row = min(cur.bbox[3], nxt.bbox[3]) - max(cur.bbox[1], nxt.bbox[1]) > 0
+            if same_row and nxt.bbox[0] >= cur.bbox[0]:
+                out.append(replace(
+                    nxt, text=f"{cur.text} {nxt.text}",
+                    bbox=(min(cur.bbox[0], nxt.bbox[0]), min(cur.bbox[1], nxt.bbox[1]),
+                          max(cur.bbox[2], nxt.bbox[2]), max(cur.bbox[3], nxt.bbox[3]))))
+                i += 2
+                continue
+        out.append(cur)
+        i += 1
+    return out
+
+
 def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int) -> tuple[list[TextLine], bool]:
     """The page's text lines in reading order, and whether OCR was used."""
     if src_page.has_text_layer:
@@ -70,7 +101,7 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int) -> tuple[lis
                           page_height=src_page.height, engine=engine)
         used_ocr = True
     lines.sort(key=lambda ln: (-ln.bbox[3], ln.bbox[0]))     # reading order: top-to-bottom
-    return lines, used_ocr
+    return _merge_bare_markers(lines), used_ocr
 
 
 def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, font: pikepdf.Object, name: str) -> None:
@@ -112,6 +143,97 @@ def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
         [f"H{min(level_map[lvl], 6)}" if lvl else "P" for lvl in page_levels]
         for page_levels in raw
     ]
+
+
+def _is_list_item(text: str) -> bool:
+    item = _list_item_text(text)
+    return item is not None and bool(item[0])
+
+
+def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextLine]]]:
+    """Group a table's cells (mcid, line) into rows by vertical band, each row sorted left to right."""
+    if not cells:
+        return []
+    heights = sorted(ln.bbox[3] - ln.bbox[1] for _mcid, ln in cells)
+    band = (heights[len(heights) // 2] or 1.0) * 0.6
+    ordered = sorted(cells, key=lambda cl: -((cl[1].bbox[1] + cl[1].bbox[3]) / 2))
+    rows: list[list[tuple[int, TextLine]]] = []
+    current: list[tuple[int, TextLine]] = []
+    current_center: float | None = None
+    for mcid, line in ordered:
+        center = (line.bbox[1] + line.bbox[3]) / 2
+        if current_center is None or current_center - center <= band:
+            current.append((mcid, line))
+            current_center = center if current_center is None else current_center
+        else:
+            rows.append(current)
+            current = [(mcid, line)]
+            current_center = center
+    if current:
+        rows.append(current)
+    return [sorted(row, key=lambda cl: cl[1].bbox[0]) for row in rows]
+
+
+def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], page_roles: list[str],
+                    document_elem: pikepdf.Object, page_obj: pikepdf.Object):
+    """Build the structure elements for one page from its lines, grouping list and table runs.
+
+    Returns (top-level elements to add under the document, owners) where `owners[mcid]` is the leaf
+    element that directly holds that MCID -- what the page's ParentTree entry indexes.
+    """
+    n = len(lines)
+    table_line_ids = detect_table_lines(lines)
+    is_table = [id(line) in table_line_ids for line in lines]
+    owners: list[pikepdf.Object | None] = [None] * n
+    tops: list[pikepdf.Object] = []
+
+    def leaf(mcid: int, structure_type, parent) -> pikepdf.Object:
+        elem = pdf.make_indirect(Dictionary(
+            Type=Name.StructElem, S=structure_type, P=parent, Pg=page_obj, K=mcid))
+        owners[mcid] = elem
+        return elem
+
+    i = 0
+    while i < n:
+        if is_table[i]:
+            j = i
+            while j < n and is_table[j]:
+                j += 1
+            table = pdf.make_indirect(Dictionary(
+                Type=Name.StructElem, S=Name.Table, P=document_elem, K=Array([])))
+            trs = []
+            for row in _table_rows([(m, lines[m]) for m in range(i, j)]):
+                tr = pdf.make_indirect(Dictionary(
+                    Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
+                tr.K = Array([leaf(mcid, Name.TD, tr) for mcid, _line in row])
+                trs.append(tr)
+            table.K = Array(trs)
+            tops.append(table)
+            i = j
+            continue
+
+        if _is_list_item(lines[i].text):
+            j = i
+            while j < n and not is_table[j] and _is_list_item(lines[j].text):
+                j += 1
+            if j - i >= MIN_LIST_ITEMS:
+                lst = pdf.make_indirect(Dictionary(
+                    Type=Name.StructElem, S=Name.L, P=document_elem, K=Array([])))
+                lis = []
+                for mcid in range(i, j):
+                    li = pdf.make_indirect(Dictionary(
+                        Type=Name.StructElem, S=Name.LI, P=lst, K=Array([])))
+                    li.K = Array([leaf(mcid, Name.LBody, li)])
+                    lis.append(li)
+                lst.K = Array(lis)
+                tops.append(lst)
+                i = j
+                continue
+
+        tops.append(leaf(i, Name("/" + page_roles[i]), document_elem))
+        i += 1
+
+    return tops, owners
 
 
 def _has_marked_content(page: pikepdf.Page) -> bool:
@@ -216,15 +338,10 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         page.obj.StructParents = struct_parent
         page.obj.Tabs = Name.S
 
-        page_elems = [
-            pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name("/" + page_roles[mcid]),
-                P=document_elem, Pg=page.obj, K=mcid))
-            for mcid in range(len(lines))
-        ]
-        document_elem.K.extend(page_elems)
+        tops, owners = _page_structure(pdf, lines, page_roles, document_elem, page.obj)
+        document_elem.K.extend(tops)
         parent_tree_nums.append(struct_parent)
-        parent_tree_nums.append(pdf.make_indirect(Array(page_elems)))
+        parent_tree_nums.append(pdf.make_indirect(Array(owners)))
 
     struct_root.ParentTree = pdf.make_indirect(Dictionary(Nums=parent_tree_nums))
     struct_root.ParentTreeNextKey = len(source_pages)
