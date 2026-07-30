@@ -63,3 +63,19 @@ def test_output_page_count_matches_source(tmp_path: Path):
     result = remediate(source, out)
     with pikepdf.open(source) as a, pikepdf.open(out) as b:
         assert len(b.pages) == len(a.pages) == result.page_count
+
+
+def test_remediated_output_is_tagged_and_pdf_ua_compliant(tmp_path: Path, verapdf_exe: Path):
+    """The whole point: the output is a real PDF/UA document, not just a PDF with text on it."""
+    from rebind.validate import validate_pdf_ua
+
+    source = born_digital_pdf("<h1>Title</h1><p>A paragraph of body text.</p>", tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="A Title")
+
+    with pikepdf.open(out) as pdf:
+        assert "/StructTreeRoot" in pdf.Root
+        assert bool(pdf.Root.MarkInfo.Marked)
+
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()

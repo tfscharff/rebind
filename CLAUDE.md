@@ -7,13 +7,29 @@ at its 999-structure-element limit).
 
 ## The thesis — do not lose this
 
-Rebind does **not** remediate the source PDF. It treats the scan as *evidence* and generates a new
-born-accessible document: dewarp → OCR → layout → semantic document model → tagged PDF/UA. Because
-the output is generated rather than patched, most of WCAG 2.1 AA is satisfied by construction —
-including 1.4.5 Images of Text, which no facsimile approach can escape.
+**Rebind remediates the source PDF in place. It preserves the original page exactly and adds only
+the accessibility it is missing.** (This reverses the original "reconstruct from scratch" thesis,
+which Thomas rejected 2026-07-30: reconstruction reflowed a centered scanned title page into a
+left-justified wall of text — it can never look like the original. See `src/rebind/remediate.py`.)
 
-The PDF is a **build artifact**. The document model is the source of truth. Human corrections are a
-diff layer over the model, so reprocessing with an improved pipeline never discards human work.
+The pipeline: render each page to an image (marked as an artifact — the picture), lay an
+*invisible*, *tagged* OCR/existing-text layer over it (render mode 3), and build a PDF/UA structure
+tree with reading order, language and title. The output looks like the input (a scan stays visually
+identical) but validates as **PDF/UA-1** (veraPDF, 0 failures) — the standard behind WCAG 2.1 AA for
+PDFs. Text comes from the page's own text layer where it has one, or from OCR where it does not, so
+a document is never re-recognized unnecessarily.
+
+Goal, in Thomas's words: *create a WCAG 2.1 AA accessible PDF from any uploaded PDF as quickly and
+accurately as possible, looking as close to the original as possible, intervening only where
+necessary.* No JSON is exposed to the user; the app either fixes issues or (later) lets the user fix
+them in-app — never a passive "here's what's wrong" homework list.
+
+**Known limitation to refine:** remediation currently rasterizes *every* page at 300 DPI, which is
+lossless for scans but softens a born-digital PDF's vector text (and is technically images-of-text,
+a 1.4.5 concern). Preserving vector text for born-digital pages (tag in place, no raster) is the
+next refinement. The old reconstruction pipeline (`extract`/`profile`/`layout`/`assemble`/`emit`/
+`pipeline.convert` and their tests) still exists but is unused by the entry points — a later
+cleanup.
 
 ## Invariants — reject changes that violate these
 
