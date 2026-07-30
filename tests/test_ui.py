@@ -1,7 +1,8 @@
-"""Tests for the browser UI: the review-queue summary and the HTTP flow."""
+"""Tests for the browser UI: the review summary and the HTTP flow."""
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -11,56 +12,24 @@ from rebind.ui import build_review
 from tests.fixtures import born_digital_pdf
 
 
-def _doc_with(*flag_sets):
-    """A tiny stand-in document object exposing `.nodes` and the fields build_review reads."""
-    from rebind.model import Document, Paragraph, node_id
-
-    nodes = []
-    for page, flags in flag_sets:
-        nodes.append(
-            Paragraph(id=node_id(page=page, bbox=(0, 0, 1, 1), page_width=1, page_height=1,
-                                 text=f"n{page}"),
-                      page=page, bbox=(0.0, 0.0, 1.0, 1.0), confidence=1.0, stage="assemble",
-                      flags=list(flags), text="x")
-        )
-    return Document(title="T", lang="en", nodes=nodes)
+def test_build_review_reports_what_happened():
+    r = build_review(page_count=10, ocr_pages=(3, 4), empty_pages=())
+    assert "10 pages" in r["summary"]
+    assert "2 scanned" in r["summary"]
+    assert r["items"] == [] and r["clean"] is True
 
 
-def test_build_review_groups_flags_by_kind_with_pages():
-    doc = _doc_with(
-        (1, ["ocr-source"]),
-        (1, ["ocr-source", "table-suspected"]),
-        (2, ["multi-column-suspected"]),
-        (3, []),
-    )
-    review = build_review(doc, scanned_pages=(), source_was_tagged=False)
-
-    kinds = {item["kind"]: item for item in review["items"]}
-    assert "ocr-source" in kinds
-    assert kinds["ocr-source"]["pages"] == [1]
-    assert "table-suspected" in kinds
-    assert kinds["table-suspected"]["pages"] == [1]
-    assert kinds["multi-column-suspected"]["pages"] == [2]
-    # Every item carries a human title and a plain-language detail, and a severity.
-    for item in review["items"]:
-        assert item["title"] and item["detail"]
-        assert item["severity"] in {"info", "attention"}
+def test_build_review_clean_document_says_nothing_needed_recognizing():
+    r = build_review(page_count=5, ocr_pages=(), empty_pages=())
+    assert "already had text" in r["summary"]
+    assert r["clean"] is True
 
 
-def test_build_review_reports_scanned_and_unrecoverable():
-    doc = _doc_with((5, ["ocr-source", "text-unrecoverable"]))
-    review = build_review(doc, scanned_pages=(9,), source_was_tagged=True)
-    kinds = {item["kind"] for item in review["items"]}
-    assert "no-text-layer" in kinds       # scanned_pages surfaced
-    assert "text-unrecoverable" in kinds
-    assert "already-tagged" in kinds       # source_was_tagged surfaced
-
-
-def test_build_review_clean_document_has_no_items():
-    doc = _doc_with((1, []), (2, []))
-    review = build_review(doc, scanned_pages=(), source_was_tagged=False)
-    assert review["items"] == []
-    assert review["clean"] is True
+def test_build_review_flags_empty_pages():
+    r = build_review(page_count=6, ocr_pages=(1,), empty_pages=(5, 6))
+    assert r["clean"] is False
+    item = r["items"][0]
+    assert item["kind"] == "no-text" and item["pages"] == [5, 6]
 
 
 def test_index_page_serves_accessible_html():
@@ -69,8 +38,8 @@ def test_index_page_serves_accessible_html():
     assert "<!doctype html>" in body.lower()
     assert "<main" in body and 'lang="en"' in body
     assert "Rebind" in body
-    # A self-contained favicon (inline data URI) so the browser tab is identifiable offline.
     assert 'rel="icon"' in body and "data:image/png;base64," in body
+    assert "model" not in body.lower() or "/model" not in body  # JSON download is gone
 
 
 def test_convert_flow_end_to_end(tmp_path: Path):
@@ -82,9 +51,7 @@ def test_convert_flow_end_to_end(tmp_path: Path):
     assert resp.status_code == 200
     job_id = resp.json()["job_id"]
 
-    # The job runs in a background thread; poll until it finishes.
-    import time
-    for _ in range(60):
+    for _ in range(80):
         status = client.get(f"/jobs/{job_id}").json()
         if status["status"] in {"done", "error"}:
             break
@@ -95,6 +62,6 @@ def test_convert_flow_end_to_end(tmp_path: Path):
     pdf_resp = client.get(f"/jobs/{job_id}/pdf")
     assert pdf_resp.status_code == 200
     assert pdf_resp.content[:5] == b"%PDF-"
-    model_resp = client.get(f"/jobs/{job_id}/model")
-    assert model_resp.status_code == 200
-    assert b'"nodes"' in model_resp.content
+
+    # The JSON model download no longer exists.
+    assert client.get(f"/jobs/{job_id}/model").status_code == 404

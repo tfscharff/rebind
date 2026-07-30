@@ -75,7 +75,6 @@ class _Job:
     started: float = field(default_factory=time.monotonic)
     workdir: Path | None = None
     pdf_path: Path | None = None
-    model_path: Path | None = None
     review: dict | None = None
     error: str | None = None
 
@@ -106,29 +105,25 @@ def _run_conversion(job: _Job, source: Path) -> None:
     # script, a relative import has no parent package and raises ImportError (see /render-smoke,
     # which uses the same absolute form for the same reason).
     from rebind.extract import ExtractionError
-    from rebind.pipeline import NoTextLayerError, convert
+    from rebind.remediate import remediate
     from rebind.ui import build_review
 
     try:
-        job.stage = "Recognizing text (scans are read page by page)..."
-        target = job.workdir / (Path(job.filename).stem + ".rebound.pdf")
-        result = convert(source, target, title=Path(job.filename).stem)
+        job.stage = "Making it accessible (scanned pages are read page by page)..."
+        stem = Path(job.filename).stem
+        result = remediate(source, job.workdir / (stem + ".accessible.pdf"), title=stem)
         job.pdf_path = result.pdf_path
-        job.model_path = result.model_path
         job.review = build_review(
-            result.document, scanned_pages=result.scanned_pages,
-            source_was_tagged=result.source_was_tagged,
+            page_count=result.page_count, ocr_pages=result.ocr_pages,
+            empty_pages=result.empty_pages,
         )
         job.status = "done"
-    except NoTextLayerError as exc:
-        job.status = "error"
-        job.error = str(exc)
     except ExtractionError as exc:
         job.status = "error"
         job.error = str(exc)
     except Exception as exc:  # noqa: BLE001 -- surface any failure honestly, never hang the job
         job.status = "error"
-        job.error = f"Rebind could not convert this document: {exc}"
+        job.error = f"Rebind could not process this document: {exc}"
 
 
 def create_app() -> FastAPI:
@@ -174,15 +169,7 @@ def create_app() -> FastAPI:
         if job is None or job.pdf_path is None or not job.pdf_path.exists():
             return JSONResponse({"error": "That result is not ready."}, status_code=404)
         return FileResponse(job.pdf_path, media_type="application/pdf",
-                            filename=Path(job.filename).stem + ".rebound.pdf")
-
-    @app.get("/jobs/{job_id}/model")
-    def job_model(job_id: str):
-        job = jobs.get(job_id)
-        if job is None or job.model_path is None or not job.model_path.exists():
-            return JSONResponse({"error": "That model is not ready."}, status_code=404)
-        return FileResponse(job.model_path, media_type="application/json",
-                            filename=Path(job.filename).stem + ".model.json")
+                            filename=Path(job.filename).stem + ".accessible.pdf")
 
     @app.get("/health")
     def health() -> dict:

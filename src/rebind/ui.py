@@ -9,91 +9,37 @@ requests) so it works offline and needs nothing extra bundled into the frozen bu
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 
-from .model import Document
+def build_review(*, page_count: int, ocr_pages: tuple[int, ...],
+                 empty_pages: tuple[int, ...]) -> dict:
+    """A short, honest account of what remediation did and what -- if anything -- needs a human.
 
-# Each reviewable condition: the flag (or synthetic key) it comes from, a librarian-facing title,
-# a plain-language explanation of what to check, and a severity. `attention` means a human should
-# look; `info` is a heads-up that does not imply an error.
-
-
-@dataclass(frozen=True)
-class _Condition:
-    key: str
-    title: str
-    detail: str
-    severity: str
-
-
-_FLAG_CONDITIONS: tuple[_Condition, ...] = (
-    _Condition("text-unrecoverable", "Text that could not be read",
-               "The scan was too degraded to recognize here. Rebind left an honest placeholder "
-               "rather than guess. Check these against the original.", "attention"),
-    _Condition("table-suspected", "Possible tables",
-               "These pages look like they contain a table. Rebind keeps the cell text but does "
-               "not rebuild the grid yet, so cells may read in the wrong order.", "attention"),
-    _Condition("multi-column-suspected", "Uncertain column order",
-               "The column layout on these pages was ambiguous, so the reading order may be "
-               "wrong. Worth a quick check.", "attention"),
-    _Condition("ocr-source", "Text recognized from a scan",
-               "These pages had no digital text, so the words were recognized from the image and "
-               "may contain recognition errors.", "info"),
-    _Condition("degraded-region", "Low-confidence text",
-               "The recognizer was unsure about these regions. The text is included but flagged "
-               "for review.", "info"),
-    _Condition("heading-level-collapsed", "Deep heading levels merged",
-               "The document has more heading levels than a tagged PDF allows, so the deepest "
-               "were merged. The full structure is kept in the model.", "info"),
-)
-
-# Synthetic conditions not carried on nodes as a body flag.
-_SCANNED = _Condition("no-text-layer", "Pages with no recoverable text",
-                      "These pages had no text layer and could not be recognized -- they may be "
-                      "blank, or images with no readable text.", "attention")
-_ALREADY_TAGGED = _Condition("already-tagged", "Source was already tagged",
-                             "The original already declares an accessibility structure. Rebind "
-                             "rebuilt it anyway; you may not need to.", "info")
-
-
-def _pages_for(document: Document, flag: str) -> list[int]:
-    return sorted({node.page for node in document.nodes if flag in node.flags})
-
-
-def build_review(document: Document, *, scanned_pages: tuple[int, ...],
-                 source_was_tagged: bool) -> dict:
-    """A grouped, human-facing summary of what a reviewer should check.
-
-    Returns `{"items": [...], "clean": bool}` where each item is
-    `{kind, title, detail, severity, count, pages}` sorted attention-first.
+    Remediation preserves the original and only adds accessibility, so there is little to review.
+    We report a one-line summary of what happened, and flag only genuine problems (pages where no
+    text could be recovered at all). Returns `{summary, items, clean}` where each item is
+    `{kind, title, detail, pages}`.
     """
+    scanned = len(ocr_pages)
+    if scanned and empty_pages:
+        summary = (f"{page_count} pages. Text was recognized on {scanned} scanned "
+                   f"page{'s' if scanned != 1 else ''}.")
+    elif scanned:
+        summary = (f"{page_count} pages. {scanned} scanned page"
+                   f"{'s were' if scanned != 1 else ' was'} recognized; the rest already had text.")
+    else:
+        summary = f"{page_count} pages. The document already had text; nothing needed recognizing."
+
     items: list[dict] = []
-
-    for condition in _FLAG_CONDITIONS:
-        pages = _pages_for(document, condition.key)
-        if pages:
-            items.append({
-                "kind": condition.key, "title": condition.title, "detail": condition.detail,
-                "severity": condition.severity, "count": len(pages), "pages": pages,
-            })
-
-    if scanned_pages:
-        pages = sorted(scanned_pages)
+    if empty_pages:
         items.append({
-            "kind": _SCANNED.key, "title": _SCANNED.title, "detail": _SCANNED.detail,
-            "severity": _SCANNED.severity, "count": len(pages), "pages": pages,
+            "kind": "no-text",
+            "title": "Pages with no readable text",
+            "detail": ("These pages are images that no text could be recovered from -- they may be "
+                       "blank, or photos/figures with no words. They are kept exactly as they were, "
+                       "but they carry no readable text."),
+            "pages": sorted(empty_pages),
         })
-
-    if source_was_tagged:
-        items.append({
-            "kind": _ALREADY_TAGGED.key, "title": _ALREADY_TAGGED.title,
-            "detail": _ALREADY_TAGGED.detail, "severity": _ALREADY_TAGGED.severity,
-            "count": 0, "pages": [],
-        })
-
-    # Attention before info; then by descending count so the biggest issues lead.
-    items.sort(key=lambda item: (0 if item["severity"] == "attention" else 1, -item["count"]))
-    return {"items": items, "clean": not items}
+    return {"summary": summary, "items": items, "clean": not items}
 
 
 def index_html() -> str:
@@ -196,7 +142,7 @@ footer{border-top:1px solid var(--line);color:var(--muted);font-size:.82rem;padd
 </div></header>
 
 <main class="wrap">
-  <p class="lede">Hand over a broken scan. Get back a document that was <em>rebuilt</em> to be accessible — and an honest list of anything worth a second look.</p>
+  <p class="lede">Drop in any PDF. Get back the <em>same document</em>, made accessible — its words readable by assistive technology, its structure and language set — without changing how it looks.</p>
 
   <section id="intake" aria-labelledby="intake-h">
     <h2 id="intake-h" class="visually-hidden">Choose a PDF</h2>
@@ -215,7 +161,7 @@ footer{border-top:1px solid var(--line);color:var(--muted);font-size:.82rem;padd
   <section id="work" hidden aria-labelledby="work-h"></section>
 </main>
 
-<footer class="wrap">Rebind builds a new document from the scan rather than patching it, so accessibility is true by construction. The model beside your PDF is the source of truth.</footer>
+<footer class="wrap">Rebind preserves your original page for page and adds only what accessibility needs. Everything runs on this computer; nothing is uploaded.</footer>
 
 <script>
 (function(){
@@ -291,13 +237,12 @@ footer{border-top:1px solid var(--line);color:var(--muted);font-size:.82rem;padd
     if(elapsedTimer) clearInterval(elapsedTimer);
     var h='<h2 class="visually-hidden">Result</h2><div class="panel result">'+
       '<h2>Your accessible PDF is ready</h2>'+
-      '<p style="color:var(--muted);margin:.2rem 0 0">Rebuilt from '+esc(name)+'.</p>'+
+      '<p style="color:var(--muted);margin:.2rem 0 0">'+esc(name)+', made accessible — same document, now readable by assistive technology.</p>'+
       '<div class="downloads">'+
       '<a class="btn primary" href="/jobs/'+id+'/pdf" download>Download PDF</a>'+
-      '<a class="btn ghost" href="/jobs/'+id+'/model" download>Download model (JSON)</a>'+
       '</div></div>';
     h+=renderQueue(review);
-    h+='<a class="reset" href="/">Rebuild another document</a>';
+    h+='<a class="reset" href="/">Do another document</a>';
     work.innerHTML=h;
     var items=(review&&review.items)||[];
     say(items.length? ('Done. '+items.length+' thing'+(items.length>1?'s':'')+' to review.') : 'Done. Nothing flagged for review.');
@@ -308,23 +253,21 @@ footer{border-top:1px solid var(--line);color:var(--muted);font-size:.82rem;padd
 
   function renderQueue(review){
     if(!review) return '';
+    var out='<div class="panel queue">';
+    if(review.summary){ out+='<p class="sub" style="margin:0">'+esc(review.summary)+'</p>'; }
     if(review.clean){
-      return '<div class="panel queue"><div class="clean">'+
-        '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 6L9 17l-5-5"/></svg>'+
-        'Nothing needed a human — the whole document converted cleanly.</div></div>';
+      out+='</div>';
+      return out;
     }
-    var out='<section class="panel queue" aria-labelledby="queue-h">'+
-      '<h2 id="queue-h">Worth a look</h2>'+
-      '<p class="sub">Rebind surfaces only what it could not be certain about. The text is all there; these are the spots to check against the original.</p>'+
+    out+='<h2 id="queue-h" style="margin-top:.9rem">Needs a look</h2>'+
       '<ul class="conditions">';
     review.items.forEach(function(it){
       var pages = it.pages && it.pages.length ? '<p class="pages"><b>pages</b> '+it.pages.join(', ')+'</p>' : '';
-      out+='<li class="cond '+esc(it.severity)+'">'+
-        '<div class="top"><span class="title">'+esc(it.title)+'</span>'+
-        '<span class="badge">'+(it.count?esc(it.count)+' page'+(it.count>1?'s':''):esc(it.severity))+'</span></div>'+
+      out+='<li class="cond attention">'+
+        '<div class="top"><span class="title">'+esc(it.title)+'</span></div>'+
         '<p class="detail">'+esc(it.detail)+'</p>'+pages+'</li>';
     });
-    out+='</ul></section>';
+    out+='</ul></div>';
     return out;
   }
 

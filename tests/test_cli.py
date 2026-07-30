@@ -3,10 +3,10 @@ from pathlib import Path
 import pikepdf
 
 from rebind.cli import main
-from tests.fixtures import born_digital_pdf, pdf_scan_with_ocr_layer
+from tests.fixtures import born_digital_pdf
 
 
-def test_convert_subcommand_writes_a_pdf(tmp_path: Path):
+def test_convert_writes_an_accessible_pdf(tmp_path: Path):
     source = born_digital_pdf("<h1>T</h1><p>body</p>", tmp_path / "in.pdf")
     target = tmp_path / "out.pdf"
 
@@ -16,18 +16,34 @@ def test_convert_subcommand_writes_a_pdf(tmp_path: Path):
     assert target.exists()
     with pikepdf.open(target) as pdf:
         assert len(pdf.pages) >= 1
+        assert bool(pdf.Root.MarkInfo.Marked)      # tagged flag set
+        assert str(pdf.Root.Lang) == "en"          # language set
 
 
-def test_convert_reports_a_scanned_source_without_a_traceback(tmp_path: Path, capsys):
-    target = tmp_path / "scan.pdf"
+def test_born_digital_source_is_left_with_its_text(tmp_path: Path, capsys):
+    # A PDF that already has text needs no recognition; nothing is flagged.
+    source = born_digital_pdf("<h1>Doc</h1><p>Already has real text.</p>", tmp_path / "in.pdf")
+
+    code = main(["convert", str(source), str(tmp_path / "out.pdf")])
+
+    assert code == 0
+    err = capsys.readouterr().err.lower()
+    assert "recogniz" not in err and "no readable text" not in err
+
+
+def test_blank_image_page_is_reported_not_refused(tmp_path: Path, capsys):
+    # A page with no text is no longer refused: remediation tries OCR and, when nothing is
+    # recovered, keeps the page and reports it honestly.
+    target = tmp_path / "blank.pdf"
     pdf = pikepdf.new()
     pdf.add_blank_page(page_size=(612, 792))
     pdf.save(target)
 
     code = main(["convert", str(target), str(tmp_path / "out.pdf")])
 
-    assert code == 1
-    assert "scanned" in capsys.readouterr().err.lower()
+    assert code == 0
+    assert "no readable text" in capsys.readouterr().err.lower()
+    assert (tmp_path / "out.pdf").exists()
 
 
 def test_missing_source_is_reported_cleanly(tmp_path: Path, capsys):
@@ -37,57 +53,13 @@ def test_missing_source_is_reported_cleanly(tmp_path: Path, capsys):
     assert "nope.pdf" in capsys.readouterr().err
 
 
-def test_convert_does_not_nag_about_cleanly_reconstructed_columns(tmp_path: Path, capsys):
-    # A clean, wide two-column gutter is now reconstructed into correct reading order, so the
-    # librarian is NOT warned -- the multi-column note is reserved for marginal gutters where the
-    # reconstructed order is genuinely uncertain (exercised at the unit level in test_layout).
-    source = born_digital_pdf(
-        "<h1>Doc</h1><div style='column-count:2'>"
-        + "".join(f"<p>Paragraph {i} of the column test.</p>" for i in range(40))
-        + "</div>",
-        tmp_path / "in.pdf",
-    )
-
-    code = main(["convert", str(source), str(tmp_path / "out.pdf")])
-
-    assert code == 0
-    assert "multi-column" not in capsys.readouterr().err.lower()
-
-
-def test_convert_reports_ocr_scanned_pages_to_the_librarian(tmp_path: Path, capsys):
-    # A page-covering scan image with a text layer on top is an OCR'd scan: the librarian must be
-    # told the text is recognizer output, not a clean born-digital transcription.
-    source = pdf_scan_with_ocr_layer(tmp_path / "scan.pdf", text="recognized text")
-
-    code = main(["convert", str(source), str(tmp_path / "out.pdf")])
-
-    assert code == 0
-    err = capsys.readouterr().err.lower()
-    assert "ocr" in err and "recognizer output" in err
-
-
-def test_convert_does_not_report_multi_column_for_a_clean_single_column_source(
-    tmp_path: Path, capsys
-):
-    source = born_digital_pdf(
-        "<h1>Doc</h1>"
-        + "".join(f"<p>Paragraph {i} of the single column test.</p>" for i in range(40)),
-        tmp_path / "in.pdf",
-    )
-
-    code = main(["convert", str(source), str(tmp_path / "out.pdf")])
-
-    assert code == 0
-    assert "multi-column" not in capsys.readouterr().err.lower()
-
-
 def test_unexpected_exception_is_reported_not_raised(tmp_path: Path, capsys, monkeypatch):
     source = born_digital_pdf("<h1>T</h1><p>body</p>", tmp_path / "in.pdf")
 
     def boom(*args, **kwargs):
         raise ValueError("boom")
 
-    monkeypatch.setattr("rebind.cli.convert", boom)
+    monkeypatch.setattr("rebind.cli.remediate", boom)
 
     code = main(["convert", str(source), str(tmp_path / "out.pdf")])
 
@@ -95,21 +67,3 @@ def test_unexpected_exception_is_reported_not_raised(tmp_path: Path, capsys, mon
     assert code == 1
     assert str(source) in err
     assert "boom" in err
-
-
-def test_convert_reports_a_suspected_table(tmp_path: Path, capsys):
-    # A full-width table renders as a grid of short cells with wide inter-column gaps (as a real
-    # scanned table does); Rebind should detect and warn. A tightly-packed table gets merged into
-    # one line per row by pdfminer and is out of scope for geometric detection.
-    cells = "".join(
-        "<tr>" + "".join(f"<td>r{r}c{c}</td>" for c in range(3)) + "</tr>"
-        for r in range(4)
-    )
-    html = (f"<h1>Doc</h1><table style='width:100%;table-layout:fixed'>{cells}</table>"
-            "<p>Following prose paragraph.</p>")
-    source = born_digital_pdf(html, tmp_path / "in.pdf")
-
-    code = main(["convert", str(source), str(tmp_path / "out.pdf")])
-
-    assert code == 0
-    assert "table" in capsys.readouterr().err.lower()
