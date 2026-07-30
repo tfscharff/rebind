@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from rebind.app import create_app
 from rebind.ui import build_review

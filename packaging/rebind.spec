@@ -18,7 +18,7 @@ from PyInstaller.utils.hooks import collect_all
 
 datas, binaries, hiddenimports = [], [], []
 for package in (
-    "pikepdf", "fastapi", "uvicorn",
+    "pikepdf", "starlette", "uvicorn",
     "rapidocr_onnxruntime", "onnxruntime", "cv2", "pypdfium2",
 ):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)

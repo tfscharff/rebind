@@ -1,4 +1,4 @@
-from fastapi.testclient import TestClient
+from starlette.testclient import TestClient
 
 from rebind.app import create_app
 

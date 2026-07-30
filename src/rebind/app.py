@@ -17,13 +17,13 @@ from pathlib import Path
 
 # Explicit, even though other imports below would eventually pull `rebind` in transitively:
 # when PyInstaller freezes this file as its Analysis entry script, it is executed directly as
-# `__main__`, not reached via `import rebind.app` -- so nothing guarantees this package's
-# `__init__.py` (which registers the bundled GTK3 DLL directory before WeasyPrint is ever
-# imported) has already run, unless something in this module says so explicitly.
+# `__main__`, not reached via `import rebind.app`.
 import rebind  # noqa: F401
 
-from fastapi import FastAPI, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.routing import Route
 
 HOST = "127.0.0.1"
 PORT = 8756
@@ -97,23 +97,23 @@ def _run_conversion(job: _Job, source: Path) -> None:
         job.error = f"Rebind could not process this document: {exc}"
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="Rebind", version=rebind.__version__)
+def create_app() -> Starlette:
+    """The Rebind ASGI app. Starlette (not FastAPI): the routes take raw bodies and return plain
+    dicts, so FastAPI's pydantic layer bought nothing and only added weight to the bundle."""
     jobs = _JobStore()
 
-    @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
+    async def index(request: Request) -> HTMLResponse:
         from rebind.ui import index_html  # absolute: relative imports fail in the frozen __main__
 
-        return index_html()
+        return HTMLResponse(index_html())
 
-    @app.post("/convert")
-    async def convert_endpoint(request: Request, filename: str = "document.pdf") -> JSONResponse:
+    async def convert_endpoint(request: Request) -> JSONResponse:
         """Accept the PDF as the raw request body (no multipart dependency) and start a job."""
         data = await request.body()
         if not data:
             return JSONResponse({"error": "No file was received. Choose a PDF and try again."},
                                 status_code=400)
+        filename = request.query_params.get("filename", "document.pdf")
         job = jobs.create(filename=filename)
         job.workdir = Path(tempfile.mkdtemp(prefix="rebind-job-"))
         source = job.workdir / "source.pdf"
@@ -122,9 +122,8 @@ def create_app() -> FastAPI:
         threading.Thread(target=_run_conversion, args=(job, source), daemon=True).start()
         return JSONResponse({"job_id": job.id})
 
-    @app.get("/jobs/{job_id}")
-    def job_status(job_id: str) -> JSONResponse:
-        job = jobs.get(job_id)
+    async def job_status(request: Request) -> JSONResponse:
+        job = jobs.get(request.path_params["job_id"])
         if job is None:
             return JSONResponse({"error": "No such job."}, status_code=404)
         body: dict = {"status": job.status, "stage": job.stage,
@@ -136,11 +135,10 @@ def create_app() -> FastAPI:
             body["error"] = job.error
         return JSONResponse(body)
 
-    @app.post("/jobs/{job_id}/describe")
-    async def job_describe(job_id: str, request: Request) -> JSONResponse:
+    async def job_describe(request: Request) -> JSONResponse:
         """Accept {alts: {figure_id: description}} and re-run remediation so each described figure
         becomes a tagged /Figure with that alt text."""
-        job = jobs.get(job_id)
+        job = jobs.get(request.path_params["job_id"])
         if job is None or job.source_path is None:
             return JSONResponse({"error": "No such job."}, status_code=404)
         payload = await request.json()
@@ -155,28 +153,23 @@ def create_app() -> FastAPI:
         threading.Thread(target=_run_conversion, args=(job, job.source_path), daemon=True).start()
         return JSONResponse({"job_id": job.id})
 
-    @app.get("/jobs/{job_id}/pdf")
-    def job_pdf(job_id: str):
-        job = jobs.get(job_id)
+    async def job_pdf(request: Request):
+        job = jobs.get(request.path_params["job_id"])
         if job is None or job.pdf_path is None or not job.pdf_path.exists():
             return JSONResponse({"error": "That result is not ready."}, status_code=404)
         return FileResponse(job.pdf_path, media_type="application/pdf",
                             filename=Path(job.filename).stem + ".accessible.pdf")
 
-    @app.get("/health")
-    def health() -> dict:
-        return {"status": "ok"}
+    async def health(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
 
-    @app.post("/ocr-smoke")
-    @app.get("/ocr-smoke")
-    def ocr_smoke() -> dict:
+    async def ocr_smoke(request: Request) -> JSONResponse:
         """Recognize known text through the real OCR path, from the frozen bundle.
 
         The OCR engine (RapidOCR + onnxruntime + the bundled ONNX models) is the heaviest native
-        dependency in the bundle and, unlike the renderer, is never touched by server startup
-        (its import is lazy). ADR 0005 proved a standalone frozen probe OCRs offline; this proves
-        the *shipping* bundle does too. Text is drawn with Pillow and recognized; the endpoint
-        reports what it read.
+        dependency in the bundle and is never touched by server startup (its import is lazy).
+        ADR 0005 proved a standalone frozen probe OCRs offline; this proves the *shipping* bundle
+        does too. Text is drawn with Pillow and recognized; the endpoint reports what it read.
         """
         import numpy as np
         from PIL import Image, ImageDraw, ImageFont
@@ -194,22 +187,22 @@ def create_app() -> FastAPI:
                 engine=OcrEngine(),
             )
             recovered = " ".join(line.text for line in lines)
-            return {
-                "status": "ok",
-                "success": "REBIND" in recovered.upper(),
-                "recovered": recovered,
-                "error": None,
-            }
+            return JSONResponse({"status": "ok", "success": "REBIND" in recovered.upper(),
+                                 "recovered": recovered, "error": None})
         except Exception as exc:  # noqa: BLE001 -- surface the real error, do not mask it
-            return {
-                "status": "error",
-                "success": False,
-                "recovered": None,
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc(),
-            }
+            return JSONResponse({"status": "error", "success": False, "recovered": None,
+                                 "error": f"{type(exc).__name__}: {exc}",
+                                 "traceback": traceback.format_exc()})
 
-    return app
+    return Starlette(routes=[
+        Route("/", index),
+        Route("/convert", convert_endpoint, methods=["POST"]),
+        Route("/jobs/{job_id}", job_status),
+        Route("/jobs/{job_id}/describe", job_describe, methods=["POST"]),
+        Route("/jobs/{job_id}/pdf", job_pdf),
+        Route("/health", health),
+        Route("/ocr-smoke", ocr_smoke, methods=["GET", "POST"]),
+    ])
 
 
 def _log_file_path() -> Path:

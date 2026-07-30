@@ -79,10 +79,7 @@ body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
 header.site{border-bottom:1px solid var(--line);padding:1.4rem 0}
 .brand{display:flex;align-items:baseline;gap:.7rem}
 .brand h1{font-family:var(--serif);font-weight:600;font-size:1.7rem;margin:0;letter-spacing:-.01em}
-.brand .tag{color:var(--muted);font-size:.92rem}
 main{padding:2.4rem 0 4rem}
-.lede{font-family:var(--serif);font-size:1.5rem;line-height:1.35;margin:0 0 1.9rem;max-width:34ch}
-.lede em{font-style:italic;color:var(--cloth)}
 /* Drop zone */
 .drop{position:relative;border:1.5px dashed var(--cloth);border-radius:var(--radius);
   background:var(--panel);padding:2.6rem 1.5rem;text-align:center;transition:border-color .15s,background .15s}
@@ -93,7 +90,6 @@ main{padding:2.4rem 0 4rem}
   font-weight:600;padding:.62rem 1.1rem;border-radius:8px;cursor:pointer}
 .drop .file-label:focus-within{outline:3px solid var(--stamp);outline-offset:2px}
 .drop input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
-.hint{color:var(--muted);font-size:.86rem;margin-top:1rem}
 /* Status */
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
   padding:1.4rem 1.5rem;margin-top:1.5rem}
@@ -144,17 +140,14 @@ li.cond.attention{border-left-color:var(--attention)}
 .error .detail{color:var(--ink)}
 .visually-hidden{position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden}
 a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9rem}
-footer{border-top:1px solid var(--line);color:var(--muted);font-size:.82rem;padding:1.4rem 0;margin-top:2rem}
 </style>
 </head>
 <body>
 <header class="site"><div class="wrap brand">
-  <h1>Rebind</h1><span class="tag">accessible PDF reconstruction</span>
+  <h1>Rebind</h1>
 </div></header>
 
 <main class="wrap">
-  <p class="lede">Drop in any PDF. Get back the <em>same document</em>, made accessible — its words readable by assistive technology, its structure and language set — without changing how it looks.</p>
-
   <section id="intake" aria-labelledby="intake-h">
     <h2 id="intake-h" class="visually-hidden">Choose a PDF</h2>
     <div class="drop" id="drop">
@@ -164,15 +157,12 @@ footer{border-top:1px solid var(--line);color:var(--muted);font-size:.82rem;padd
       <label class="file-label">Choose a file
         <input type="file" id="file" accept="application/pdf,.pdf">
       </label>
-      <p class="hint">Everything runs on this computer. Nothing is uploaded anywhere. Scanned documents are read page by page, which can take a few minutes.</p>
     </div>
   </section>
 
   <div id="live" role="status" aria-live="polite" class="visually-hidden"></div>
   <section id="work" hidden aria-labelledby="work-h"></section>
 </main>
-
-<footer class="wrap">Rebind preserves your original page for page and adds only what accessibility needs. Everything runs on this computer; nothing is uploaded.</footer>
 
 <script>
 (function(){

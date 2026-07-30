@@ -1,14 +1,14 @@
 [project]
 name = "rebind"
-version = "0.2.0"
-description = "Accessible PDF reconstruction for damaged library scans"
+version = "0.3.0"
+description = "Accessible PDF remediation for damaged library scans"
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "Thomas Scharff" }]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "pikepdf>=9",
-    "fastapi>=0.115",
+    "starlette>=0.37",
     "uvicorn>=0.30",
     "pdfminer.six>=20240706",
     "rapidocr-onnxruntime>=1.4",
