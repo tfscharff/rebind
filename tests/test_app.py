@@ -12,29 +12,6 @@ def test_health_endpoint_reports_ready():
     assert response.json()["status"] == "ok"
 
 
-def test_health_reports_the_rendering_backend():
-    """The installer's whole job is shipping a working renderer; the app must confirm it loaded."""
-    client = TestClient(create_app())
-
-    body = client.get("/health").json()
-
-    assert body["renderer"] == "weasyprint"
-    assert body["renderer_available"] is True
-
-
-def test_render_smoke_endpoint_renders_a_real_pdf():
-    """A bare import (see /health) doesn't prove rendering works; this exercises the real path,
-    including an embedded raster image -- the path most likely to need an un-vendored library."""
-    client = TestClient(create_app())
-
-    body = client.post("/render-smoke").json()
-
-    assert body["success"] is True
-    assert body["error"] is None
-    assert isinstance(body["size_bytes"], int)
-    assert body["size_bytes"] > 0
-
-
 def test_ocr_smoke_endpoint_recognizes_text():
     """Fast in-process check of the OCR smoke path; the frozen-bundle version lives in
     test_packaging.py and proves the shipping bundle can OCR."""

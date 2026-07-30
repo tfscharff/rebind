@@ -81,8 +81,8 @@ def test_license_inventory_matches_the_built_bundle(frozen_exe: Path):
     )
 
 
-def test_frozen_exe_renders_a_real_pdf(frozen_exe: Path):
-    """Launch rebind.exe and confirm /render-smoke actually renders -- not just imports.
+def test_frozen_exe_serves_and_ocrs(frozen_exe: Path):
+    """Launch rebind.exe and confirm the shipping bundle serves the UI and can actually OCR.
 
     DETACHED_PROCESS with no stdout/stderr redirection is load-bearing, not incidental. An
     earlier version of this test used stdout=subprocess.PIPE, which hands the child a valid
@@ -133,16 +133,8 @@ def test_frozen_exe_renders_a_real_pdf(frozen_exe: Path):
         assert "<!doctype html>" in home.text.lower()
         assert "Rebind" in home.text
 
-        response = httpx.post(f"{base_url}/render-smoke", timeout=30)
-        response.raise_for_status()
-        body = response.json()
-
-        assert body["success"] is True, body.get("error")
-        assert isinstance(body["size_bytes"], int)
-        assert body["size_bytes"] > 0
-
         # The OCR engine is the heaviest bundled native dependency and is never exercised by
-        # startup or rendering (its import is lazy). Prove the shipping bundle can actually OCR --
+        # startup (its import is lazy). Prove the shipping bundle can actually OCR --
         # models, onnxruntime and opencv all resolving from inside the frozen exe.
         ocr = httpx.post(f"{base_url}/ocr-smoke", timeout=60)
         ocr.raise_for_status()

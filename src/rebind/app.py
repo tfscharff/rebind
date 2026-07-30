@@ -28,40 +28,6 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 HOST = "127.0.0.1"
 PORT = 8756
 
-# A tiny (2x2, solid red) PNG, embedded as a base64 data URI. Used by the render-smoke endpoint
-# to exercise raster image handling -- the path most likely to dlopen a native library (e.g.
-# gdk-pixbuf) that a bare `import weasyprint` never touches. Generated with Pillow:
-#   Image.new("RGB", (2, 2), (200, 30, 30)) saved as PNG.
-_SMOKE_PNG_DATA_URI = (
-    "data:image/png;base64,"
-    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEklEQVR4nGM8ISfHwMDAxAAGAA0EAQijE05aAAAAAElFTkSuQmCC"
-)
-
-# A small but representative document: heading, paragraph, table, and an embedded raster image --
-# the combination of native rendering paths a real Rebind document exercises, not just text.
-_SMOKE_HTML = f"""
-<h1>Render Smoke Test</h1>
-<p>This paragraph exists to exercise ordinary text layout and font shaping.</p>
-<table>
-  <tr><th>Column A</th><th>Column B</th></tr>
-  <tr><td>1</td><td>2</td></tr>
-</table>
-<img src="{_SMOKE_PNG_DATA_URI}" width="2" height="2" alt="a two by two red square">
-"""
-
-
-# The DLL bootstrap that used to live here now lives in `rebind/__init__.py` (triggered by the
-# explicit `import rebind` above), so every entry point that imports anything under the
-# `rebind` package gets it, not just this module.
-
-
-def _renderer_available() -> bool:
-    try:
-        import weasyprint  # noqa: F401
-    except Exception:
-        return False
-    return True
-
 
 @dataclass
 class _Job:
@@ -199,44 +165,7 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     def health() -> dict:
-        return {
-            "status": "ok",
-            "renderer": "weasyprint",
-            "renderer_available": _renderer_available(),
-        }
-
-    @app.post("/render-smoke")
-    @app.get("/render-smoke")
-    def render_smoke() -> dict:
-        """Render a small but representative document through the real render path.
-
-        A bare `import weasyprint` (see /health) proves link-time DLL resolution but not that
-        rendering actually works -- raster image handling, fontconfig, and font loading can each
-        dlopen native libraries an import never touches. This exercises the real
-        `render_html_to_pdf` path (heading, paragraph, table, and an embedded raster PNG) and
-        reports what happened, success or failure, rather than a generic message.
-        """
-        from rebind.render import render_html_to_pdf
-
-        try:
-            with tempfile.TemporaryDirectory() as tmp:
-                target = Path(tmp) / "render-smoke.pdf"
-                render_html_to_pdf(_SMOKE_HTML, target, title="Render Smoke Test", lang="en")
-                size_bytes = target.stat().st_size
-            return {
-                "status": "ok",
-                "success": True,
-                "size_bytes": size_bytes,
-                "error": None,
-            }
-        except Exception as exc:  # noqa: BLE001 -- the whole point is to surface the real error
-            return {
-                "status": "error",
-                "success": False,
-                "size_bytes": None,
-                "error": f"{type(exc).__name__}: {exc}",
-                "traceback": traceback.format_exc(),
-            }
+        return {"status": "ok"}
 
     @app.post("/ocr-smoke")
     @app.get("/ocr-smoke")

@@ -15,17 +15,18 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 LICENSES_DIR = REPO_ROOT / "packaging" / "licenses"
 
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
-from license_inventory import DLLS  # noqa: E402
+from license_inventory import PY_FALLBACK  # noqa: E402
 
 
-def test_every_referenced_license_text_exists():
+def test_every_fallback_license_text_exists():
+    """Distributions with no license in their wheel fall back to a canonical text -- which must
+    actually be present on disk, or the generated notice would point at a missing file."""
     missing = {
-        (project, filename)
-        for project, (_, files) in DLLS.values()
-        for filename in files
+        filename
+        for _spdx, filename in PY_FALLBACK.values()
         if not (LICENSES_DIR / filename).is_file()
     }
-    assert not missing, f"License texts referenced by the inventory but absent: {sorted(missing)}"
+    assert not missing, f"PY_FALLBACK references license texts that are absent: {sorted(missing)}"
 
 
 def test_license_texts_are_not_truncated_or_unfilled_templates():
@@ -62,14 +63,3 @@ def test_notice_carries_the_freetype_credit():
     assert "The FreeType" in notice and "freetype.org" in notice, (
         "generated notice is missing the credit required by the FreeType License"
     )
-
-
-def test_no_dll_is_mapped_to_two_projects():
-    """`_add` would silently overwrite a duplicate mapping; the dict cannot show that.
-
-    Guarding it here means a copy-paste slip in the mapping surfaces as a test failure rather
-    than as a DLL quietly attributed to the wrong project in the installer's legal notice.
-    """
-    assert len(DLLS) == len(set(DLLS)), "duplicate DLL keys in the inventory mapping"
-    for name in DLLS:
-        assert name.lower().endswith(".dll"), f"mapping key is not a DLL filename: {name}"

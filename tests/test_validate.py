@@ -2,8 +2,9 @@ from pathlib import Path
 
 import pytest
 
-from rebind.render import render_html_to_pdf
+from rebind.remediate import remediate
 from rebind.validate import ValidationResult, _parse_validation_report, validate_pdf_ua
+from tests.fixtures import born_digital_pdf
 
 
 def test_conformant_pdf_is_compliant(tmp_path: Path, verapdf_exe: Path):
@@ -12,10 +13,9 @@ def test_conformant_pdf_is_compliant(tmp_path: Path, verapdf_exe: Path):
     Every prior test here only exercised non-compliant PDFs, so a wrapper with an
     inverted check would have passed all of them. This closes that blind spot.
     """
+    source = born_digital_pdf("<h1>Title</h1><p>Body text.</p>", tmp_path / "in.pdf")
     target = tmp_path / "conformant.pdf"
-    render_html_to_pdf(
-        "<h1>Title</h1><p>Body text.</p>", target, title="Conformance Check", lang="en"
-    )
+    remediate(source, target, title="Conformance Check", lang="en")
 
     result = validate_pdf_ua(target, verapdf_exe=verapdf_exe)
 

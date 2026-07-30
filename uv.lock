@@ -734,7 +734,6 @@ dependencies = [
     { name = "pypdfium2" },
     { name = "rapidocr-onnxruntime" },
     { name = "uvicorn" },
-    { name = "weasyprint" },
 ]
 
 [package.optional-dependencies]
@@ -743,6 +742,7 @@ dev = [
     { name = "pyinstaller" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "weasyprint" },
 ]
 
 [package.metadata]
@@ -757,7 +757,7 @@ requires-dist = [
     { name = "rapidocr-onnxruntime", specifier = ">=1.4" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "uvicorn", specifier = ">=0.30" },
-    { name = "weasyprint", specifier = ">=62" },
+    { name = "weasyprint", marker = "extra == 'dev'", specifier = ">=62" },
 ]
 provides-extras = ["dev"]
 

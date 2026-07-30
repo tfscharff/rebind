@@ -14,17 +14,57 @@ never reflowed or restyled.
 from __future__ import annotations
 
 import io
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
-from .assemble import _is_ocr_over_scan, _list_item_text
-from .extract import TextLine, extract_pages
+from .extract import Page, TextLine, extract_pages
 from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines
 from .ocr import OcrEngine, recognize, render_page_to_image
 from .profile import build_profile, style_of
+
+# --- Line/page classification (relocated from the retired reconstruction pipeline) --------------
+# A page with a text layer AND a raster image covering at least this fraction of its area is an
+# OCR-over-scan page: the image is the scanned page, the text on top is recognizer output.
+OCR_SCAN_COVERAGE = 0.6
+BULLET_PREFIXES = ("•", "‣", "◦", "-", "*")
+# An ordered-list marker, with or without trailing content: "1. first", "1.", "2)". The digit run
+# is capped at 3 so a year like "1996. It was..." never matches (a longer run leaves a digit before
+# the required "[.)]"). A heuristic disambiguator, not a size limit (invariant 5).
+ORDERED_RE = re.compile(r"^(\d{1,3})[.)](?:\s+(.*))?$")
+
+
+def _image_covers_page(image, page: Page) -> bool:
+    """Whether an image covers enough of the page to be its background scan rather than a figure."""
+    page_area = page.width * page.height
+    if page_area <= 0:
+        return False
+    x0, y0, x1, y1 = image.bbox
+    return (x1 - x0) * (y1 - y0) >= page_area * OCR_SCAN_COVERAGE
+
+
+def _is_ocr_over_scan(page: Page) -> bool:
+    """A text layer sitting on top of a page-covering scan image (a hidden OCR layer)."""
+    return page.has_text_layer and any(_image_covers_page(im, page) for im in page.images)
+
+
+def _list_item_text(text: str) -> tuple[str, bool] | None:
+    """Return (item text, ordered) if the line looks like a list item, else None.
+
+    The item text is empty when the line is only the marker glyph (a bare bullet or bare "1.") --
+    a renderer that boxes the marker separately; the caller merges it with the next line.
+    """
+    for bullet in BULLET_PREFIXES:
+        if text.startswith(bullet):
+            return text[len(bullet):].strip(), False
+    match = ORDERED_RE.match(text)
+    if match:
+        content = match.group(2)
+        return (content.strip() if content is not None else ""), True
+    return None
 
 MIN_LIST_ITEMS = 2   # a run of at least this many marked lines becomes a list, not paragraphs
 # An image covering between these fractions of the page is a figure worth describing. Smaller is a

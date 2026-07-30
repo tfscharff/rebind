@@ -6,7 +6,6 @@ from pathlib import Path
 
 from rebind.ocr import OcrEngine, ocr_pages, recognize, render_page_to_image
 from rebind.extract import extract_pages
-from rebind.pipeline import convert
 from tests.fixtures import pdf_image_only_scan
 
 
@@ -32,24 +31,6 @@ def test_recognize_recovers_text_from_a_synthetic_scan(tmp_path: Path):
         assert 0.0 <= y0 < y1 <= 792.0
         # size is derived from box height so the profile can still rank headings
         assert line.size > 0.0
-
-
-def test_image_only_scan_is_ocred_and_converts(tmp_path: Path):
-    # The Failure.pdf shape: a page image with no text layer. It must now CONVERT (not be refused),
-    # with the recovered text flagged 'ocr-source' and carrying real (uncapped) OCR confidence.
-    source = pdf_image_only_scan(
-        "<h1>Fearless Organization</h1><p>Preventable failure is largely avoidable.</p>",
-        tmp_path / "scan.pdf",
-    )
-
-    result = convert(source, tmp_path / "out.pdf", title="scan")
-
-    text_nodes = [n for n in result.document.nodes if getattr(n, "text", "")]
-    combined = " ".join(n.text for n in text_nodes).lower()
-    assert "preventable" in combined
-    assert all("ocr-source" in n.flags for n in text_nodes)
-    # Real OCR confidence flows through, not the hidden-layer 0.5 cap.
-    assert any(n.confidence > 0.5 for n in text_nodes)
 
 
 def _ocr_lines(source, *, restore_images):
@@ -84,22 +65,5 @@ def test_deskew_tightens_line_boxes_on_a_crooked_scan(tmp_path):
     )
 
 
-def test_ocr_body_text_is_not_fabricated_into_headings(tmp_path):
-    # OCR box height is a noisy crop, not a reliable font size, so the typographic profile's
-    # "larger than body => heading" rule manufactures spurious headings from OCR body text (a real
-    # book's body line can OCR to a taller box than its actual heading). OCR-sourced text must
-    # therefore not be inferred into headings -- an honest flat paragraph structure over a
-    # fabricated hierarchy. This body-only scan must yield NO headings.
-    body = "".join(
-        f"<p>Sentence number {i} of ordinary body prose, of typical length and weight.</p>"
-        for i in range(8)
-    )
-    source = pdf_image_only_scan(body, tmp_path / "scan.pdf", dpi=200)
-
-    result = convert(source, tmp_path / "out.pdf", title="scan")
-
-    headings = [n for n in result.document.nodes if n.kind == "Heading"]
-    assert headings == [], f"OCR body text was fabricated into headings: {[h.text for h in headings]}"
-    # The text is still recovered, as paragraphs.
-    paras = [n for n in result.document.nodes if n.kind == "Paragraph"]
-    assert any("ordinary body prose" in p.text for p in paras)
+# OCR body text is not fabricated into headings: covered end-to-end (over the real structure tree)
+# by tests/test_remediate.py::test_ocr_body_only_scan_invents_no_headings.

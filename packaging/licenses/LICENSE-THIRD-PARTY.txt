@@ -5,148 +5,19 @@ Rebind -- Third-Party License Notices
 Rebind itself is distributed under the MIT License. Its full text is installed
 alongside this file as LICENSE-Rebind.txt.
 
-Rebind is not, however, only Rebind. To work without requiring you to install
-anything else, it bundles the GTK3 native libraries that its PDF renderer
-depends on. Those libraries are the work of other people, distributed under
-their own licenses, and this file discharges the obligation to tell you so.
+Rebind is not, however, only Rebind. To work offline without requiring you to
+install anything else, it bundles its runtime Python dependencies -- the OCR
+engine, the PDF libraries, the local web server, and everything they depend on.
+Those are the work of other people, distributed under their own licenses, and
+this file discharges the obligation to tell you so.
 
-26 bundled libraries are covered, grouped below by project. The full text of
-every license referenced here is installed in this same folder. Nothing in this
-file modifies the terms of any license it points to; where they differ, the
-license text governs.
-
-None of these libraries have been modified. Each ships as a separate DLL and is
-loaded dynamically at runtime, which is what satisfies the LGPL's requirement
-that you be able to substitute your own build of any of them. To do so, replace
-the relevant .dll in this installation and Rebind will load yours instead.
-
-A per-DLL breakdown, including how each mapping was determined, is in
-DLL-INVENTORY.md in this folder.
+35 bundled distributions are covered, listed below. The full text of each
+distribution's license is installed in the python/ subfolder of this directory.
+None of these libraries have been modified. Nothing in this file modifies the
+terms of any license it points to; where they differ, the license text governs.
 
 ================================================================================
 
-Brotli
-    License:  MIT
-    Text:     LICENSE-brotli.txt
-    Files:    libbrotlicommon.dll, libbrotlidec.dll
-
-bzip2
-    License:  bzip2-1.0.6
-    Text:     LICENSE-bzip2.txt
-    Files:    libbz2-1.dll
-
-Expat
-    License:  MIT
-    Text:     LICENSE-expat.txt
-    Files:    libexpat-1.dll
-
-fontconfig
-    License:  MIT
-    Text:     LICENSE-fontconfig.txt
-    Files:    libfontconfig-1.dll
-
-FreeType
-    License:  FTL OR GPL-2.0-or-later
-    Text:     LICENSE-FreeType-FTL.txt, LICENSE-GPL-2.0.txt
-    Files:    libfreetype-6.dll
-
-GCC runtime (TDM-GCC/MinGW-w64)
-    License:  GPL-3.0-or-later WITH GCC-exception-3.1
-    Text:     LICENSE-GPL-3.0.txt, LICENSE-GCC-Runtime-Exception-3.1.txt
-    Files:    libgcc_s_seh-1.dll, libstdc++-6.dll
-
-GLib
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libgio-2.0-0.dll, libglib-2.0-0.dll, libgmodule-2.0-0.dll, libgobject-2.0-0.dll
-
-GNU FriBidi
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libfribidi-0.dll
-
-GNU gettext (libintl)
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libintl-8.dll
-
-GNU libiconv
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libiconv-2.dll
-
-Graphite2
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libgraphite2.dll
-
-HarfBuzz
-    License:  MIT
-    Text:     LICENSE-HarfBuzz.txt
-    Files:    libharfbuzz-0.dll
-
-libdatrie
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libdatrie-1.dll
-
-libffi
-    License:  MIT
-    Text:     LICENSE-libffi.txt
-    Files:    libffi-7.dll
-
-libpng
-    License:  Libpng
-    Text:     LICENSE-libpng.txt
-    Files:    libpng16-16.dll
-
-libthai
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libthai-0.dll
-
-MinGW-w64 winpthreads
-    License:  MIT AND BSD-3-Clause
-    Text:     LICENSE-mingw-w64-winpthreads.txt
-    Files:    libwinpthread-1.dll
-
-Pango
-    License:  LGPL-2.1-or-later
-    Text:     LICENSE-LGPL-2.1.txt
-    Files:    libpango-1.0-0.dll, libpangoft2-1.0-0.dll
-
-PCRE
-    License:  BSD-3-Clause
-    Text:     LICENSE-PCRE.txt
-    Files:    libpcre-1.dll
-
-zlib
-    License:  Zlib
-    Text:     LICENSE-zlib.txt
-    Files:    zlib1.dll
-
-================================================================================
-
-REQUIRED CREDITS
-
-    Portions of this software are copyright (c) 2006-2021 The FreeType
-    Project (www.freetype.org). All rights reserved.
-
-================================================================================
-
-The GTK3 libraries above are redistributed from the GTK for Windows Runtime
-Environment Installer, packaged by Tom Schoonjans and Alexander Shaduri:
-https://github.com/tschoonj/GTK-for-Windows-Runtime-Environment-Installer
-Corresponding source for each library is available from its upstream project.
-
-================================================================================
-
-BUNDLED PYTHON DISTRIBUTIONS
-
-Rebind also freezes its runtime Python dependencies -- the OCR engine, the PDF
-renderer's Python layer, the local web server, and their dependencies -- into the
-application. Each is redistributed unmodified under its own license; the full text of
-each is installed in the python/ subfolder of this directory.
 
 annotated-doc 0.0.4
     License:  MIT
@@ -180,10 +51,6 @@ cryptography 49.0.0
     License:  Apache-2.0 OR BSD-3-Clause
     Text:     python/cryptography.txt
 
-cssselect2 0.9.0
-    License:  BSD License
-    Text:     python/cssselect2.txt
-
 fastapi 0.139.2
     License:  MIT
     Text:     python/fastapi.txt
@@ -191,10 +58,6 @@ fastapi 0.139.2
 flatbuffers 25.12.19
     License:  Apache-2.0
     Text:     python/flatbuffers.txt
-
-fonttools 4.63.0
-    License:  MIT
-    Text:     python/fonttools.txt
 
 h11 0.16.0
     License:  MIT License
@@ -256,17 +119,9 @@ pydantic-core 2.46.4
     License:  MIT
     Text:     python/pydantic-core.txt
 
-pydyf 0.12.1
-    License:  BSD License
-    Text:     python/pydyf.txt
-
 pypdfium2 5.12.1
     License:  BSD-3-Clause, Apache-2.0, dependency licenses
     Text:     python/pypdfium2.txt
-
-pyphen 0.17.2
-    License:  GNU General Public License v2 or later (GPLv2+); GNU Lesser General Public License v2 or later (LGPLv2+); Mozilla Public License 1.1 (MPL 1.1)
-    Text:     python/pyphen.txt
 
 pyyaml 6.0.3
     License:  MIT License
@@ -288,14 +143,6 @@ starlette 1.3.1
     License:  BSD-3-Clause
     Text:     python/starlette.txt
 
-tinycss2 1.5.1
-    License:  BSD License
-    Text:     python/tinycss2.txt
-
-tinyhtml5 2.1.0
-    License:  MIT License
-    Text:     python/tinyhtml5.txt
-
 tqdm 4.70.0
     License:  MPL-2.0 AND MIT
     Text:     python/tqdm.txt
@@ -312,14 +159,13 @@ uvicorn 0.51.0
     License:  BSD-3-Clause
     Text:     python/uvicorn.txt
 
-weasyprint 69.0
-    License:  BSD License
-    Text:     python/weasyprint.txt
-
-webencodings 0.5.1
-    License:  BSD-3-Clause
-    Text:     python/webencodings.txt
-
 Bundled OCR models:
     PP-OCRv4 detection / recognition / classification models (PaddleOCR)
         License: Apache-2.0 (shipped inside rapidocr_onnxruntime/models/*.onnx)
+
+================================================================================
+
+REQUIRED CREDITS
+
+    Portions of this software are copyright (c) 2006-2021 The FreeType
+    Project (www.freetype.org). All rights reserved.
