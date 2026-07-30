@@ -145,7 +145,7 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
 </head>
 <body>
 <header class="site"><div class="wrap brand">
-  <h1>Rebind</h1><span class="tag">accessible PDF remediation</span>
+  <h1>Rebind</h1><span class="tag">accessible PDF reconstruction</span>
 </div></header>
 
 <main class="wrap">
