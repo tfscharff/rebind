@@ -81,7 +81,7 @@ def test_license_inventory_matches_the_built_bundle(frozen_exe: Path):
     )
 
 
-def test_frozen_exe_serves_and_ocrs(frozen_exe: Path):
+def test_frozen_exe_serves_and_ocrs(frozen_exe: Path, tmp_path: Path):
     """Launch rebind.exe and confirm the shipping bundle serves the UI and can actually OCR.
 
     DETACHED_PROCESS with no stdout/stderr redirection is load-bearing, not incidental. An
@@ -141,6 +141,26 @@ def test_frozen_exe_serves_and_ocrs(frozen_exe: Path):
         ocr_body = ocr.json()
         assert ocr_body["success"] is True, ocr_body.get("error")
         assert "REBIND" in (ocr_body["recovered"] or "").upper()
+
+        # Convert a real PDF end to end through the frozen exe. This is the load-bearing check that
+        # ocr-smoke alone does not give: it drives the full remediate -> pikepdf/XMP path, which
+        # depends on modules (lxml for XMP metadata) that a too-aggressive bundle exclude would drop
+        # -- a regression invisible to the dev suite (which has them) and only real in the bundle.
+        from tests.fixtures import born_digital_pdf
+        source = born_digital_pdf("<h1>Bundle Check</h1><p>Real body text.</p>", tmp_path / "in.pdf")
+        job = httpx.post(f"{base_url}/convert?filename=in.pdf", content=source.read_bytes(),
+                         headers={"content-type": "application/pdf"}, timeout=30).json()
+        job_id = job["job_id"]
+        deadline = time.monotonic() + 60
+        status = {}
+        while time.monotonic() < deadline:
+            status = httpx.get(f"{base_url}/jobs/{job_id}", timeout=5).json()
+            if status["status"] in {"done", "error"}:
+                break
+            time.sleep(0.5)
+        assert status.get("status") == "done", f"frozen convert failed: {status.get('error')}"
+        pdf_bytes = httpx.get(f"{base_url}/jobs/{job_id}/pdf", timeout=15).content
+        assert pdf_bytes[:5] == b"%PDF-"
     finally:
         proc.terminate()
         try:

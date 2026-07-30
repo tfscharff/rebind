@@ -29,9 +29,11 @@ for package in (
 # Modules that must never enter the bundle: the WeasyPrint HTML-rendering stack (dev/test only)
 # and its GTK/Cairo/Pango bindings. Excluding them keeps a stray or transitive import from
 # dragging the whole native stack back in.
+# Only modules unique to the WeasyPrint HTML renderer. NOT lxml (pikepdf needs it for XMP
+# metadata) and NOT fontTools -- both are used by runtime deps; excluding them crashes the
+# frozen exe at convert time even though the dev suite, which has them, stays green.
 _EXCLUDES = [
-    "weasyprint", "pydyf", "cssselect2", "tinycss2", "cairocffi", "cairosvg",
-    "pyphen", "fontTools", "lxml",
+    "weasyprint", "pydyf", "cssselect2", "tinycss2", "cairocffi", "cairosvg", "pyphen",
 ]
 
 a = Analysis(
