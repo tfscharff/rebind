@@ -178,6 +178,27 @@ def pdf_with_text_in_form_xobject(target: Path, *, text: str = "Text inside a fo
     return target
 
 
+def born_digital_pdf_with_table(target: Path) -> Path:
+    """A born-digital PDF whose body is a 4-row x 3-column grid table (header row + 3 data rows).
+
+    Wide columns with short cell text so the cells land on distinct, recurring column positions --
+    the shape `layout.detect_table_lines` recognizes (>=3 rows each spanning >=3 columns). The
+    `<th>`/`<td>` HTML distinction is invisible to Rebind (it re-derives structure from line-box
+    geometry, not markup); the header row is inferred from being the table's top row.
+    """
+    html = (
+        "<table>"
+        "<tr><th>Region</th><th>Sales</th><th>Growth</th></tr>"
+        "<tr><td>North</td><td>120</td><td>8</td></tr>"
+        "<tr><td>South</td><td>95</td><td>3</td></tr>"
+        "<tr><td>East</td><td>140</td><td>12</td></tr>"
+        "</table>"
+    )
+    css = ("table { width: 90%; border-collapse: collapse; } "
+           "td, th { border: 1px solid #000; padding: 10px 40px; text-align: left; }")
+    return born_digital_pdf(html, target, extra_css=css)
+
+
 def born_digital_pdf_with_image(target: Path) -> Path:
     """A born-digital PDF with a small embedded raster image (a figure)."""
     import base64

@@ -22,7 +22,7 @@ from pikepdf import Array, Dictionary, Name, String
 
 from .assemble import _is_ocr_over_scan, _list_item_text
 from .extract import TextLine, extract_pages
-from .layout import detect_table_lines
+from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines
 from .ocr import OcrEngine, recognize, render_page_to_image
 from .profile import build_profile, style_of
 
@@ -31,6 +31,16 @@ MIN_LIST_ITEMS = 2   # a run of at least this many marked lines becomes a list, 
 # rule/icon/bullet; a page-covering image is the scan itself, not a figure.
 FIGURE_MIN_COVERAGE = 0.01
 FIGURE_MAX_COVERAGE = 0.6
+
+# OCR heading recovery. A single OCR line's box height is noisy (a body line can crop tall), so no
+# one signal is trusted: a heading must be markedly taller than the page's body text AND set apart
+# by whitespace AND not fill the column -- the combination an inflated body line, which still sits
+# inside its paragraph spanning the full width, cannot fake. Tuned conservatively: a missed heading
+# stays an honest paragraph, which is safe; a fabricated one is not.
+OCR_HEADING_HEIGHT_RATIO = 1.35     # a heading is at least this much taller than the body median
+OCR_HEADING_MAX_WIDTH_RATIO = 0.75  # a line filling more than this of the widest line is body text
+OCR_HEADING_ISOLATION_RATIO = 0.8   # whitespace above/below is at least this * the body height
+OCR_HEADING_TIER_TOLERANCE = 0.15   # heading heights within this fraction are the same level
 
 
 @dataclass
@@ -178,20 +188,74 @@ def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, font: pikepdf.Object, name: 
     fonts[Name("/" + name)] = font
 
 
+def _ocr_heading_heights(lines: list[TextLine]) -> dict[int, float]:
+    """For the OCR lines on one page, return {id(line): height} for lines that look like headings.
+
+    A heading is taller than the page's body text (size), set apart by whitespace (isolation), and
+    does not fill the text column (shortness). No signal alone is trusted -- a single OCR line's box
+    height is noise -- but their conjunction is not something an over-tall body line, which still
+    sits inside its paragraph spanning the full width, can produce.
+    """
+    if len(lines) < 3:
+        return {}
+    heights = sorted(ln.bbox[3] - ln.bbox[1] for ln in lines)
+    body_height = heights[len(heights) // 2] or 1.0
+    max_width = max((ln.bbox[2] - ln.bbox[0]) for ln in lines) or 1.0
+    ordered = sorted(lines, key=lambda ln: -ln.bbox[3])   # top of page to bottom
+    result: dict[int, float] = {}
+    for idx, line in enumerate(ordered):
+        height = line.bbox[3] - line.bbox[1]
+        width = line.bbox[2] - line.bbox[0]
+        if height < body_height * OCR_HEADING_HEIGHT_RATIO:
+            continue
+        if width > max_width * OCR_HEADING_MAX_WIDTH_RATIO:
+            continue
+        gap_above = (ordered[idx - 1].bbox[1] - line.bbox[3]) if idx > 0 else float("inf")
+        gap_below = (line.bbox[1] - ordered[idx + 1].bbox[3]) if idx < len(ordered) - 1 else float("inf")
+        if max(gap_above, gap_below) >= body_height * OCR_HEADING_ISOLATION_RATIO:
+            result[id(line)] = height
+    return result
+
+
+def _height_tiers(heights: list[float]) -> list[float]:
+    """Cluster heading heights into representative tiers, largest first (a tier per size level)."""
+    tiers: list[float] = []
+    for height in sorted(set(heights), reverse=True):
+        if not tiers or (tiers[-1] - height) > tiers[-1] * OCR_HEADING_TIER_TOLERANCE:
+            tiers.append(height)
+    return tiers
+
+
 def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
     """A structure type ('P' or 'H1'..'H6') for each line, per page.
 
-    Headings are detected from the document-global typographic profile -- but only on born-digital
-    text: recognizer output (Rebind's OCR, or a hidden OCR layer over a scan) has noisy font sizes
-    that manufacture spurious headings, so its lines are all paragraphs. Heading levels are then
-    normalized so the sequence starts at H1 and never skips a level, which PDF/UA requires (7.4.2).
+    Born-digital headings come from the document-global typographic profile. Recognizer output
+    (Rebind's OCR, or a hidden OCR layer over a scan) has no reliable font size, so its headings are
+    instead recovered geometrically -- size, isolation and shortness together (`_ocr_heading_heights`)
+    -- with heading levels assigned from document-global size tiers. Levels are then normalized so
+    the sequence starts at H1 and never skips a level, which PDF/UA requires (7.4.2).
     """
-    raw: list[list[int]] = []   # per page: 0 for paragraph, or the raw heading level (>=1)
+    ocr_headings: list[dict[int, float]] = []   # per page: {id(line): height} for OCR headings
     for src_page, lines, used_ocr in per_page:
+        page_is_ocr = used_ocr or _is_ocr_over_scan(src_page)
+        ocr_headings.append(_ocr_heading_heights(lines) if page_is_ocr else {})
+
+    tiers = _height_tiers([h for page in ocr_headings for h in page.values()])
+
+    def tier_level(height: float) -> int:
+        for i, tier in enumerate(tiers):
+            if abs(height - tier) <= tier * OCR_HEADING_TIER_TOLERANCE:
+                return i + 1
+        return len(tiers) or 1
+
+    raw: list[list[int]] = []   # per page: 0 for paragraph, or the raw heading level (>=1)
+    for (src_page, lines, used_ocr), page_headings in zip(per_page, ocr_headings):
         page_is_ocr = used_ocr or _is_ocr_over_scan(src_page)
         page_levels: list[int] = []
         for line in lines:
-            if page_is_ocr or line.ocr_confidence is not None:
+            if page_is_ocr:
+                page_levels.append(tier_level(page_headings[id(line)]) if id(line) in page_headings else 0)
+            elif line.ocr_confidence is not None:
                 page_levels.append(0)
             elif profile.role_of(line, page_height=src_page.height) == "heading":
                 page_levels.append(profile.heading_level(style_of(line)) or 1)
@@ -236,6 +300,50 @@ def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextL
     return [sorted(row, key=lambda cl: cl[1].bbox[0]) for row in rows]
 
 
+def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
+                  document_elem: pikepdf.Object, page_obj: pikepdf.Object, leaf) -> pikepdf.Object:
+    """Build a fully tagged `/Table` from a run of table cells: a regular grid of `/TR`s whose
+    first row is header cells (`/TH` scoped to their column) and the rest data cells (`/TD`).
+
+    Cells are snapped to document-consistent column positions (their clustered left edges), so every
+    row emits one cell per column -- an empty cell where a value is missing -- making the grid
+    regular, which is what lets assistive technology read a data cell against its column header.
+    """
+    columns: list[float] = []
+    for x in sorted(line.bbox[0] for _mcid, line in cells):
+        if not columns or x - columns[-1] > COLUMN_ALIGN_TOLERANCE_PT:
+            columns.append(x)
+
+    def column_of(line: TextLine) -> int:
+        return min(range(len(columns)), key=lambda c: abs(line.bbox[0] - columns[c]))
+
+    table = pdf.make_indirect(Dictionary(
+        Type=Name.StructElem, S=Name.Table, P=document_elem, K=Array([])))
+    trs: list[pikepdf.Object] = []
+    for row_index, row in enumerate(_table_rows(cells)):
+        tr = pdf.make_indirect(Dictionary(
+            Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
+        by_column: dict[int, tuple[int, TextLine]] = {}
+        for mcid, line in row:
+            by_column.setdefault(column_of(line), (mcid, line))
+        is_header = row_index == 0
+        cell_type = Name.TH if is_header else Name.TD
+        row_cells: list[pikepdf.Object] = []
+        for c in range(len(columns)):
+            if c in by_column:
+                mcid, _line = by_column[c]
+                extra = {"A": Dictionary(O=Name.Table, Scope=Name.Column)} if is_header else None
+                row_cells.append(leaf(mcid, cell_type, tr, extra))
+            else:
+                # An empty cell keeps the grid regular; it holds no content, so no marked content.
+                row_cells.append(pdf.make_indirect(Dictionary(
+                    Type=Name.StructElem, S=cell_type, P=tr, K=Array([]))))
+        tr.K = Array(row_cells)
+        trs.append(tr)
+    table.K = Array(trs)
+    return table
+
+
 def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], page_roles: list[str],
                     document_elem: pikepdf.Object, page_obj: pikepdf.Object):
     """Build the structure elements for one page from its lines, grouping list and table runs.
@@ -249,9 +357,9 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], page_roles: list[st
     owners: list[pikepdf.Object | None] = [None] * n
     tops: list[pikepdf.Object] = []
 
-    def leaf(mcid: int, structure_type, parent) -> pikepdf.Object:
+    def leaf(mcid: int, structure_type, parent, extra: dict | None = None) -> pikepdf.Object:
         elem = pdf.make_indirect(Dictionary(
-            Type=Name.StructElem, S=structure_type, P=parent, Pg=page_obj, K=mcid))
+            Type=Name.StructElem, S=structure_type, P=parent, Pg=page_obj, K=mcid, **(extra or {})))
         owners[mcid] = elem
         return elem
 
@@ -261,15 +369,8 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], page_roles: list[st
             j = i
             while j < n and is_table[j]:
                 j += 1
-            table = pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name.Table, P=document_elem, K=Array([])))
-            trs = []
-            for row in _table_rows([(m, lines[m]) for m in range(i, j)]):
-                tr = pdf.make_indirect(Dictionary(
-                    Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
-                tr.K = Array([leaf(mcid, Name.TD, tr) for mcid, _line in row])
-                trs.append(tr)
-            table.K = Array(trs)
+            table = _tagged_table(pdf, [(m, lines[m]) for m in range(i, j)],
+                                  document_elem, page_obj, leaf)
             tops.append(table)
             i = j
             continue
