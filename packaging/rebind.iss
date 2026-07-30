@@ -32,8 +32,11 @@ Source: "licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesub
 Source: "..\LICENSE"; DestDir: "{app}\licenses"; DestName: "LICENSE-Rebind.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Rebind"; Filename: "{app}\rebind.exe"
-Name: "{autodesktop}\Rebind"; Filename: "{app}\rebind.exe"
+; IconFilename/IconIndex are set explicitly (not just inherited from the exe) so a pinned taskbar
+; shortcut resolves the icon unambiguously even when Windows' icon cache holds a stale entry from a
+; previous, icon-less install at the same path.
+Name: "{group}\Rebind"; Filename: "{app}\rebind.exe"; IconFilename: "{app}\rebind.exe"; IconIndex: 0
+Name: "{autodesktop}\Rebind"; Filename: "{app}\rebind.exe"; IconFilename: "{app}\rebind.exe"; IconIndex: 0
 
 [Run]
 Filename: "{app}\rebind.exe"; Description: "Start Rebind"; Flags: nowait postinstall skipifsilent
