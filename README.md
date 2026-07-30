@@ -89,9 +89,11 @@ What it does, per page:
   reported, so you know it carries no readable text.
 
 The output validates as **PDF/UA-1** (checked with veraPDF), the standard behind WCAG 2.1 AA for
-PDFs. Headings are recovered from born-digital pages; scanned text stays flat paragraphs (its font
-sizes are OCR noise, and inventing a heading hierarchy from them would be fabrication). Lists,
-tables and figure alt-text are not yet distinguished in the tag tree — a refinement in progress.
+PDFs. The tag tree carries headings, paragraphs, lists and tables. Headings are recovered from
+born-digital pages; scanned text stays flat paragraphs (its font sizes are OCR noise, and inventing
+a heading hierarchy from them would be fabrication). **Figures** get the one thing a machine can't
+supply — a description: images are decorative by default, and the app shows each one so you can type
+what it depicts, which turns it into a described, screen-reader-visible figure.
 
 **The command line.** The same thing, scriptable:
 

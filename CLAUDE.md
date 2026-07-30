@@ -21,15 +21,23 @@ a document is never re-recognized unnecessarily.
 
 Goal, in Thomas's words: *create a WCAG 2.1 AA accessible PDF from any uploaded PDF as quickly and
 accurately as possible, looking as close to the original as possible, intervening only where
-necessary.* No JSON is exposed to the user; the app either fixes issues or (later) lets the user fix
-them in-app — never a passive "here's what's wrong" homework list.
+necessary.* No JSON is exposed to the user; the app fixes what it can and, for the one thing a
+machine can't decide — figure descriptions — lets the user type them in-app, never a passive
+homework list.
 
-**Known limitation to refine:** remediation currently rasterizes *every* page at 300 DPI, which is
-lossless for scans but softens a born-digital PDF's vector text (and is technically images-of-text,
-a 1.4.5 concern). Preserving vector text for born-digital pages (tag in place, no raster) is the
-next refinement. The old reconstruction pipeline (`extract`/`profile`/`layout`/`assemble`/`emit`/
-`pipeline.convert` and their tests) still exists but is unused by the entry points — a later
-cleanup.
+**What the tag tree now contains** (`remediate.py`): headings (`/H1`–`/H6`, level-normalized),
+paragraphs (`/P`), lists (`/L`→`/LI`→`/LBody`, with a bare-marker-merge for renderers that box the
+bullet separately), tables (`/Table`→`/TR`→`/TD`, via `layout.detect_table_lines`), and figures
+(`/Figure` with `/Alt`). Figures default to decorative artifacts (compliant); the app surfaces each
+with a thumbnail and the user's description promotes it to a tagged `/Figure` (`/jobs/{id}/describe`
+re-runs remediation with `alt_texts`). Born-digital pages are kept **verbatim** (crisp vector);
+only a page that already carries marked content (a scan with a hidden OCR layer) is rebuilt from a
+300-DPI render. Every case validates as PDF/UA-1 (veraPDF, 0 failures) — there's a compliance test.
+
+**Reuse note:** heading/list/table detection reuses `profile`, `assemble._list_item_text`,
+`assemble._is_ocr_over_scan` and `layout.detect_table_lines` — the analysis was always good; only
+the render-from-scratch was wrong. The old reconstruction pipeline (`assemble`/`emit`/
+`pipeline.convert` and their tests) still exists but is unused by the entry points — a later cleanup.
 
 ## Invariants — reject changes that violate these
 
