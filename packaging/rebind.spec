@@ -26,14 +26,6 @@ for package in (
     binaries += pkg_binaries
     hiddenimports += pkg_hidden
 
-# Drop OpenCV's FFmpeg videoio DLL (~30 MB): it backs cv2.VideoCapture, which nothing here uses.
-# RapidOCR and restoration only touch cv2 core/imgproc. Filtering by name keeps the trim robust
-# across OpenCV versions (the DLL is opencv_videoio_ffmpeg<ver>_64.dll).
-binaries = [
-    b for b in binaries
-    if "opencv_videoio_ffmpeg" not in os.path.basename(b[0]).lower()
-]
-
 # Modules that must never enter the bundle: the WeasyPrint HTML-rendering stack (dev/test only)
 # and its GTK/Cairo/Pango bindings. Excluding them keeps a stray or transitive import from
 # dragging the whole native stack back in.
@@ -53,6 +45,14 @@ a = Analysis(
     excludes=_EXCLUDES,
     noarchive=False,
 )
+# Drop OpenCV's FFmpeg videoio DLL (~30 MB): it backs cv2.VideoCapture, which nothing here uses.
+# RapidOCR and restoration only touch cv2 core/imgproc. This must run on `a.binaries` after
+# Analysis, because PyInstaller's own cv2 hook re-adds the DLL after collect_all -- filtering the
+# collect_all output alone does not remove it. Match by name for robustness across OpenCV versions
+# (opencv_videoio_ffmpeg<ver>_64.dll).
+a.binaries = [b for b in a.binaries if "opencv_videoio_ffmpeg" not in b[0].lower()]
+a.datas = [d for d in a.datas if "opencv_videoio_ffmpeg" not in d[0].lower()]
+
 pyz = PYZ(a.pure)
 # console=False: a librarian double-clicking rebind.exe should not see a console window pop
 # up (that reads as "broken" or "malware" to a non-technical user, and this app already opens

@@ -1,6 +1,6 @@
 # Rebind
 
-**Accessible PDF reconstruction for damaged library scans.**
+**Accessible PDF remediation for damaged library scans.**
 
 > ⚠️ **Status: alpha.** Both the born-digital and scanned branches work end to end. A scanned or
 > born-digital PDF goes in; a tagged PDF/UA document that veraPDF passes comes out, plus a
