@@ -176,3 +176,18 @@ def pdf_with_text_in_form_xobject(target: Path, *, text: str = "Text inside a fo
     pdf.pages.append(pikepdf.Page(pdf.make_indirect(page_dict)))
     pdf.save(target)
     return target
+
+
+def born_digital_pdf_with_image(target: Path) -> Path:
+    """A born-digital PDF with a small embedded raster image (a figure)."""
+    import base64
+    import io as _io
+
+    from PIL import Image
+
+    buf = _io.BytesIO()
+    Image.new("RGB", (120, 80), (180, 40, 40)).save(buf, format="PNG")
+    uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    html = (f"<h1>Report</h1><p>See the chart:</p>"
+            f"<img src='{uri}' width='200' height='133'><p>As shown above.</p>")
+    return born_digital_pdf(html, target)

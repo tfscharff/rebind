@@ -27,6 +27,10 @@ from .ocr import OcrEngine, recognize, render_page_to_image
 from .profile import build_profile, style_of
 
 MIN_LIST_ITEMS = 2   # a run of at least this many marked lines becomes a list, not paragraphs
+# An image covering between these fractions of the page is a figure worth describing. Smaller is a
+# rule/icon/bullet; a page-covering image is the scan itself, not a figure.
+FIGURE_MIN_COVERAGE = 0.01
+FIGURE_MAX_COVERAGE = 0.6
 
 
 @dataclass
@@ -36,6 +40,64 @@ class RemediationResult:
     ocr_pages: tuple[int, ...] = ()          # pages we recognized (text may contain OCR errors)
     empty_pages: tuple[int, ...] = ()         # scanned pages where OCR recovered nothing
     added_text_layer: bool = False
+    # Figures with no description yet: each is {"id", "page", "thumb"} (a small preview data URI).
+    # Give a figure a description and re-run with alt_texts to promote it to a tagged /Figure.
+    figures: tuple[dict, ...] = ()
+
+
+def _page_figures(src_page) -> list[tuple[str, tuple[float, float, float, float]]]:
+    """Embedded images on the page that are figures worth describing -- not the full-page scan,
+    not tiny rules/icons. Each is (stable id, bbox in PDF points)."""
+    page_area = src_page.width * src_page.height
+    if page_area <= 0:
+        return []
+    figures = []
+    for index, image in enumerate(src_page.images):
+        x0, y0, x1, y1 = image.bbox
+        coverage = (x1 - x0) * (y1 - y0) / page_area
+        if FIGURE_MIN_COVERAGE <= coverage <= FIGURE_MAX_COVERAGE:
+            figures.append((f"p{src_page.number}f{index}", image.bbox))
+    return figures
+
+
+def _crop_data_uri(page_image, bbox, page_width, page_height, max_side: int = 220) -> str:
+    """A small PNG preview (data URI) of the figure region, cropped from the rendered page."""
+    import base64
+
+    from PIL import Image
+
+    height_px, width_px = page_image.shape[:2]
+    sx, sy = width_px / page_width, height_px / page_height
+    x0, y0, x1, y1 = bbox
+    # PDF y is bottom-up; image y is top-down.
+    box = (int(x0 * sx), int((page_height - y1) * sy), int(x1 * sx), int((page_height - y0) * sy))
+    crop = Image.fromarray(page_image).convert("RGB").crop(box)
+    crop.thumbnail((max_side, max_side))
+    buffer = io.BytesIO()
+    crop.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _figure_xobject(pdf: pikepdf.Pdf, page_image, bbox, page_width, page_height) -> pikepdf.Object:
+    """A JPEG image XObject of the figure region, for redrawing it inside a tagged /Figure."""
+    from PIL import Image
+
+    height_px, width_px = page_image.shape[:2]
+    sx, sy = width_px / page_width, height_px / page_height
+    x0, y0, x1, y1 = bbox
+    box = (int(x0 * sx), int((page_height - y1) * sy), int(x1 * sx), int((page_height - y0) * sy))
+    crop = Image.fromarray(page_image).convert("RGB").crop(box)
+    buffer = io.BytesIO()
+    crop.save(buffer, format="JPEG", quality=90)
+    image_obj = pdf.make_stream(buffer.getvalue())
+    image_obj.Type = Name.XObject
+    image_obj.Subtype = Name.Image
+    image_obj.Width = crop.width
+    image_obj.Height = crop.height
+    image_obj.ColorSpace = Name.DeviceRGB
+    image_obj.BitsPerComponent = 8
+    image_obj.Filter = Name.DCTDecode
+    return image_obj
 
 
 def _escape(text: str) -> str:
@@ -251,15 +313,26 @@ def _has_marked_content(page: pikepdf.Page) -> bool:
     return False
 
 
-def _rebuild_page_from_image(pdf: pikepdf.Pdf, page: pikepdf.Page, lines: list[TextLine],
-                             font: pikepdf.Object, source: Path, page_number: int,
-                             width_pt: float, height_pt: float, dpi: int) -> None:
-    """Replace the page's content with a rendered image (artifact) + tagged text -- a clean slate
-    that discards any pre-existing marked content while looking identical (rendered at `dpi`)."""
+def _add_xobject(pdf: pikepdf.Pdf, page: pikepdf.Page, xobject: pikepdf.Object, name: str) -> None:
+    resources = page.obj.get("/Resources")
+    if resources is None:
+        resources = pdf.make_indirect(Dictionary())
+        page.obj["/Resources"] = resources
+    xobjects = resources.get("/XObject")
+    if xobjects is None:
+        xobjects = Dictionary()
+        resources["/XObject"] = xobjects
+    xobjects[Name("/" + name)] = xobject
+
+
+def _rebuild_page(pdf: pikepdf.Pdf, page: pikepdf.Page, page_image, overlay: bytes,
+                  extra_xobjects: dict, font: pikepdf.Object,
+                  width_pt: float, height_pt: float) -> None:
+    """Replace the page's content with the rendered page image (artifact) + the tagged overlay --
+    a clean slate that discards any pre-existing marked content while looking identical."""
     from PIL import Image
 
-    image = render_page_to_image(source, page_number, dpi=dpi)
-    pil = Image.fromarray(image).convert("RGB")
+    pil = Image.fromarray(page_image).convert("RGB")
     buffer = io.BytesIO()
     pil.save(buffer, format="JPEG", quality=90)
     image_obj = pdf.make_stream(buffer.getvalue())
@@ -272,21 +345,27 @@ def _rebuild_page_from_image(pdf: pikepdf.Pdf, page: pikepdf.Page, lines: list[T
     image_obj.Filter = Name.DCTDecode
     content = (
         f"/Artifact BMC q {width_pt:.2f} 0 0 {height_pt:.2f} 0 0 cm /Im0 Do Q EMC\n".encode()
-        + _tagged_text_stream(lines, "RebindF")
+        + overlay
     )
     page.obj.Contents = pdf.make_stream(content)
-    page.obj.Resources = Dictionary(XObject=Dictionary(Im0=image_obj), Font=Dictionary(RebindF=font))
+    xobjects = Dictionary(Im0=image_obj)
+    for name, obj in extra_xobjects.items():
+        xobjects[Name("/" + name)] = obj
+    page.obj.Resources = Dictionary(XObject=xobjects, Font=Dictionary(RebindF=font))
 
 
 def remediate(source: Path, target: Path, *, title: str | None = None, lang: str = "en",
-              dpi: int = 300) -> RemediationResult:
+              dpi: int = 300, alt_texts: dict[str, str] | None = None) -> RemediationResult:
     """Write `target`: the source made accessible, looking exactly like the original.
 
     The original pages are kept verbatim (vector text stays crisp, a scan stays a scan) and marked
     as an artifact; an invisible, tagged text layer is added over them and referenced from a PDF/UA
-    structure tree.
+    structure tree. Embedded figures are decorative by default (compliant); pass `alt_texts`
+    (keyed by the figure ids in a prior result's `.figures`) to promote a figure to a tagged
+    `/Figure` with that description.
     """
     source, target = Path(source), Path(target)
+    alt_texts = alt_texts or {}
     source_pages = list(extract_pages(source))
     profile = build_profile(source_pages)
 
@@ -318,30 +397,63 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     parent_tree_nums = Array([])
     font = pdf.make_indirect(Dictionary(
         Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
+    undescribed_figures: list[dict] = []
 
     for struct_parent, (page, (src_page, lines, used_ocr), page_roles) in enumerate(
         zip(pdf.pages, per_page, roles)
     ):
-        if _has_marked_content(page):
-            # Already carries marked content (e.g. a scan with a hidden OCR text layer): rebuild
-            # from a clean render so tagged content is never nested inside an artifact.
-            _rebuild_page_from_image(pdf, page, lines, font, source, src_page.number,
-                                     src_page.width, src_page.height, dpi)
+        figures = _page_figures(src_page)
+        described = [(fid, bbox) for fid, bbox in figures if fid in alt_texts]
+        undescribed = [(fid, bbox) for fid, bbox in figures if fid not in alt_texts]
+        rebuild = _has_marked_content(page)
+        page_image = (render_page_to_image(source, src_page.number, dpi=dpi)
+                      if rebuild or figures else None)
+
+        # Draw each described figure (a crop of the rendered region) inside a tagged /Figure.
+        figure_stream = b""
+        extra_xobjects: dict = {}
+        figure_specs: list[tuple] = []   # (mcid, alt, bbox)
+        mcid = len(lines)
+        for k, (fid, bbox) in enumerate(described):
+            extra_xobjects[f"Fig{k}"] = _figure_xobject(
+                pdf, page_image, bbox, src_page.width, src_page.height)
+            x0, y0, x1, y1 = bbox
+            figure_stream += (
+                f"/Figure <</MCID {mcid}>> BDC q {x1 - x0:.2f} 0 0 {y1 - y0:.2f} "
+                f"{x0:.2f} {y0:.2f} cm /Fig{k} Do Q EMC\n").encode()
+            figure_specs.append((mcid, alt_texts[fid], bbox))
+            mcid += 1
+
+        overlay = _tagged_text_stream(lines, "RebindF") + figure_stream
+
+        if rebuild:
+            _rebuild_page(pdf, page, page_image, overlay, extra_xobjects, font,
+                          src_page.width, src_page.height)
         else:
-            # Keep the page verbatim (vector text stays crisp): wrap its content as an artifact,
-            # then add the invisible tagged text over it. `/Artifact BMC` is a tag-only
-            # marked-content sequence -- `BDC` needs two operands and would leave content untagged.
             page.contents_add(pdf.make_stream(b"/Artifact BMC\n"), prepend=True)
-            page.contents_add(pdf.make_stream(b"EMC\n" + _tagged_text_stream(lines, "RebindF")),
-                              prepend=False)
+            page.contents_add(pdf.make_stream(b"EMC\n" + overlay), prepend=False)
             _add_font(pdf, page, font, "RebindF")
+            for name, obj in extra_xobjects.items():
+                _add_xobject(pdf, page, obj, name)
         page.obj.StructParents = struct_parent
         page.obj.Tabs = Name.S
 
         tops, owners = _page_structure(pdf, lines, page_roles, document_elem, page.obj)
+        for fmcid, alt, bbox in figure_specs:
+            figure_elem = pdf.make_indirect(Dictionary(
+                Type=Name.StructElem, S=Name.Figure, P=document_elem, Pg=page.obj, K=fmcid,
+                Alt=String(alt),
+                A=Dictionary(O=Name.Layout, BBox=Array([round(v, 2) for v in bbox]))))
+            tops.append(figure_elem)
+            owners.append(figure_elem)
         document_elem.K.extend(tops)
         parent_tree_nums.append(struct_parent)
         parent_tree_nums.append(pdf.make_indirect(Array(owners)))
+
+        for fid, bbox in undescribed:
+            undescribed_figures.append({
+                "id": fid, "page": src_page.number,
+                "thumb": _crop_data_uri(page_image, bbox, src_page.width, src_page.height)})
 
     struct_root.ParentTree = pdf.make_indirect(Dictionary(Nums=parent_tree_nums))
     struct_root.ParentTreeNextKey = len(source_pages)
@@ -352,6 +464,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     return RemediationResult(
         pdf_path=target, page_count=len(source_pages),
         ocr_pages=tuple(ocr_pages), empty_pages=tuple(empty_pages), added_text_layer=added_layer,
+        figures=tuple(undescribed_figures),
     )
 
 

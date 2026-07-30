@@ -129,6 +129,17 @@ li.cond.attention{border-left-color:var(--attention)}
 .cond .pages{font-family:var(--mono);font-size:.8rem;color:var(--ink);margin:.5rem 0 0}
 .cond .pages b{color:var(--muted);font-weight:400}
 .clean{display:flex;gap:.7rem;align-items:center;color:var(--cloth);font-weight:600}
+/* Figure description editor */
+.figures h2{font-family:var(--serif);font-size:1.2rem;margin:0 0 .2rem}
+.figrow{display:flex;gap:1rem;align-items:flex-start;padding:.9rem 0;border-top:1px solid var(--line)}
+.figrow:first-of-type{border-top:none}
+.figthumb{width:110px;height:auto;max-height:110px;object-fit:contain;border:1px solid var(--line);border-radius:6px;background:#fff;flex:none}
+.figfield{flex:1}
+.figfield label{font-weight:600;font-size:.92rem;display:block}
+.figpage{font-family:var(--mono);font-size:.75rem;color:var(--muted);font-weight:400;margin-left:.4rem}
+.figfield textarea{width:100%;margin-top:.4rem;font:inherit;font-size:.95rem;padding:.5rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);resize:vertical}
+.figfield textarea:focus-visible{outline:3px solid var(--stamp);outline-offset:1px}
+#applyalts{margin-top:1rem}
 .error{border-left:4px solid var(--attention)}
 .error .detail{color:var(--ink)}
 .visually-hidden{position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden}
@@ -227,28 +238,64 @@ footer{border-top:1px solid var(--line);color:var(--muted);font-size:.82rem;padd
       fetch('/jobs/'+id).then(function(r){return r.json();}).then(function(s){
         var what=document.getElementById('what');
         if(what && s.stage) what.textContent=s.stage;
-        if(s.status==='done'){ clearInterval(poll); done(id, name, s.review); }
+        if(s.status==='done'){ clearInterval(poll); done(id, name, s); }
         else if(s.status==='error'){ clearInterval(poll); showError(s.error||'Conversion failed.'); }
       }).catch(function(){});
     },1200);
   }
 
-  function done(id, name, review){
+  function done(id, name, s){
     if(elapsedTimer) clearInterval(elapsedTimer);
+    var review=s.review, figures=s.figures||[];
     var h='<h2 class="visually-hidden">Result</h2><div class="panel result">'+
       '<h2>Your accessible PDF is ready</h2>'+
       '<p style="color:var(--muted);margin:.2rem 0 0">'+esc(name)+', made accessible — same document, now readable by assistive technology.</p>'+
       '<div class="downloads">'+
       '<a class="btn primary" href="/jobs/'+id+'/pdf" download>Download PDF</a>'+
       '</div></div>';
+    h+=renderFigures(id, name, figures);
     h+=renderQueue(review);
     h+='<a class="reset" href="/">Do another document</a>';
     work.innerHTML=h;
-    var items=(review&&review.items)||[];
-    say(items.length? ('Done. '+items.length+' thing'+(items.length>1?'s':'')+' to review.') : 'Done. Nothing flagged for review.');
-    // Move focus to the result region so a screen-reader/keyboard user lands on the outcome.
+    if(figures.length){ wireFigures(id, name); }
+    say(figures.length? ('Done. '+figures.length+' image'+(figures.length>1?'s':'')+' can be described for a screen reader.') : 'Done. Your accessible PDF is ready to download.');
     work.setAttribute('tabindex','-1');
     work.focus();
+  }
+
+  function renderFigures(id, name, figures){
+    if(!figures.length) return '';
+    var out='<section class="panel figures" aria-labelledby="fig-h"><h2 id="fig-h">Describe the images</h2>'+
+      '<p class="sub">A screen reader can\'t see these images. Describe what each one shows, and Rebind will add it to the PDF. Leave one blank to keep it as decoration.</p>'+
+      '<div id="figlist">';
+    figures.forEach(function(f){
+      out+='<div class="figrow">'+
+        '<img class="figthumb" src="'+f.thumb+'" alt="Preview of an image on page '+esc(f.page)+'">'+
+        '<div class="figfield"><label>Description <span class="figpage">page '+esc(f.page)+'</span>'+
+        '<textarea data-fid="'+esc(f.id)+'" rows="2" placeholder="e.g. A bar chart of sales rising each quarter."></textarea></label></div>'+
+        '</div>';
+    });
+    out+='</div><button type="button" class="btn primary" id="applyalts">Add descriptions</button></section>';
+    return out;
+  }
+
+  function wireFigures(id, name){
+    var btn=document.getElementById('applyalts');
+    if(!btn) return;
+    btn.addEventListener('click', function(){
+      var alts={};
+      document.querySelectorAll('#figlist textarea').forEach(function(t){
+        if(t.value.trim()) alts[t.getAttribute('data-fid')]=t.value.trim();
+      });
+      if(!Object.keys(alts).length){ say('Type a description first, or download the PDF as is.'); return; }
+      btn.disabled=true; btn.textContent='Adding…';
+      renderWorking(name, Date.now()); say('Adding your descriptions…');
+      fetch('/jobs/'+id+'/describe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({alts:alts})})
+        .then(function(r){return r.json();}).then(function(j){
+          if(j.error){ showError(j.error); return; }
+          watch(id, name, Date.now());
+        }).catch(function(){ showError('Could not apply descriptions.'); });
+    });
   }
 
   function renderQueue(review){

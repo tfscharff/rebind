@@ -65,3 +65,40 @@ def test_convert_flow_end_to_end(tmp_path: Path):
 
     # The JSON model download no longer exists.
     assert client.get(f"/jobs/{job_id}/model").status_code == 404
+
+
+def test_describe_flow_promotes_figure(tmp_path: Path):
+    from tests.fixtures import born_digital_pdf_with_image
+    client = TestClient(create_app())
+    pdf = born_digital_pdf_with_image(tmp_path / "in.pdf")
+
+    job_id = client.post("/convert?filename=in.pdf", content=pdf.read_bytes(),
+                         headers={"content-type": "application/pdf"}).json()["job_id"]
+    for _ in range(80):
+        s = client.get(f"/jobs/{job_id}").json()
+        if s["status"] == "done":
+            break
+        time.sleep(0.2)
+    assert s["figures"], "expected an undescribed figure"
+    fid = s["figures"][0]["id"]
+
+    r = client.post(f"/jobs/{job_id}/describe", json={"alts": {fid: "A red chart."}})
+    assert r.status_code == 200
+    for _ in range(80):
+        s2 = client.get(f"/jobs/{job_id}").json()
+        if s2["status"] == "done":
+            break
+        time.sleep(0.2)
+    assert s2["figures"] == []   # described, no longer outstanding
+
+
+def test_describe_with_no_text_is_rejected(tmp_path: Path):
+    client = TestClient(create_app())
+    pdf = born_digital_pdf("<p>no images here</p>", tmp_path / "in.pdf")
+    job_id = client.post("/convert?filename=in.pdf", content=pdf.read_bytes(),
+                         headers={"content-type": "application/pdf"}).json()["job_id"]
+    for _ in range(80):
+        if client.get(f"/jobs/{job_id}").json()["status"] == "done":
+            break
+        time.sleep(0.2)
+    assert client.post(f"/jobs/{job_id}/describe", json={"alts": {}}).status_code == 400

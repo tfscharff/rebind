@@ -74,8 +74,11 @@ class _Job:
     stage: str = "Reading the document..."
     started: float = field(default_factory=time.monotonic)
     workdir: Path | None = None
+    source_path: Path | None = None   # kept so descriptions can re-run remediation
     pdf_path: Path | None = None
     review: dict | None = None
+    figures: list = field(default_factory=list)   # figures still needing a description
+    alt_texts: dict = field(default_factory=dict)  # descriptions the user has supplied so far
     error: str | None = None
 
 
@@ -111,8 +114,10 @@ def _run_conversion(job: _Job, source: Path) -> None:
     try:
         job.stage = "Making it accessible (scanned pages are read page by page)..."
         stem = Path(job.filename).stem
-        result = remediate(source, job.workdir / (stem + ".accessible.pdf"), title=stem)
+        result = remediate(source, job.workdir / (stem + ".accessible.pdf"), title=stem,
+                           alt_texts=job.alt_texts)
         job.pdf_path = result.pdf_path
+        job.figures = list(result.figures)
         job.review = build_review(
             page_count=result.page_count, ocr_pages=result.ocr_pages,
             empty_pages=result.empty_pages,
@@ -147,6 +152,7 @@ def create_app() -> FastAPI:
         job.workdir = Path(tempfile.mkdtemp(prefix="rebind-job-"))
         source = job.workdir / "source.pdf"
         source.write_bytes(data)
+        job.source_path = source
         threading.Thread(target=_run_conversion, args=(job, source), daemon=True).start()
         return JSONResponse({"job_id": job.id})
 
@@ -159,9 +165,29 @@ def create_app() -> FastAPI:
                       "elapsed": round(time.monotonic() - job.started, 1)}
         if job.status == "done":
             body["review"] = job.review
+            body["figures"] = job.figures
         if job.status == "error":
             body["error"] = job.error
         return JSONResponse(body)
+
+    @app.post("/jobs/{job_id}/describe")
+    async def job_describe(job_id: str, request: Request) -> JSONResponse:
+        """Accept {alts: {figure_id: description}} and re-run remediation so each described figure
+        becomes a tagged /Figure with that alt text."""
+        job = jobs.get(job_id)
+        if job is None or job.source_path is None:
+            return JSONResponse({"error": "No such job."}, status_code=404)
+        payload = await request.json()
+        alts = {str(k): str(v).strip() for k, v in (payload.get("alts") or {}).items()
+                if str(v).strip()}
+        if not alts:
+            return JSONResponse({"error": "No descriptions were provided."}, status_code=400)
+        job.alt_texts.update(alts)
+        job.status = "running"
+        job.stage = "Applying your descriptions..."
+        job.started = time.monotonic()
+        threading.Thread(target=_run_conversion, args=(job, job.source_path), daemon=True).start()
+        return JSONResponse({"job_id": job.id})
 
     @app.get("/jobs/{job_id}/pdf")
     def job_pdf(job_id: str):

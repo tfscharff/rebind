@@ -94,3 +94,22 @@ def test_born_digital_headings_are_tagged_as_headings(tmp_path: Path):
     # A heading must not skip a level: the first heading is H1.
     headings = [t for t in tags if t.startswith("/H")]
     assert headings[0] == "/H1"
+
+
+def test_figure_is_decorative_until_described(tmp_path: Path):
+    from tests.fixtures import born_digital_pdf_with_image
+    source = born_digital_pdf_with_image(tmp_path / "in.pdf")
+
+    result = remediate(source, tmp_path / "out.pdf")
+    assert len(result.figures) == 1
+    fig = result.figures[0]
+    assert fig["thumb"].startswith("data:image/png;base64,")
+    with pikepdf.open(tmp_path / "out.pdf") as pdf:
+        assert not any(str(e.get("/S")) == "/Figure" for e in pdf.Root.StructTreeRoot.K[0].K)
+
+    described = remediate(source, tmp_path / "out2.pdf",
+                          alt_texts={fig["id"]: "A red bar chart of sales."})
+    assert described.figures == ()
+    with pikepdf.open(tmp_path / "out2.pdf") as pdf:
+        figs = [e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Figure"]
+        assert len(figs) == 1 and str(figs[0].get("/Alt")) == "A red bar chart of sales."
