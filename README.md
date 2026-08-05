@@ -2,7 +2,7 @@
 
 Accessible PDF reconstruction for damaged library scans.
 
-Rebind takes a PDF — scanned or born-digital, tagged or not — and produces a PDF/UA-1 document that
+Rebind takes a PDF — scanned or born-digital, tagged or not — and produces a PDF/UA-2 document that
 validates with veraPDF (zero failures). It preserves each page as it is and adds the accessibility
 the source is missing: a selectable text layer and a structure tree. It runs entirely on the local
 machine — no API key, no GPU, no network at runtime.
@@ -28,7 +28,7 @@ page's body-text median, whitespace above and below a line, and alignment of tex
 column positions. This is the same signal a sighted reader uses when scanning a page before
 reading a word of it, expressed numerically instead of visually.
 
-The structure tree (PDF/UA-1, veraPDF zero failures) carries:
+The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
 
 - **Headings** (`/H1`–`/H6`, level-normalized so the sequence starts at H1 and skips no level).
   Born-digital headings come from font size; scanned/OCR headings come from geometry — a line is a
@@ -49,8 +49,10 @@ p. 214]` — rather than a guess.
 
 **App.** Install with the Windows installer (`rebind-setup.exe`, built from `packaging/`) or run
 `rebind serve`, then use the local browser page it opens. Drop a PDF in, convert, and download the
-result. Images that need a description are listed so you can type one in the app. Nothing is
-uploaded.
+result. Images that need a description are listed so you can type one in the app. The result view
+shows a structure badge: a fast, dependency-free check of what remediation is expected to have
+built (not independent conformance validation — that's veraPDF, dev/CI-only; see ADR 0006). Nothing
+is uploaded.
 
 **Command line.**
 
@@ -63,7 +65,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.3.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.4.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures).

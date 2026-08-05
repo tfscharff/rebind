@@ -35,8 +35,11 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
 
 Per page: a born-digital page is kept **verbatim** (crisp vector); a page that already carries
 marked content (a scan with a hidden OCR layer) is rebuilt from a 300-DPI render, because tagged
-content cannot nest inside an `/Artifact`. Every case validates as **PDF/UA-1** (veraPDF, 0
-failures) — there is a compliance test.
+content cannot nest inside an `/Artifact`. Every case validates as **PDF/UA-2** (ISO 14289-2,
+veraPDF `-f ua2`, 0 failures) — there is a compliance test. See ADR 0006 for the migration from
+PDF/UA-1: the PDF 2.0 Standard Structure Namespace retains all the tag names below unchanged (no
+HTML5 lowercase rename needed); only the root `Document` element needs an explicit `/NS`, plus a
+PDF 2.0 header and updated XMP (`pdfuaid:part=2`).
 
 **What the tag tree contains** (`remediate.py`):
 - Headings `/H1`–`/H6`, level-normalized (no skips — PDF/UA 7.4.2, in `_structure_roles`).
@@ -125,6 +128,25 @@ Thomas installs and tests builds himself; **don't run the installer.**
 - **App icon:** Pillow's ICO writer ignores `append_images` — save from the 256px master with
   `sizes=[...]` (`packaging/make_icon.py`) or you get a 16px-only icon. Installer is unsigned by
   decision, so SmartScreen warns on first run (accepted).
+- **The PDF/UA-2 SSN namespace URI is `http://iso.org/pdf2/ssn`** (with the "2") — a plausible
+  wrong value (`http://iso.org/pdf/ssn`, no "2") produces an error message that ambiguously echoes
+  back whatever you set, easy to misread as confirmation. Get this wrong and every structure
+  element silently fails clause 8.2.5.2. See ADR 0006.
+- **The invisible overlay text must be encoded `cp1252`, not Python's UTF-8 default** — the font
+  declares `/WinAnsiEncoding`; a mismatch silently corrupts any non-ASCII character. C0 control
+  characters (a literal tab in extracted text is real, not hypothetical) have no WinAnsi glyph name
+  at all and must be normalized to spaces first. Both handled in `_encode_winansi`.
+- **A source PDF's own internal navigation (outline, Link annotations with a GoTo/Dest) fails
+  PDF/UA-2 clause 8.8** unless it uses structure destinations, which nothing before PDF 2.0 could
+  produce. `_strip_legacy_destinations` drops it rather than ship a false PDF/UA-2 claim — real
+  navigation lost, not yet rebuilt from Rebind's own headings (see ADR 0006).
+- **A source PDF's own XMP can carry a stray, non-namespaced element** (seen in real Elsevier
+  output — a DRM/fingerprint artifact) that breaks veraPDF's metadata parser badly enough to hide
+  Rebind's own `dc:title`/`pdfuaid:*` too. `_set_metadata` strips any top-level XMP key without a
+  namespace before adding its own.
+- **New samples come with an accessibility-checker report** (Adobe Acrobat's or similar) in
+  `samples/reports/`, per the workflow Thomas set — treat the report's failing rules as a checklist
+  and re-validate with `-f ua2` after remediating. This is what surfaced the four bugs above.
 
 ## Skills
 
