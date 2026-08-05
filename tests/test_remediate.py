@@ -588,3 +588,46 @@ def test_figure_with_no_nearby_caption_still_needs_a_description(tmp_path: Path)
     result = remediate(source, out)
 
     assert len(result.figures) == 1, "an uncaptioned figure must still ask for a description"
+
+
+def test_split_caption_is_found_on_a_different_page(tmp_path: Path):
+    # A multi-part figure whose image sits on one page while its real caption sits on another --
+    # confirmed on a real sample: an image with only a bare "Fig. 8 (Continued)" nearby (no
+    # descriptive content -- WCAG 1.1.1 is explicit that a figure's bare label never serves as its
+    # text alternative on its own), while the real, substantial caption is on the following page.
+    # A thin/absent local match falls back to searching every page for a fuller caption sharing the
+    # same figure number.
+    import base64
+    import io as _io
+
+    from PIL import Image
+
+    from tests.fixtures import born_digital_pdf
+
+    buf = _io.BytesIO()
+    Image.new("RGB", (120, 80), (180, 40, 40)).save(buf, format="PNG")
+    uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    html = (
+        f"<h1>Report</h1><p>See below.</p>"
+        f"<img src='{uri}' width='200' height='133'>"
+        # Indented well past the image's right edge -- reproduces the real sample exactly: the
+        # marker line does NOT horizontally overlap the image, so _figure_caption's (deliberately
+        # stricter, for building an actual caption block) alignment check finds nothing at all,
+        # and only the more lenient _nearby_caption_number locates it.
+        f"<p style='font-size:8pt; margin-left:200pt'>Fig. 8 (Continued)</p>"
+        f"<p style='page-break-before:always; font-size:8pt'>"
+        f"Fig. 8 Mounting zebrafish embryos and larvae for time-lapse imaging, showing the "
+        f"complete apparatus used in these experiments.</p>"
+    )
+    source = born_digital_pdf(html, tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+
+    result = remediate(source, out)
+
+    assert result.figures == (), "the fuller caption on the next page should have been found"
+    with pikepdf.open(out) as pdf:
+        figs = [e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Figure"]
+        assert len(figs) == 1
+        alt = str(figs[0].get("/Alt"))
+    assert "Mounting zebrafish embryos" in alt, alt
+    assert "(Continued)" not in alt, "should use the fuller caption, not the bare local marker"

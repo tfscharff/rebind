@@ -79,10 +79,14 @@ FIGURE_MAX_COVERAGE = 0.6
 # gaps of ~11-14pt between an image and its "Fig. N" caption. A genuinely long caption wraps
 # across several physical lines with a much smaller line-to-line gap than that (~2-10pt observed);
 # the cap on line count is just a safety backstop against ever running into unrelated body text.
-CAPTION_MARKER_RE = re.compile(r"^(fig(?:ure)?s?\.?)\s*\d", re.IGNORECASE)
+CAPTION_MARKER_RE = re.compile(r"^fig(?:ure)?s?\.?\s*(\d+)", re.IGNORECASE)
 CAPTION_MAX_GAP_PT = 20.0
 CAPTION_CONTINUATION_GAP_PT = 10.0
 CAPTION_MAX_LINES = 8
+# A caption that's just its own label ("Fig. 8", or "Fig. 8 (Continued)" -- a page-break artifact)
+# isn't usable as alt text on its own (WCAG 1.1.1: a figure's bare label never conveys its actual
+# content) and signals _document_captions should look for a fuller caption elsewhere instead.
+MIN_CAPTION_WORDS = 3
 
 # OCR heading recovery. A single OCR line's box height is noisy (a body line can crop tall), so no
 # one signal is trusted: a heading must be markedly taller than the page's body text AND set apart
@@ -156,47 +160,120 @@ def _horizontally_overlaps(a: tuple[float, float, float, float],
     return a[0] < b[2] and b[0] < a[2]
 
 
+def _caption_number(text: str) -> str | None:
+    """The figure number a line's caption marker names ("Fig. 8" -> "8"), or None if the line
+    doesn't start with one."""
+    match = CAPTION_MARKER_RE.match(text.strip())
+    return match.group(1) if match else None
+
+
+def _caption_block(ordered: list[TextLine]) -> str | None:
+    """`ordered[0]` must be a caption-marker line; concatenate it with any tightly-following
+    continuation lines (small vertical gap -- the same paragraph, not unrelated content) into the
+    full caption text, capped at CAPTION_MAX_LINES as a safety backstop."""
+    if not ordered or _caption_number(ordered[0].text) is None:
+        return None
+    block = [ordered[0]]
+    for prev, nxt in zip(ordered, ordered[1:]):
+        if len(block) >= CAPTION_MAX_LINES:
+            break
+        gap = prev.bbox[1] - nxt.bbox[3]   # y-up: prev is above nxt once sorted top-to-bottom
+        if gap > CAPTION_CONTINUATION_GAP_PT:
+            break
+        block.append(nxt)
+    # `ordered` may walk outward from a figure bottom-to-top (the "caption above" fallback) rather
+    # than top-to-bottom -- re-sort by position so the joined text always reads in the document's
+    # true top-to-bottom order regardless of which direction found it.
+    block.sort(key=lambda ln: -ln.bbox[3])
+    return " ".join(ln.text.strip() for ln in block)
+
+
+def _caption_is_substantial(text: str) -> bool:
+    """Whether a caption says more than just its own label. WCAG 1.1.1 is explicit that a
+    figure's bare label ("Figure 8") never serves as its text alternative on its own -- it must
+    convey the image's actual content. A local match that's just the marker (or the marker plus a
+    page-break artifact like "(Continued)") isn't usable as-is; _document_captions is what finds
+    the real caption elsewhere in that case.
+    """
+    remainder = CAPTION_MARKER_RE.sub("", text.strip(), count=1)
+    return len(remainder.split()) >= MIN_CAPTION_WORDS
+
+
 def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, float]) -> str | None:
     """The figure's own caption, if the document has one directly adjacent to it -- reusing the
     author's own words is more accurate than anything Rebind could invent, and skips the app's
     manual describe step entirely for a figure that already names itself. Conservative by
     construction, like every other heuristic in this module: no adjacent "Fig. N" line means no
-    caption, not a guess.
+    caption, not a guess. May return a bare/thin match (just the marker); the caller decides
+    whether that's substantial enough or should fall back to _document_captions.
     """
     fx0, fy0, fx1, fy1 = bbox
-
-    def block_text(ordered: list[TextLine], first_gap: float) -> str | None:
-        if not ordered or first_gap > CAPTION_MAX_GAP_PT:
-            return None
-        if not CAPTION_MARKER_RE.match(ordered[0].text.strip()):
-            return None
-        block = [ordered[0]]
-        for prev, nxt in zip(ordered, ordered[1:]):
-            if len(block) >= CAPTION_MAX_LINES:
-                break
-            gap = prev.bbox[1] - nxt.bbox[3]   # y-up: prev is above nxt once sorted top-to-bottom
-            if gap > CAPTION_CONTINUATION_GAP_PT:
-                break
-            block.append(nxt)
-        # `ordered` walks outward from the figure -- top-to-bottom reading order for a caption
-        # below it, but bottom-to-top (reversed) for the rarer "caption above" fallback. Re-sort
-        # by position so the joined text always reads in the document's true top-to-bottom order.
-        block.sort(key=lambda ln: -ln.bbox[3])
-        return " ".join(ln.text.strip() for ln in block)
 
     below = sorted(
         (ln for ln in lines if ln.bbox[3] <= fy0 and _horizontally_overlaps(ln.bbox, bbox)),
         key=lambda ln: -ln.bbox[3],   # closest to the figure (highest y1) first
     )
-    found = block_text(below, (fy0 - below[0].bbox[3]) if below else 0.0)
-    if found is not None:
-        return found
+    if below and (fy0 - below[0].bbox[3]) <= CAPTION_MAX_GAP_PT:
+        found = _caption_block(below)
+        if found is not None:
+            return found
 
     above = sorted(
         (ln for ln in lines if ln.bbox[1] >= fy1 and _horizontally_overlaps(ln.bbox, bbox)),
         key=lambda ln: ln.bbox[1],   # closest to the figure (lowest y0) first
     )
-    return block_text(above, (above[0].bbox[1] - fy1) if above else 0.0)
+    if above and (above[0].bbox[1] - fy1) <= CAPTION_MAX_GAP_PT:
+        return _caption_block(above)
+    return None
+
+
+def _nearby_caption_number(lines: list[TextLine],
+                           bbox: tuple[float, float, float, float]) -> str | None:
+    """A more lenient search than _figure_caption: the closest "Fig. N" line within vertical range
+    of the figure, WITHOUT requiring horizontal alignment -- used only to identify which figure
+    this is when nothing adjacent forms a full, usable caption block itself. Confirmed necessary on
+    a real sample: the marker line ("Fig. 8") sits at a different indent than the image itself, so
+    it fails _figure_caption's (deliberately stricter, for building an actual caption block)
+    horizontal-overlap check entirely -- but it still reliably names which figure this is.
+    """
+    fx0, fy0, fx1, fy1 = bbox
+    candidates: list[tuple[float, TextLine]] = []
+    for ln in lines:
+        if ln.bbox[3] <= fy0:
+            gap = fy0 - ln.bbox[3]
+        elif ln.bbox[1] >= fy1:
+            gap = ln.bbox[1] - fy1
+        else:
+            continue   # vertically overlaps the figure itself -- not a caption candidate
+        if gap <= CAPTION_MAX_GAP_PT:
+            candidates.append((gap, ln))
+    for _gap, line in sorted(candidates, key=lambda item: item[0]):
+        number = _caption_number(line.text)
+        if number:
+            return number
+    return None
+
+
+def _document_captions(per_page: list[tuple]) -> dict[str, str]:
+    """Map figure number -> the fullest caption text found ANYWHERE in the document, regardless of
+    proximity to any image. Backs the fallback for a multi-part figure whose image sits on one
+    page while its real caption sits on another -- confirmed on a real sample: an image with only
+    a bare "Fig. 8 (Continued)" nearby (a page-break artifact, no descriptive content), while the
+    real, substantial caption is on the following page. `lines` is already in reading order, so a
+    caption block is built by walking forward from each marker line found -- correctly stopping at
+    a large geometric gap (e.g. a column break), which is safe: worse case is an early-terminated
+    block, never a wrong one.
+    """
+    best: dict[str, str] = {}
+    for _src_page, lines, _used_ocr in per_page:
+        for i, line in enumerate(lines):
+            number = _caption_number(line.text)
+            if number is None:
+                continue
+            block = _caption_block(lines[i:])
+            if block and (number not in best or len(block) > len(best[number])):
+                best[number] = block
+    return best
 
 
 def _crop_data_uri(page_image, bbox, page_width, page_height, max_side: int = 220) -> str:
@@ -734,6 +811,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             empty_pages.append(src_page.number)
         per_page.append((src_page, lines, used_ocr))
     roles = _structure_roles(per_page, profile)
+    document_captions = _document_captions(per_page)
 
     # Pass two: build the tagged, appearance-preserving output.
     pdf = pikepdf.open(source)
@@ -771,11 +849,20 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         figures = _page_figures(src_page)
         # A figure sitting directly under (or, less commonly, above) a "Fig. N ..." caption needs
         # no manual description at all: the author's own words are more accurate than anything
-        # Rebind could invent, and this skips the app's describe step entirely. Explicit
-        # user-supplied text (alt_texts) always wins over an auto-detected caption -- the user may
-        # have deliberately typed something better, or the caption match may be imperfect.
-        captions = {fid: _figure_caption(lines, bbox) for fid, bbox in figures}
-        effective_alt = {fid: alt_texts.get(fid) or captions[fid] for fid, _bbox in figures}
+        # Rebind could invent, and this skips the app's describe step entirely. A thin local match
+        # (just the marker, e.g. a "(Continued)" page-break artifact -- not substantial per WCAG
+        # 1.1.1) falls back to document_captions, which may have found the real caption elsewhere.
+        # Explicit user-supplied text (alt_texts) always wins over either -- the user may have
+        # deliberately typed something better, or the caption match may be imperfect.
+        def caption_for(fid: str, bbox: tuple) -> str | None:
+            local = _figure_caption(lines, bbox)
+            if local and _caption_is_substantial(local):
+                return local
+            number = (_caption_number(local) if local else None) or _nearby_caption_number(lines, bbox)
+            return (number and document_captions.get(number)) or local
+
+        effective_alt = {fid: alt_texts.get(fid) or caption_for(fid, bbox)
+                         for fid, bbox in figures}
         described = [(fid, bbox) for fid, bbox in figures if effective_alt[fid]]
         undescribed = [(fid, bbox) for fid, bbox in figures if not effective_alt[fid]]
         rebuild = _has_marked_content(page)
