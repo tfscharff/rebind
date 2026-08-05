@@ -339,7 +339,22 @@ def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
         raw.append(page_levels)
 
     distinct = sorted({lvl for page in raw for lvl in page if lvl})
-    level_map = {lvl: i + 1 for i, lvl in enumerate(distinct)}   # -> 1,2,3... no skips, start at 1
+    if not distinct:
+        return [["P"] * len(page_levels) for page_levels in raw]
+
+    # Anchor H1 to whichever heading the reader meets FIRST in reading order, not to the single
+    # largest font anywhere in the document. Global size-rank alone can let a heading appearing
+    # later -- an emphasized "References" header, say -- usurp H1 out from under the document's
+    # real first heading, demoting it to H2 (confirmed on a real 28-page sample: raw output was
+    # H2, H1, H3...). PDF/UA and Adobe's own checker both require the first heading to be H1.
+    # Anything at least as large as that first heading (raw level <= first_raw; raw levels rank
+    # descending by size) is treated as an equally top-level sibling, not promoted above H1 --
+    # there is no level above H1 to fabricate, and real documents legitimately have several
+    # top-level headings (chapter titles) of the same or incidentally differing size.
+    first_raw = next(lvl for page in raw for lvl in page if lvl)
+    smaller = sorted(lvl for lvl in distinct if lvl > first_raw)
+    level_map = {lvl: 1 for lvl in distinct if lvl <= first_raw}
+    level_map.update({lvl: i + 2 for i, lvl in enumerate(smaller)})   # 2,3,4... no skips
     return [
         [f"H{min(level_map[lvl], 6)}" if lvl else "P" for lvl in page_levels]
         for page_levels in raw

@@ -215,6 +215,27 @@ def test_born_digital_headings_are_tagged_as_headings(tmp_path: Path):
     assert headings[0] == "/H1"
 
 
+def test_first_heading_in_reading_order_is_always_h1(tmp_path: Path):
+    # Global font-size ranking alone can put a LATER, larger heading at H1 while the document's
+    # actual first heading (smaller font, but still a real heading, e.g. a modest "I. Introduction")
+    # gets bumped to H2 -- exactly what a real 28-page academic-paper sample produced. PDF/UA and
+    # Adobe's own checker require the document's first heading to be H1; a later, incidentally
+    # bigger heading (a big "References" header, say) must not usurp that slot.
+    source = born_digital_pdf(
+        "<h2 style='font-size:20pt'>I. Introduction</h2><p>Body text here in the introduction.</p>"
+        "<h1 style='font-size:30pt'>References</h1><p>More body text follows down here.</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        tags = [str(elem.S) for elem in pdf.Root.StructTreeRoot.K[0].K]
+    headings = [t for t in tags if t.startswith("/H")]
+    assert headings[0] == "/H1", headings
+    # The later, bigger heading is also top-level (a sibling), not a usurper or a fabricated H0.
+    assert set(headings) == {"/H1"}, headings
+
+
 def test_ocr_heading_recovered_from_scan(tmp_path: Path):
     # A scan with a large, isolated title and full-width body: the title should be recovered as a
     # heading from OCR (size + isolation + shortness), where before every OCR line was a paragraph.
