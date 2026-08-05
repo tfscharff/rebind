@@ -21,6 +21,13 @@ Per page:
 
 Reading order for multi-column pages is recovered by recursive XY-cut over the text-line boxes.
 
+A born-digital page carries markup (font size, tags) that names its own structure directly. A
+scanned page, after OCR, does not — recognition returns only text and a bounding box per line. For
+those pages, structure is recovered by **inference from geometry**: line height relative to the
+page's body-text median, whitespace above and below a line, and alignment of text into recurring
+column positions. This is the same signal a sighted reader uses when scanning a page before
+reading a word of it, expressed numerically instead of visually.
+
 The structure tree (PDF/UA-1, veraPDF zero failures) carries:
 
 - **Headings** (`/H1`–`/H6`, level-normalized so the sequence starts at H1 and skips no level).
