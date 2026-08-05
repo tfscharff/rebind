@@ -603,6 +603,10 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
 
     # Pass two: build the tagged, appearance-preserving output.
     pdf = pikepdf.open(source)
+    # Runs before the per-page loop below (not after, as originally written) specifically so that
+    # loop only ever sees the annotations that survive -- the external links it goes on to tag into
+    # the structure tree -- never the legacy-destination ones this call is about to remove.
+    _strip_legacy_destinations(pdf)
     struct_root = pdf.make_indirect(Dictionary(Type=Name.StructTreeRoot))
     # PDF/UA-2 (ISO 14289-2) namespace. All the structure types below (/P, /H1-/H6, /Table, /TR,
     # /TD, /TH, /L, /LI, /LBody, /Figure) are retained as-is in the PDF 2.0 Standard Structure
@@ -619,6 +623,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     struct_root.RoleMap = Dictionary()
     struct_root.Namespaces = Array([ssn_namespace])
     parent_tree_nums = Array([])
+    # Page StructParents keys use 0..page_count-1 (the enumerate index below); annotation
+    # StructParent keys start right after, so neither numbering ever collides in the flat Nums array.
+    next_parent_key = len(source_pages)
     font = pdf.make_indirect(Dictionary(
         Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
     undescribed_figures: list[dict] = []
@@ -674,15 +681,31 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         parent_tree_nums.append(struct_parent)
         parent_tree_nums.append(pdf.make_indirect(Array(owners)))
 
+        # Tag every surviving annotation (an external URI/GoToR link -- _strip_legacy_destinations
+        # already removed any internal-destination one) into the structure tree: a /Link element
+        # whose sole child is an object reference (OBJR) to the annotation, cross-linked via the
+        # annotation's own /StructParent key into a NEW slot in the parent tree. Annotation
+        # StructParent keys share the same flat Nums numbering space as the page StructParents keys
+        # above but must never collide with them, so they start only after every page's is used.
+        for annot in page.obj.get("/Annots") or []:
+            link_elem = pdf.make_indirect(Dictionary(
+                Type=Name.StructElem, S=Name.Link, P=document_elem,
+                K=Array([Dictionary(Type=Name.OBJR, Obj=annot, Pg=page.obj)]),
+            ))
+            annot.StructParent = next_parent_key
+            parent_tree_nums.append(next_parent_key)
+            parent_tree_nums.append(link_elem)
+            document_elem.K.append(link_elem)
+            next_parent_key += 1
+
         for fid, bbox in undescribed:
             undescribed_figures.append({
                 "id": fid, "page": src_page.number,
                 "thumb": _crop_data_uri(page_image, bbox, src_page.width, src_page.height)})
 
     struct_root.ParentTree = pdf.make_indirect(Dictionary(Nums=parent_tree_nums))
-    struct_root.ParentTreeNextKey = len(source_pages)
+    struct_root.ParentTreeNextKey = next_parent_key
     pdf.Root.StructTreeRoot = struct_root
-    _strip_legacy_destinations(pdf)
     _set_metadata(pdf, title=title or source.stem, lang=lang)
     pdf.save(target, min_version="2.0")   # PDF/UA-2 requires a PDF 2.0 base (ISO 32000-2)
     pdf.close()

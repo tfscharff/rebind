@@ -125,6 +125,57 @@ def test_internal_link_destinations_are_stripped_not_left_broken(tmp_path: Path,
     assert result.compliant, result.summary()
 
 
+def test_surviving_link_annotation_is_tagged_into_the_structure_tree(tmp_path: Path,
+                                                                      verapdf_exe: Path):
+    # An external link (kept, unlike an internal-destination one -- see the test above) must have
+    # a structure-tree presence: a /StructParent on the annotation, and a /Link structure element
+    # whose object reference (OBJR) points back to it. Adobe's checker calls this "Tagged
+    # annotations"; a bare, untagged annotation fails it even though it isn't otherwise wrong.
+    from pikepdf import Array, Dictionary, Name, String
+
+    from rebind.validate import validate_pdf_ua
+
+    clean = born_digital_pdf("<h1>Title</h1><p>Body text.</p>", tmp_path / "clean.pdf")
+    source = tmp_path / "in.pdf"
+    with pikepdf.open(clean) as pdf:
+        page = pdf.pages[0]
+        external_link = pdf.make_indirect(Dictionary(
+            Type=Name.Annot, Subtype=Name.Link, Rect=Array([0, 20, 10, 30]),
+            A=Dictionary(S=Name.URI, URI=String("https://example.org")),
+        ))
+        page.obj.Annots = Array([external_link])
+        pdf.save(source)
+
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        annot = (pdf.pages[0].obj.get("/Annots") or [])[0]
+        assert "/StructParent" in annot, "annotation has no structure-tree back-reference"
+
+        def find_link(elem):
+            kids = elem.get("/K")
+            if not isinstance(kids, pikepdf.Array):
+                return None
+            if str(elem.get("/S")) == "/Link":
+                for k in kids:
+                    if isinstance(k, pikepdf.Dictionary) and str(k.get("/Type")) == "/OBJR":
+                        return k
+            for kid in kids:
+                if isinstance(kid, pikepdf.Dictionary) and kid.get("/Type") == pikepdf.Name.StructElem:
+                    found = find_link(kid)
+                    if found is not None:
+                        return found
+            return None
+
+        objr = find_link(pdf.Root.StructTreeRoot.K[0])
+        assert objr is not None, "no /Link structure element with an OBJR was found"
+        assert objr.Obj.objgen == annot.objgen
+
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
+
+
 def test_non_ascii_text_is_tagged_without_corrupting_the_font_encoding(tmp_path: Path,
                                                                         verapdf_exe: Path):
     # The invisible overlay's font declares WinAnsiEncoding; text drawn into it must be encoded as
