@@ -7,3 +7,6 @@
 *.ico binary
 *.exe binary
 *.dll binary
+
+# Keep GitHub's language bar reflecting actual project code, not the one Inno Setup build script.
+packaging/rebind.iss linguist-detectable=false
