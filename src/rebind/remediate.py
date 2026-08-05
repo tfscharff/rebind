@@ -83,6 +83,24 @@ OCR_HEADING_MAX_WIDTH_RATIO = 0.75  # a line filling more than this of the wides
 OCR_HEADING_ISOLATION_RATIO = 0.8   # whitespace above/below is at least this * the body height
 OCR_HEADING_TIER_TOLERANCE = 0.15   # heading heights within this fraction are the same level
 
+# Born-digital heading candidacy (profile.py) is style-only -- larger or bolder than body text,
+# with no check on the line's actual content. A figure-panel callout label ("A", "B", "C", ...) is
+# routinely bold for emphasis, which alone satisfies that test (confirmed on a real sample: a
+# 28-page document's recovered outline surfaced bare single-letter "headings" from exactly this).
+# No real document heading is a bare 1-2 character label, so a minimum content length costs
+# nothing on genuine headings -- "Abstract" (8 characters) is the shortest real heading seen in
+# that same sample and must still be promoted; this only excludes what could never be one.
+MIN_HEADING_CHARS = 3
+
+# A run of more than this many CONSECUTIVE born-digital heading-candidate lines is demoted back to
+# paragraphs. A genuine document heading is essentially never immediately adjacent to another
+# heading-styled line except a real title+subtitle pair (exactly 2 in a row, e.g. a chapter title
+# followed directly by its own subtitle); a longer run is something else entirely -- an author
+# byline broken into fragments around superscript affiliation markers, or a diagram's callout
+# labels ("Ventral", "Baffles", "Air pump", ...) -- confirmed on the real 28-page sample, whose
+# recovered outline surfaced both a 4-fragment byline and a 20+-label diagram burst this way.
+MAX_HEADING_BURST_RUN = 2
+
 # A table spans from its first detected row to its last; lines in between that were not themselves
 # detected as table rows are sparse rows (a subtotal, or a row with an empty cell -- too few
 # side-by-side cells to detect alone) and are kept so no row is dropped. The gap is bounded so prose
@@ -292,6 +310,31 @@ def _ocr_heading_heights(lines: list[TextLine]) -> dict[int, float]:
     return result
 
 
+def _demote_heading_bursts(levels: list[int]) -> list[int]:
+    """Demote a run of more than MAX_HEADING_BURST_RUN consecutive lines at the SAME exact raw
+    heading level back to paragraphs (0).
+
+    Grouping strictly by the same level (not "any heading, regardless of level") matters: a real
+    title immediately followed by its own subtitle uses two DIFFERENT levels and must never be
+    treated as a burst just for being adjacent, no matter how many levels are involved -- only a
+    run of lines that all share one style is the signature of a byline or diagram-label burst.
+    """
+    out = list(levels)
+    i, n = 0, len(out)
+    while i < n:
+        if not out[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and out[j] == out[i]:
+            j += 1
+        if j - i > MAX_HEADING_BURST_RUN:
+            for k in range(i, j):
+                out[k] = 0
+        i = j
+    return out
+
+
 def _height_tiers(heights: list[float]) -> list[float]:
     """Cluster heading heights into representative tiers, largest first (a tier per size level)."""
     tiers: list[float] = []
@@ -332,10 +375,15 @@ def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
                 page_levels.append(tier_level(page_headings[id(line)]) if id(line) in page_headings else 0)
             elif line.ocr_confidence is not None:
                 page_levels.append(0)
-            elif profile.role_of(line, page_height=src_page.height) == "heading":
+            elif (profile.role_of(line, page_height=src_page.height) == "heading"
+                  and len(line.text.strip()) >= MIN_HEADING_CHARS):
                 page_levels.append(profile.heading_level(style_of(line)) or 1)
             else:
                 page_levels.append(0)
+        if not page_is_ocr:
+            # OCR headings already carry their own isolation signal (_ocr_heading_heights);
+            # only born-digital candidacy (style + length alone) needs the burst check too.
+            page_levels = _demote_heading_bursts(page_levels)
         raw.append(page_levels)
 
     distinct = sorted({lvl for page in raw for lvl in page if lvl})

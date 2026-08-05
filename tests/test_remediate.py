@@ -266,6 +266,40 @@ def test_born_digital_headings_are_tagged_as_headings(tmp_path: Path):
     assert headings[0] == "/H1"
 
 
+def test_a_burst_of_heading_styled_lines_is_not_mistaken_for_headings(tmp_path: Path):
+    # A run of several short, distinctly-styled lines in immediate succession -- an author byline
+    # broken into fragments around superscript affiliation markers, or a diagram's callout labels
+    # ("Ventral", "Baffles", "Air pump", ...) -- each individually clears the length filter above,
+    # but a genuine document heading is essentially never adjacent to *another* heading-styled line
+    # except a real title+subtitle pair (exactly 2 in a row). Confirmed on the real 28-page sample:
+    # a 4-fragment byline and a 20+-label diagram burst both survived the length filter alone.
+    source = born_digital_pdf(
+        "<h1>Chapter One</h1>"
+        "<p style='font-weight:bold; font-size:18pt'>Jane A. Doe*,</p>"
+        "<p style='font-weight:bold; font-size:18pt'>, John B. Smith</p>"
+        "<p style='font-weight:bold; font-size:18pt'>, Mary C. Lee</p>"
+        "<p style='font-weight:bold; font-size:18pt'>and Tom D. Kim</p>"
+        "<p>Body paragraph describing the actual chapter content follows here.</p>"
+        "<h2>Introduction</h2>"
+        "<p>More body text continues the chapter's introduction section.</p>"
+        "<h1>Chapter Two</h1>"
+        "<h2>A Genuine Subtitle</h2>"
+        "<p>Body text for chapter two follows immediately after its subtitle.</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        tags = _all_struct_tags(pdf)
+    headings = [t for t in tags if t.startswith("/H")]
+    # The 4-fragment byline burst is excluded; the two real chapters (each with a genuine,
+    # isolated-or-paired subtitle) remain, in order.
+    assert headings == ["/H1", "/H2", "/H1", "/H2"], headings
+
+    text = _selectable_text(out)
+    assert "Jane A. Doe" in text, "byline text itself must still survive, just as a paragraph"
+
+
 def test_bare_short_labels_are_not_mistaken_for_headings(tmp_path: Path):
     # Figure-panel callout labels ("A", "B", "C" ...) are routinely bold, which alone qualifies a
     # style as a heading candidate in profile.py (larger-or-bolder than body, no content check at
