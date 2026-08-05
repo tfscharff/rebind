@@ -74,7 +74,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.9.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.10.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,
