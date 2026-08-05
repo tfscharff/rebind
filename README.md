@@ -39,8 +39,10 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
 - **Tables** (`/Table` → `/TR` → `/TD`) as a regular grid; the top row is header cells (`/TH`)
   scoped to their column, empty cells fill gaps so rows stay aligned, and the table carries its own
   `/Alt` summary (column/row count and header text — never a guess at what the table means).
-- **Figures** (`/Figure` with `/Alt`). Images are decorative artifacts by default; the app shows
-  each one so a description can be typed, which promotes it to a tagged figure with alt text.
+- **Figures** (`/Figure` with `/Alt`). A figure adjacent to a "Fig. N ..." caption is described
+  automatically from that caption text — no app interaction needed. Otherwise images are
+  decorative artifacts by default; the app shows each one so a description can be typed, which
+  promotes it to a tagged figure with alt text.
 - **Links** — an external link (URI) is tagged into the structure tree with an object reference
   back to its annotation. An internal link using a legacy page/coordinate destination is removed
   rather than left non-conformant (PDF/UA-2 requires internal destinations to be structure
@@ -72,13 +74,15 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.8.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.9.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
-structure tree above (headings, paragraphs, lists, tables, figures, links, bookmarks).
+structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,
+links, bookmarks).
 
-Not implemented: full page dewarp for spine-curved scans, figure/caption association, and
-mathematics/chemistry/music recognition. Output is not byte-reproducible (see ADR 0003).
+Not implemented: full page dewarp for spine-curved scans, vector-diagram figure detection (only
+raster images are currently recognized as figures), and mathematics/chemistry/music recognition.
+Output is not byte-reproducible (see ADR 0003).
 
 ## Runtime
 
