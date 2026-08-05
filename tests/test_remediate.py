@@ -7,7 +7,7 @@ from pathlib import Path
 import pikepdf
 import pypdfium2 as pdfium
 
-from rebind.remediate import remediate
+from rebind.remediate import _encode_winansi, remediate
 from tests.fixtures import born_digital_pdf, pdf_image_only_scan
 
 
@@ -57,6 +57,104 @@ def test_born_digital_is_copied_verbatim_with_metadata(tmp_path: Path):
         assert str(pdf.docinfo["/Title"]) == "My Title"
     # The original text survives and is still selectable.
     assert "body text" in _selectable_text(out)
+
+
+def test_malformed_source_xmp_does_not_hide_our_metadata(tmp_path: Path, verapdf_exe: Path):
+    # Real-world publisher PDFs (Elsevier's production pipeline, at least) embed a stray,
+    # non-namespaced XMP element -- a DRM/fingerprinting artifact -- that is well-formed XML but
+    # breaks veraPDF's strict metadata parser: it silently stops seeing OUR dc:title/pdfuaid
+    # entries too, even though pikepdf's own reader still finds them (real sample: 1429254.pdf).
+    # A namespace-less top-level XMP key is never a legitimate accessibility property, so
+    # _set_metadata must strip any that survive from the source before adding its own.
+    from rebind.validate import validate_pdf_ua
+
+    clean = born_digital_pdf("<h1>Title</h1><p>Body text.</p>", tmp_path / "clean.pdf")
+    source = tmp_path / "in.pdf"
+    with pikepdf.open(clean) as pdf:
+        with pdf.open_metadata() as meta:
+            meta["SomeRandomFingerprintTag"] = "junk"   # no namespace prefix -- the real shape
+        pdf.save(source)
+
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="A Title")
+
+    with pikepdf.open(out) as pdf:
+        with pdf.open_metadata() as meta:
+            assert meta["dc:title"] == "A Title"
+            assert meta["pdfuaid:part"] == "2"
+
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
+
+
+def test_internal_link_destinations_are_stripped_not_left_broken(tmp_path: Path, verapdf_exe: Path):
+    # A born-digital source can carry Link annotations navigating within the document (a table of
+    # contents, cross-references) -- confirmed on a real publisher sample (137 instances in one
+    # document). PDF/UA-2 clause 8.8 requires such destinations to be structure destinations, which
+    # Rebind does not yet build, so the annotation is dropped rather than left pointing at a legacy
+    # page+coordinate target that fails compliance. An external link (a URI action) is untouched.
+    from pikepdf import Array, Dictionary, Name, String
+
+    from rebind.validate import validate_pdf_ua
+
+    clean = born_digital_pdf("<h1>Title</h1><p>Body text.</p><p>More.</p>", tmp_path / "clean.pdf")
+    source = tmp_path / "in.pdf"
+    with pikepdf.open(clean) as pdf:
+        page = pdf.pages[0]
+        internal_link = pdf.make_indirect(Dictionary(
+            Type=Name.Annot, Subtype=Name.Link, Rect=Array([0, 0, 10, 10]),
+            Dest=Array([page.obj, Name.XYZ, 0, 792, 0]),
+        ))
+        external_link = pdf.make_indirect(Dictionary(
+            Type=Name.Annot, Subtype=Name.Link, Rect=Array([0, 20, 10, 30]),
+            A=Dictionary(S=Name.URI, URI=String("https://example.org")),
+        ))
+        page.obj.Annots = Array([internal_link, external_link])
+        pdf.save(source)
+
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        annots = pdf.pages[0].obj.get("/Annots") or []
+        kinds = [(a.get("/Dest") is not None, a.get("/A", {}).get("/S")) for a in annots]
+        assert (True, None) not in kinds, "internal-destination link should have been removed"
+        assert any(k[1] == Name.URI for k in kinds), "external link should survive untouched"
+
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
+
+
+def test_non_ascii_text_is_tagged_without_corrupting_the_font_encoding(tmp_path: Path,
+                                                                        verapdf_exe: Path):
+    # The invisible overlay's font declares WinAnsiEncoding; text drawn into it must be encoded as
+    # cp1252, not Python's UTF-8 default -- UTF-8 bytes reinterpreted as WinAnsi codepoints land on
+    # undefined byte values, which is an invalid Unicode mapping (PDF/UA-2 8.4.5.8/.9). Real
+    # academic/scanned text routinely carries curly quotes, em dashes and accents; this is not an
+    # edge case (confirmed by a real sample that failed exactly this way, 52 instances).
+    from rebind.validate import validate_pdf_ua
+
+    source = born_digital_pdf(
+        "<h1>Ti’tle</h1><p>Café — naïve “quoted” text.</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    text = _selectable_text(out)
+    assert "Caf" in text   # the recoverable prefix survives; a lone accented char may not
+
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
+
+
+def test_control_characters_become_spaces_not_invalid_glyphs():
+    # A real born-digital source can carry a literal tab in its extracted text, used for visual
+    # alignment (a real sample: "II.\tImaging Vascular Gene Expression"-style headings, 52
+    # instances). WinAnsiEncoding's own glyph table assigns no name to any C0 control character
+    # (PDF spec Annex D), so drawing one as a literal glyph always encodes to Unicode 0 regardless
+    # of the encoding used -- fails PDF/UA-2 8.4.5.8/.9. A tab is whitespace; encode it as one.
+    assert _encode_winansi("II.\tImaging") == b"II. Imaging"
+    assert _encode_winansi("a\nb\rc") == b"a b c"
 
 
 def test_scanned_page_gets_an_invisible_text_layer(tmp_path: Path):

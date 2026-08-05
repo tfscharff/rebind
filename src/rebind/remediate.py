@@ -160,6 +160,29 @@ def _escape(text: str) -> str:
     return text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
 
 
+def _encode_winansi(text: str) -> bytes:
+    """Encode text for the invisible overlay font (Type1 Helvetica, /Encoding /WinAnsiEncoding).
+
+    The overlay font's declared encoding is WinAnsi (cp1252), so the string bytes must be cp1252,
+    not the Python default of UTF-8 -- encoding non-ASCII text (accents, curly quotes, ligatures,
+    all routine in real scanned/academic text) as UTF-8 into a WinAnsi string silently corrupts it:
+    each UTF-8 byte is reinterpreted as its own WinAnsi codepoint, and some land on one of cp1252's
+    five undefined byte values (0x81/0x8D/0x8F/0x90/0x9D) -- an invalid Unicode mapping that fails
+    PDF/UA-2 8.4.5.8/8.4.5.9. A character with no cp1252 representation at all (Greek, CJK, ...) is
+    replaced with '?' -- a real loss for that one character, but confined to the invisible text
+    layer, and an honest substitution beats a silently wrong glyph.
+
+    C0 control characters (0x00-0x1F: tab, newline, ...) get the same treatment even though most
+    have a defined *codepoint* -- WinAnsiEncoding's own glyph table (PDF spec Annex D) assigns no
+    glyph name to any of them, so they encode to Unicode 0 regardless, the same failure. A real
+    born-digital source's own extracted text can carry a literal tab used for visual alignment
+    (confirmed on a real sample: a document with "II.\tImaging..."-style headings, 52 instances of
+    exactly this) -- replaced with a space, which is what the tab visually was anyway.
+    """
+    text = "".join(" " if ord(ch) < 0x20 else ch for ch in text)
+    return text.encode("cp1252", errors="replace")
+
+
 def _tagged_text_stream(lines: list[TextLine], font_name: str) -> bytes:
     """Invisible text (render mode 3), one marked-content paragraph per line.
 
@@ -171,11 +194,11 @@ def _tagged_text_stream(lines: list[TextLine], font_name: str) -> bytes:
     for mcid, line in enumerate(lines):
         x0, y0, x1, y1 = line.bbox
         size = max(y1 - y0, 1.0)
-        out.write(f"/P <</MCID {mcid}>> BDC\n".encode())
-        out.write(b"q BT 3 Tr /" + font_name.encode() + b" 1 Tf\n")
-        out.write(
-            f"{size:.2f} 0 0 {size:.2f} {x0:.2f} {y0:.2f} Tm ({_escape(line.text)}) Tj\n".encode()
-        )
+        out.write(f"/P <</MCID {mcid}>> BDC\n".encode("ascii"))
+        out.write(b"q BT 3 Tr /" + font_name.encode("ascii") + b" 1 Tf\n")
+        out.write(f"{size:.2f} 0 0 {size:.2f} {x0:.2f} {y0:.2f} Tm (".encode("ascii"))
+        out.write(_encode_winansi(_escape(line.text)))
+        out.write(b") Tj\n")
         out.write(b"ET Q\nEMC\n")
     return out.getvalue()
 
@@ -635,13 +658,18 @@ def _strip_legacy_destinations(pdf: pikepdf.Pdf) -> None:
     """Remove document navigation that PDF/UA-2 clause 8.8 forbids.
 
     PDF/UA-2 requires every internal destination (an outline/bookmark entry, a named destination,
-    an OpenAction) to be a *structure destination* -- one that names a structure element, not a
-    page + coordinates. Nothing before PDF 2.0 could produce that, so a born-digital source PDF's
-    own outline (built by whatever authored it -- Word, LaTeX, WeasyPrint) is carried through
-    verbatim on a page kept verbatim, and it fails this clause. Rebind does not yet build its own
-    structure-destination outline (a real feature, tracked separately), so the safe choice is to
-    drop the legacy one rather than ship a document that claims PDF/UA-2 and fails it. This is a
-    real navigation aid lost, not merely a formality -- worth restoring properly, see progress notes.
+    an OpenAction, or a Link annotation's GoTo target) to be a *structure destination* -- one that
+    names a structure element, not a page + coordinates. Nothing before PDF 2.0 could produce that,
+    so a born-digital source PDF's own navigation (an outline built by whatever authored it -- Word,
+    LaTeX, WeasyPrint -- or in-text cross-reference/TOC links) is carried through verbatim on a page
+    kept verbatim, and it fails this clause (confirmed on a real publisher sample: 137 Link-
+    annotation and Outline destinations in one document). Rebind does not yet build its own
+    structure-destination navigation (a real feature, tracked separately), so the safe choice is to
+    drop the legacy kind rather than ship a document that claims PDF/UA-2 and fails it. This is real
+    navigation lost, not merely a formality -- worth restoring properly, see progress notes.
+
+    External links (a URI action, or GoToR into another file) are untouched -- clause 8.8 is only
+    about destinations *within* this document.
     """
     root = pdf.Root
     if "/Outlines" in root:
@@ -652,6 +680,20 @@ def _strip_legacy_destinations(pdf: pikepdf.Pdf) -> None:
     if names is not None and "/Dests" in names:
         del names.Dests
 
+    for page in pdf.pages:
+        annots = page.obj.get("/Annots")
+        if annots is None:
+            continue
+        keep = []
+        for annot in annots:
+            is_internal_link = annot.get("/Subtype") == Name.Link and (
+                "/Dest" in annot or annot.get("/A", {}).get("/S") == Name.GoTo
+            )
+            if not is_internal_link:
+                keep.append(annot)
+        if len(keep) != len(annots):
+            page.obj.Annots = Array(keep)
+
 
 def _set_metadata(pdf: pikepdf.Pdf, *, title: str, lang: str) -> None:
     """Language, title, PDF/UA identifier, and the marked / display-title flags a reader needs."""
@@ -659,6 +701,16 @@ def _set_metadata(pdf: pikepdf.Pdf, *, title: str, lang: str) -> None:
     pdf.Root.MarkInfo = Dictionary(Marked=True)
     pdf.Root.ViewerPreferences = Dictionary(DisplayDocTitle=True)
     with pdf.open_metadata() as meta:
+        # Publisher-produced PDFs (confirmed: Elsevier's own pipeline, in a real sample) can carry
+        # a stray, non-namespaced XMP element -- a DRM/fingerprinting artifact. It's well-formed
+        # XML, but it breaks veraPDF's strict metadata parser badly enough that it stops seeing
+        # OUR dc:title/pdfuaid entries too (clauses 5 and 8.11.1 both fail), even though pikepdf's
+        # own reader still finds them fine. A legitimate XMP property always belongs to some
+        # namespace, so any top-level key with none is noise, never accessibility-relevant --
+        # strip it before adding ours.
+        for key in list(meta.keys()):
+            if not key.startswith("{"):
+                del meta[key]
         meta["dc:title"] = title
         meta["dc:language"] = lang
         meta["pdfuaid:part"] = "2"          # PDF/UA-2 identification (veraPDF clause 5)
