@@ -35,9 +35,9 @@ class ValidationResult:
 
     def summary(self) -> str:
         if self.compliant:
-            return "PDF/UA-1: PASS (0 failed checks)"
+            return "PDF/UA-2: PASS (0 failed checks)"
         total = sum(r.failed_checks for r in self.failed_rules)
-        return f"PDF/UA-1: FAIL ({len(self.failed_rules)} rules, {total} failed checks)"
+        return f"PDF/UA-2: FAIL ({len(self.failed_rules)} rules, {total} failed checks)"
 
 
 def _find_verapdf() -> Path:
@@ -87,12 +87,12 @@ def _parse_validation_report(raw: dict) -> ValidationResult:
         for summary in validation.get("details", {}).get("ruleSummaries", [])
     ]
 
-    # veraPDF's own report names the flavour "profileName" (e.g. "PDF/UA-1 validation
-    # profile"), not the short "ua1" spelling this module previously hardcoded regardless of
-    # what was actually validated. Read it from the report so this field reflects the real
-    # profile veraPDF ran, falling back to the literal `--flavour` value this module always
-    # passes (see `validate_pdf_ua`) only if a future report schema variant omits it.
-    flavour = str(validation.get("profileName") or "ua1")
+    # veraPDF's own report names the flavour "profileName" (e.g. "PDF/UA-2 + Tagged PDF
+    # validation profile"), not the short "ua2" spelling this module passes on the command line.
+    # Read it from the report so this field reflects the real profile veraPDF ran, falling back
+    # to the literal `--flavour` value (see `validate_pdf_ua`) only if a future report schema
+    # variant omits it.
+    flavour = str(validation.get("profileName") or "ua2")
 
     return ValidationResult(
         compliant=bool(validation["compliant"]),
@@ -103,13 +103,17 @@ def _parse_validation_report(raw: dict) -> ValidationResult:
 
 
 def validate_pdf_ua(
-    pdf_path: Path, verapdf_exe: Path | None = None, timeout: int = 300
+    pdf_path: Path, verapdf_exe: Path | None = None, timeout: int = 300, flavour: str = "ua2"
 ) -> ValidationResult:
-    """Validate a PDF against PDF/UA-1 and return a structured result."""
+    """Validate a PDF against PDF/UA (ISO 14289) and return a structured result.
+
+    `flavour` is veraPDF's short profile name -- "ua2" (default; PDF/UA-2, ISO 14289-2, what
+    `remediate()` produces) or "ua1" (PDF/UA-1, ISO 14289-1) for validating older output.
+    """
     exe = Path(verapdf_exe) if verapdf_exe else _find_verapdf()
 
     proc = subprocess.run(
-        [str(exe), "--flavour", "ua1", "--format", "json", str(pdf_path)],
+        [str(exe), "--flavour", flavour, "--format", "json", str(pdf_path)],
         capture_output=True,
         text=True,
         timeout=timeout,

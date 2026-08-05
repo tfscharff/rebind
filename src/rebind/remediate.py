@@ -542,11 +542,20 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     # Pass two: build the tagged, appearance-preserving output.
     pdf = pikepdf.open(source)
     struct_root = pdf.make_indirect(Dictionary(Type=Name.StructTreeRoot))
+    # PDF/UA-2 (ISO 14289-2) namespace. All the structure types below (/P, /H1-/H6, /Table, /TR,
+    # /TD, /TH, /L, /LI, /LBody, /Figure) are retained as-is in the PDF 2.0 Standard Structure
+    # Namespace -- confirmed against `verapdf -f ua2` (see docs/decisions/ for the spike). Only the
+    # root Document element needs /NS set explicitly; every descendant inherits it, so nothing else
+    # in this function's tag-building changes. Getting the namespace URI wrong (e.g. the plausible
+    # but incorrect "http://iso.org/pdf/ssn") fails clause 8.2.5.2 silently -- confirmed by trial.
+    PDF2_SSN_NAMESPACE = "http://iso.org/pdf2/ssn"
+    ssn_namespace = pdf.make_indirect(Dictionary(Type=Name.Namespace, NS=String(PDF2_SSN_NAMESPACE)))
     document_elem = pdf.make_indirect(
-        Dictionary(Type=Name.StructElem, S=Name.Document, P=struct_root, K=Array([]))
+        Dictionary(Type=Name.StructElem, S=Name.Document, NS=ssn_namespace, P=struct_root, K=Array([]))
     )
     struct_root.K = Array([document_elem])
     struct_root.RoleMap = Dictionary()
+    struct_root.Namespaces = Array([ssn_namespace])
     parent_tree_nums = Array([])
     font = pdf.make_indirect(Dictionary(
         Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
@@ -611,14 +620,37 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     struct_root.ParentTree = pdf.make_indirect(Dictionary(Nums=parent_tree_nums))
     struct_root.ParentTreeNextKey = len(source_pages)
     pdf.Root.StructTreeRoot = struct_root
+    _strip_legacy_destinations(pdf)
     _set_metadata(pdf, title=title or source.stem, lang=lang)
-    pdf.save(target)
+    pdf.save(target, min_version="2.0")   # PDF/UA-2 requires a PDF 2.0 base (ISO 32000-2)
     pdf.close()
     return RemediationResult(
         pdf_path=target, page_count=len(source_pages),
         ocr_pages=tuple(ocr_pages), empty_pages=tuple(empty_pages), added_text_layer=added_layer,
         figures=tuple(undescribed_figures),
     )
+
+
+def _strip_legacy_destinations(pdf: pikepdf.Pdf) -> None:
+    """Remove document navigation that PDF/UA-2 clause 8.8 forbids.
+
+    PDF/UA-2 requires every internal destination (an outline/bookmark entry, a named destination,
+    an OpenAction) to be a *structure destination* -- one that names a structure element, not a
+    page + coordinates. Nothing before PDF 2.0 could produce that, so a born-digital source PDF's
+    own outline (built by whatever authored it -- Word, LaTeX, WeasyPrint) is carried through
+    verbatim on a page kept verbatim, and it fails this clause. Rebind does not yet build its own
+    structure-destination outline (a real feature, tracked separately), so the safe choice is to
+    drop the legacy one rather than ship a document that claims PDF/UA-2 and fails it. This is a
+    real navigation aid lost, not merely a formality -- worth restoring properly, see progress notes.
+    """
+    root = pdf.Root
+    if "/Outlines" in root:
+        del root.Outlines
+    if "/OpenAction" in root:
+        del root.OpenAction
+    names = root.get("/Names")
+    if names is not None and "/Dests" in names:
+        del names.Dests
 
 
 def _set_metadata(pdf: pikepdf.Pdf, *, title: str, lang: str) -> None:
@@ -629,5 +661,6 @@ def _set_metadata(pdf: pikepdf.Pdf, *, title: str, lang: str) -> None:
     with pdf.open_metadata() as meta:
         meta["dc:title"] = title
         meta["dc:language"] = lang
-        meta["pdfuaid:part"] = "1"          # PDF/UA-1 identification (veraPDF clause 5)
+        meta["pdfuaid:part"] = "2"          # PDF/UA-2 identification (veraPDF clause 5)
+        meta["pdfuaid:rev"] = "2024"        # required alongside part for PDF/UA-2
     pdf.docinfo["/Title"] = title

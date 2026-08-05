@@ -31,7 +31,7 @@ def test_untagged_pdf_is_not_compliant(untagged_pdf: Path, verapdf_exe: Path):
     # `flavour` is read back from veraPDF's own report (see `_parse_validation_report`), not
     # hardcoded, so this asserts on veraPDF's actual profile name rather than the short
     # `--flavour` spelling rebind passes on the command line.
-    assert "UA-1" in result.flavour, result.flavour
+    assert "UA-2" in result.flavour, result.flavour
     assert len(result.failed_rules) > 0
 
 
