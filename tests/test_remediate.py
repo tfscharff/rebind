@@ -552,3 +552,39 @@ def test_figure_is_decorative_until_described(tmp_path: Path):
     with pikepdf.open(tmp_path / "out2.pdf") as pdf:
         figs = [e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Figure"]
         assert len(figs) == 1 and str(figs[0].get("/Alt")) == "A red bar chart of sales."
+
+
+def test_figure_with_a_caption_is_described_automatically(tmp_path: Path):
+    # A figure sitting directly under a "Fig. N ..." caption -- the real, standard convention
+    # (confirmed against a real sample: 1429254.pdf, gitignored) -- needs no manual description at
+    # all: the author's own caption is reused as /Alt, which is more accurate than anything Rebind
+    # could invent AND skips the app's describe step entirely for a figure that already names
+    # itself. A figure with no nearby caption still needs one (see the test above).
+    from tests.fixtures import born_digital_pdf_with_captioned_image
+    source = born_digital_pdf_with_captioned_image(tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+
+    result = remediate(source, out)
+
+    assert result.figures == (), "a captioned figure should need no manual description"
+    with pikepdf.open(out) as pdf:
+        figs = [e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Figure"]
+        assert len(figs) == 1
+        alt = str(figs[0].get("/Alt"))
+    assert alt.startswith("Fig. 1")
+    # WeasyPrint wraps the long caption across several physical lines; all of it must be captured,
+    # not just the first line.
+    assert "photograph of an actual" in alt
+
+
+def test_figure_with_no_nearby_caption_still_needs_a_description(tmp_path: Path):
+    # A caption-shaped line that is NOT actually adjacent to the figure (far below it, past normal
+    # body text) must not be mistaken for its caption -- conservative by construction, matching
+    # every other heuristic in this module: when in doubt, ask, don't guess.
+    from tests.fixtures import born_digital_pdf_with_image
+    source = born_digital_pdf_with_image(tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+
+    result = remediate(source, out)
+
+    assert len(result.figures) == 1, "an uncaptioned figure must still ask for a description"

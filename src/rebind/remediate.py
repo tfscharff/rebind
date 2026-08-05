@@ -73,6 +73,17 @@ MIN_LIST_ITEMS = 2   # a run of at least this many marked lines becomes a list, 
 FIGURE_MIN_COVERAGE = 0.01
 FIGURE_MAX_COVERAGE = 0.6
 
+# Figure/caption association. A caption sits directly adjacent to its figure (below it, the
+# standard convention; above, as a fallback -- some journals set table-style captions above
+# figures too) with only a small gap -- confirmed against a real sample (1429254.pdf): observed
+# gaps of ~11-14pt between an image and its "Fig. N" caption. A genuinely long caption wraps
+# across several physical lines with a much smaller line-to-line gap than that (~2-10pt observed);
+# the cap on line count is just a safety backstop against ever running into unrelated body text.
+CAPTION_MARKER_RE = re.compile(r"^(fig(?:ure)?s?\.?)\s*\d", re.IGNORECASE)
+CAPTION_MAX_GAP_PT = 20.0
+CAPTION_CONTINUATION_GAP_PT = 10.0
+CAPTION_MAX_LINES = 8
+
 # OCR heading recovery. A single OCR line's box height is noisy (a body line can crop tall), so no
 # one signal is trusted: a heading must be markedly taller than the page's body text AND set apart
 # by whitespace AND not fill the column -- the combination an inflated body line, which still sits
@@ -138,6 +149,54 @@ def _page_figures(src_page) -> list[tuple[str, tuple[float, float, float, float]
         if FIGURE_MIN_COVERAGE <= coverage <= FIGURE_MAX_COVERAGE:
             figures.append((f"p{src_page.number}f{index}", image.bbox))
     return figures
+
+
+def _horizontally_overlaps(a: tuple[float, float, float, float],
+                           b: tuple[float, float, float, float]) -> bool:
+    return a[0] < b[2] and b[0] < a[2]
+
+
+def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, float]) -> str | None:
+    """The figure's own caption, if the document has one directly adjacent to it -- reusing the
+    author's own words is more accurate than anything Rebind could invent, and skips the app's
+    manual describe step entirely for a figure that already names itself. Conservative by
+    construction, like every other heuristic in this module: no adjacent "Fig. N" line means no
+    caption, not a guess.
+    """
+    fx0, fy0, fx1, fy1 = bbox
+
+    def block_text(ordered: list[TextLine], first_gap: float) -> str | None:
+        if not ordered or first_gap > CAPTION_MAX_GAP_PT:
+            return None
+        if not CAPTION_MARKER_RE.match(ordered[0].text.strip()):
+            return None
+        block = [ordered[0]]
+        for prev, nxt in zip(ordered, ordered[1:]):
+            if len(block) >= CAPTION_MAX_LINES:
+                break
+            gap = prev.bbox[1] - nxt.bbox[3]   # y-up: prev is above nxt once sorted top-to-bottom
+            if gap > CAPTION_CONTINUATION_GAP_PT:
+                break
+            block.append(nxt)
+        # `ordered` walks outward from the figure -- top-to-bottom reading order for a caption
+        # below it, but bottom-to-top (reversed) for the rarer "caption above" fallback. Re-sort
+        # by position so the joined text always reads in the document's true top-to-bottom order.
+        block.sort(key=lambda ln: -ln.bbox[3])
+        return " ".join(ln.text.strip() for ln in block)
+
+    below = sorted(
+        (ln for ln in lines if ln.bbox[3] <= fy0 and _horizontally_overlaps(ln.bbox, bbox)),
+        key=lambda ln: -ln.bbox[3],   # closest to the figure (highest y1) first
+    )
+    found = block_text(below, (fy0 - below[0].bbox[3]) if below else 0.0)
+    if found is not None:
+        return found
+
+    above = sorted(
+        (ln for ln in lines if ln.bbox[1] >= fy1 and _horizontally_overlaps(ln.bbox, bbox)),
+        key=lambda ln: ln.bbox[1],   # closest to the figure (lowest y0) first
+    )
+    return block_text(above, (above[0].bbox[1] - fy1) if above else 0.0)
 
 
 def _crop_data_uri(page_image, bbox, page_width, page_height, max_side: int = 220) -> str:
@@ -710,8 +769,15 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         zip(pdf.pages, per_page, roles)
     ):
         figures = _page_figures(src_page)
-        described = [(fid, bbox) for fid, bbox in figures if fid in alt_texts]
-        undescribed = [(fid, bbox) for fid, bbox in figures if fid not in alt_texts]
+        # A figure sitting directly under (or, less commonly, above) a "Fig. N ..." caption needs
+        # no manual description at all: the author's own words are more accurate than anything
+        # Rebind could invent, and this skips the app's describe step entirely. Explicit
+        # user-supplied text (alt_texts) always wins over an auto-detected caption -- the user may
+        # have deliberately typed something better, or the caption match may be imperfect.
+        captions = {fid: _figure_caption(lines, bbox) for fid, bbox in figures}
+        effective_alt = {fid: alt_texts.get(fid) or captions[fid] for fid, _bbox in figures}
+        described = [(fid, bbox) for fid, bbox in figures if effective_alt[fid]]
+        undescribed = [(fid, bbox) for fid, bbox in figures if not effective_alt[fid]]
         rebuild = _has_marked_content(page)
         page_image = (render_page_to_image(source, src_page.number, dpi=dpi)
                       if rebuild or figures else None)
@@ -728,7 +794,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             figure_stream += (
                 f"/Figure <</MCID {mcid}>> BDC q {x1 - x0:.2f} 0 0 {y1 - y0:.2f} "
                 f"{x0:.2f} {y0:.2f} cm /Fig{k} Do Q EMC\n").encode()
-            figure_specs.append((mcid, alt_texts[fid], bbox))
+            figure_specs.append((mcid, effective_alt[fid], bbox))
             mcid += 1
 
         overlay = _tagged_text_stream(lines, "RebindF") + figure_stream

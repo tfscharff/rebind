@@ -233,3 +233,28 @@ def born_digital_pdf_with_image(target: Path) -> Path:
     html = (f"<h1>Report</h1><p>See the chart:</p>"
             f"<img src='{uri}' width='200' height='133'><p>As shown above.</p>")
     return born_digital_pdf(html, target)
+
+
+def born_digital_pdf_with_captioned_image(target: Path, *, caption: str | None = None) -> Path:
+    """A born-digital PDF with an embedded raster image immediately followed by a caption
+    paragraph -- the real shape (image, then "Fig. N ..." directly below it) confirmed against a
+    real sample (1429254.pdf, gitignored). `caption=None` uses a real multi-line caption whose
+    text wraps across several close-set lines, matching that sample's actual layout."""
+    import base64
+    import io as _io
+
+    from PIL import Image
+
+    buf = _io.BytesIO()
+    Image.new("RGB", (120, 80), (180, 40, 40)).save(buf, format="PNG")
+    uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    caption = caption or (
+        "Fig. 1 Microangiography of developing zebrafish embryos and larvae. The injection "
+        "needles are shown. A diagram of the setup is shown, and a photograph of an actual "
+        "setup is also shown."
+    )
+    html = (f"<h1>Report</h1><p>See the chart below.</p>"
+            f"<img src='{uri}' width='200' height='133'>"
+            f"<p style='font-size:8pt'>{caption}</p>"
+            f"<p>Body text continues after the caption.</p>")
+    return born_digital_pdf(html, target)
