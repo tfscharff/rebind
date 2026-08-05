@@ -154,13 +154,11 @@ def test_surviving_link_annotation_is_tagged_into_the_structure_tree(tmp_path: P
         assert "/StructParent" in annot, "annotation has no structure-tree back-reference"
 
         def find_link(elem):
+            if str(elem.get("/S")) == "/Link":
+                return elem
             kids = elem.get("/K")
             if not isinstance(kids, pikepdf.Array):
                 return None
-            if str(elem.get("/S")) == "/Link":
-                for k in kids:
-                    if isinstance(k, pikepdf.Dictionary) and str(k.get("/Type")) == "/OBJR":
-                        return k
             for kid in kids:
                 if isinstance(kid, pikepdf.Dictionary) and kid.get("/Type") == pikepdf.Name.StructElem:
                     found = find_link(kid)
@@ -168,9 +166,13 @@ def test_surviving_link_annotation_is_tagged_into_the_structure_tree(tmp_path: P
                         return found
             return None
 
-        objr = find_link(pdf.Root.StructTreeRoot.K[0])
-        assert objr is not None, "no /Link structure element with an OBJR was found"
+        link_elem = find_link(pdf.Root.StructTreeRoot.K[0])
+        assert link_elem is not None, "no /Link structure element was found"
+        objr = link_elem.K[0]
         assert objr.Obj.objgen == annot.objgen
+        # Adobe's "Other elements alternate text" check wants a Link's structure element to carry
+        # a description -- an honest, mechanical fact ("Link to <uri>"), never a guess at intent.
+        assert "https://example.org" in str(link_elem.Alt)
 
     result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
     assert result.compliant, result.summary()
@@ -324,6 +326,39 @@ def test_bare_short_labels_are_not_mistaken_for_headings(tmp_path: Path):
 
     text = _selectable_text(out)
     assert "Chapter One" in text and "Abstract" in text and "panel labeled" in text
+
+
+def test_heading_levels_never_skip_locally_even_if_the_skipped_level_exists_elsewhere(
+        tmp_path: Path, verapdf_exe: Path):
+    # veraPDF (PDF/UA-2's own reference validator) is satisfied as long as the GLOBAL SET of
+    # heading levels used has no gaps -- but Adobe's stricter "Appropriate nesting" check requires
+    # the SEQUENCE itself to never skip locally, even when the skipped level exists somewhere else
+    # in the document. Confirmed on a real 28-page sample that validated PDF/UA-2 compliant (0
+    # veraPDF failures) yet still failed Adobe's nesting check: raw sequence was
+    # ...H2, H3, H2, H2, H2, [H4]... -- a new, smaller style first encountered right after an H2
+    # (with no H3 immediately before it) globally ranked as the 4th-largest size in the whole
+    # document and so became H4, even though H3 existed earlier in the same document.
+    from rebind.validate import validate_pdf_ua
+
+    source = born_digital_pdf(
+        "<h1>Chapter</h1>"
+        "<p style='font-weight:bold; font-size:14pt'>Subsection A</p>"
+        "<p>Body text under subsection A.</p>"
+        "<h2>Section Two</h2>"
+        "<p style='font-weight:bold; font-size:10pt'>A smaller heading style, first seen here.</p>"
+        "<p>Body text under that smaller heading.</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        tags = _all_struct_tags(pdf)
+    levels = [int(t[2:]) for t in tags if t.startswith("/H")]
+    for i in range(1, len(levels)):
+        assert levels[i] <= levels[i - 1] + 1, f"heading skip at index {i}: {levels}"
+
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
 
 
 def test_first_heading_in_reading_order_is_always_h1(tmp_path: Path):

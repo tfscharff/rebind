@@ -386,25 +386,45 @@ def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
             page_levels = _demote_heading_bursts(page_levels)
         raw.append(page_levels)
 
-    distinct = sorted({lvl for page in raw for lvl in page if lvl})
-    if not distinct:
+    if not any(lvl for page in raw for lvl in page):
         return [["P"] * len(page_levels) for page_levels in raw]
 
     # Anchor H1 to whichever heading the reader meets FIRST in reading order, not to the single
     # largest font anywhere in the document. Global size-rank alone can let a heading appearing
     # later -- an emphasized "References" header, say -- usurp H1 out from under the document's
-    # real first heading, demoting it to H2 (confirmed on a real 28-page sample: raw output was
-    # H2, H1, H3...). PDF/UA and Adobe's own checker both require the first heading to be H1.
-    # Anything at least as large as that first heading (raw level <= first_raw; raw levels rank
-    # descending by size) is treated as an equally top-level sibling, not promoted above H1 --
+    # real first heading (confirmed on a real sample: raw output was H2, H1, H3...). PDF/UA and
+    # Adobe's own checker both require the first heading to be H1. Anything at least as large as
+    # that first heading is treated as an equally top-level sibling, not promoted above H1 --
     # there is no level above H1 to fabricate, and real documents legitimately have several
     # top-level headings (chapter titles) of the same or incidentally differing size.
     first_raw = next(lvl for page in raw for lvl in page if lvl)
-    smaller = sorted(lvl for lvl in distinct if lvl > first_raw)
-    level_map = {lvl: 1 for lvl in distinct if lvl <= first_raw}
-    level_map.update({lvl: i + 2 for i, lvl in enumerate(smaller)})   # 2,3,4... no skips
+
+    # Assign each NEW raw style (in reading-order first-appearance) at most one level deeper than
+    # the CURRENTLY OPEN branch -- not the deepest level ever reached historically. This is normal
+    # outline-nesting semantics (same as HTML/EPUB headings): returning to a shallower, previously
+    # -seen level CLOSES any deeper branch that was open, so a brand-new style encountered after
+    # that can only go one level past wherever the outline currently sits, not past its historical
+    # peak. Getting this wrong is the difference between satisfying veraPDF's PDF/UA-2 check and
+    # Adobe Acrobat's own stricter "Appropriate nesting" check: veraPDF is satisfied as long as the
+    # GLOBAL SET of levels used has no gaps, but Adobe requires the SEQUENCE itself to never skip
+    # locally. Confirmed on a real sample that validated PDF/UA-2 compliant (veraPDF, 0 failures)
+    # yet still failed Adobe's check: H2, H3, H2, H2, H2, [new style] -- tracking the historical
+    # max (3, from the H3) let the new style become H4; tracking the CURRENT depth (2, since the
+    # H3 branch had already closed by returning to H2) correctly gives it H3 instead.
+    level_map: dict[int, int] = {}
+    current_depth = 0
+    for page_levels in raw:
+        for lvl in page_levels:
+            if not lvl:
+                continue
+            if lvl in level_map:
+                current_depth = level_map[lvl]   # back to (or still at) a level already open
+                continue
+            level_map[lvl] = 1 if lvl <= first_raw else min(current_depth + 1, 6)
+            current_depth = level_map[lvl]
+
     return [
-        [f"H{min(level_map[lvl], 6)}" if lvl else "P" for lvl in page_levels]
+        [f"H{level_map[lvl]}" if lvl else "P" for lvl in page_levels]
         for page_levels in raw
     ]
 
@@ -743,6 +763,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             link_elem = pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.Link, P=document_elem,
                 K=Array([Dictionary(Type=Name.OBJR, Obj=annot, Pg=page.obj)]),
+                Alt=String(_link_alt(annot)),
             ))
             annot.StructParent = next_parent_key
             parent_tree_nums.append(next_parent_key)
@@ -813,6 +834,23 @@ def _build_outline(pdf: pikepdf.Pdf, heading_entries: list[tuple[int, pikepdf.Ob
         stack.append((level, item))
 
     pdf.Root.Outlines = outlines
+
+
+def _link_alt(annot: pikepdf.Object) -> str:
+    """An honest, non-fabricated /Alt for a /Link structure element (Adobe's 'Other elements
+    alternate text' check). Built entirely from the annotation's own action -- a mechanical fact
+    ("Link to <uri>"), never a guess at the link's purpose. A source PDF's own broken/malformed
+    URI (confirmed in a real sample: a publisher production defect, not something Rebind
+    introduces) is reported as-is -- honestly stating a broken thing is broken, not fabricating a
+    plausible-looking replacement.
+    """
+    action = annot.get("/A")
+    if action is not None:
+        if action.get("/S") == Name.URI and "/URI" in action:
+            return f"Link to {action.URI}"
+        if action.get("/S") == Name.GoToR and "/F" in action:
+            return f"Link to {action.F}"
+    return "Link"
 
 
 def _strip_legacy_destinations(pdf: pikepdf.Pdf) -> None:
