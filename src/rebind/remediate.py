@@ -410,7 +410,10 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
     table = pdf.make_indirect(Dictionary(
         Type=Name.StructElem, S=Name.Table, P=document_elem, K=Array([])))
     trs: list[pikepdf.Object] = []
+    header_texts: list[str] = []
+    row_count = 0
     for row_index, row in enumerate(_table_rows(cells)):
+        row_count += 1
         tr = pdf.make_indirect(Dictionary(
             Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
         by_column: dict[int, tuple[int, TextLine]] = {}
@@ -421,9 +424,11 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
         row_cells: list[pikepdf.Object] = []
         for c in range(len(columns)):
             if c in by_column:
-                mcid, _line = by_column[c]
+                mcid, line = by_column[c]
                 extra = {"A": Dictionary(O=Name.Table, Scope=Name.Column)} if is_header else None
                 row_cells.append(leaf(mcid, cell_type, tr, extra))
+                if is_header:
+                    header_texts.append(line.text.strip())
             else:
                 # An empty cell keeps the grid regular; it holds no content, so no marked content.
                 row_cells.append(pdf.make_indirect(Dictionary(
@@ -431,7 +436,20 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
         tr.K = Array(row_cells)
         trs.append(tr)
     table.K = Array(trs)
+    table.Alt = String(_table_summary(len(columns), row_count, header_texts))
     return table
+
+
+def _table_summary(column_count: int, row_count: int, header_texts: list[str]) -> str:
+    """An honest, non-fabricated /Alt for a /Table (Adobe's 'Tables must have a summary' check).
+
+    Built entirely from structure Rebind already knows -- column/row count and header cell text --
+    never a guess at what the table is *about* (invariant 1: never fabricate a table's meaning).
+    """
+    summary = f"Table with {column_count} columns and {row_count} rows."
+    if header_texts:
+        summary += f" Column headers: {', '.join(header_texts)}."
+    return summary
 
 
 def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], page_roles: list[str],

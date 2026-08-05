@@ -294,6 +294,22 @@ def test_table_is_fully_tagged_with_header_cells(tmp_path: Path):
         assert len(widths) == 1, f"irregular table: rows have {widths} cells"
 
 
+def test_table_has_an_auto_generated_summary(tmp_path: Path):
+    # A /Table needs its own /Alt (Adobe's "Tables must have a summary" check) -- generated from
+    # what's already known (column/row count, header text), never a semantic guess at the table's
+    # meaning (invariant 1: never fabricate).
+    from tests.fixtures import born_digital_pdf_with_table
+    source = born_digital_pdf_with_table(tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        table = next(e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Table")
+        summary = str(table.Alt)
+    assert "3 columns" in summary and "4 rows" in summary
+    assert "Region" in summary and "Sales" in summary and "Growth" in summary
+
+
 def test_sparse_table_row_is_kept_as_a_row(tmp_path: Path):
     # A subtotal-style row with an empty middle cell must not fragment the table or vanish: it stays
     # one table, and the sparse row is a /TR with an empty cell filling the gap.
