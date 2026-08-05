@@ -504,7 +504,14 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
         tr.K = Array(row_cells)
         trs.append(tr)
     table.K = Array(trs)
-    table.Alt = String(_table_summary(len(columns), row_count, header_texts))
+    summary = _table_summary(len(columns), row_count, header_texts)
+    table.Alt = String(summary)
+    # Also the dedicated /Summary Table attribute (ISO 32000-2's own mechanism for this, the same
+    # /A <</O /Table ...>> pattern already used for /Scope on header cells) -- confirmed necessary
+    # on a real sample: Adobe Acrobat's "Tables must have a summary" check kept failing with /Alt
+    # alone, even though /Alt is the generic PDF/UA alternate-description mechanism and should have
+    # been enough on its own.
+    table.A = Dictionary(O=Name.Table, Summary=String(summary))
     return table
 
 
@@ -760,11 +767,15 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # StructParent keys share the same flat Nums numbering space as the page StructParents keys
         # above but must never collide with them, so they start only after every page's is used.
         for annot in page.obj.get("/Annots") or []:
+            link_description = _link_alt(annot)
             link_elem = pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.Link, P=document_elem,
                 K=Array([Dictionary(Type=Name.OBJR, Obj=annot, Pg=page.obj)]),
-                Alt=String(_link_alt(annot)),
+                Alt=String(link_description),
             ))
+            # Also set directly on the annotation's own /Contents -- a real sample kept failing
+            # Adobe Acrobat's "Tagged annotations" check with /Alt on the struct element alone.
+            annot.Contents = String(link_description)
             annot.StructParent = next_parent_key
             parent_tree_nums.append(next_parent_key)
             parent_tree_nums.append(link_elem)
