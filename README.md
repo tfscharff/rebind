@@ -37,9 +37,16 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
 - **Paragraphs** (`/P`).
 - **Lists** (`/L` → `/LI` → `/LBody`).
 - **Tables** (`/Table` → `/TR` → `/TD`) as a regular grid; the top row is header cells (`/TH`)
-  scoped to their column, and empty cells fill gaps so rows stay aligned.
+  scoped to their column, empty cells fill gaps so rows stay aligned, and the table carries its own
+  `/Alt` summary (column/row count and header text — never a guess at what the table means).
 - **Figures** (`/Figure` with `/Alt`). Images are decorative artifacts by default; the app shows
   each one so a description can be typed, which promotes it to a tagged figure with alt text.
+- **Links** — an external link (URI) is tagged into the structure tree with an object reference
+  back to its annotation. An internal link using a legacy page/coordinate destination is removed
+  rather than left non-conformant (PDF/UA-2 requires internal destinations to be structure
+  destinations, which nothing before PDF 2.0 could produce).
+- **Bookmarks** — an outline built from the recovered headings, nested by level, each entry a real
+  PDF 2.0 structure destination into the heading itself.
 
 Text is never fabricated: every text node traces to recognizer output with a confidence score.
 Below threshold it becomes an explicit placeholder — `[text not recoverable from source scan,
@@ -65,10 +72,10 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.4.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.5.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
-structure tree above (headings, paragraphs, lists, tables, figures).
+structure tree above (headings, paragraphs, lists, tables, figures, links, bookmarks).
 
 Not implemented: full page dewarp for spine-curved scans, figure/caption association, and
 mathematics/chemistry/music recognition. Output is not byte-reproducible (see ADR 0003).
