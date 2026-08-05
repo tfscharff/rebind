@@ -629,6 +629,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     font = pdf.make_indirect(Dictionary(
         Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
     undescribed_figures: list[dict] = []
+    heading_entries: list[tuple[int, pikepdf.Object, str]] = []   # (level, struct_elem, title)
 
     for struct_parent, (page, (src_page, lines, used_ocr), page_roles) in enumerate(
         zip(pdf.pages, per_page, roles)
@@ -670,6 +671,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         page.obj.Tabs = Name.S
 
         tops, owners = _page_structure(pdf, lines, page_roles, document_elem, page.obj)
+        for mcid, role in enumerate(page_roles):
+            if role.startswith("H") and lines[mcid].text.strip():
+                heading_entries.append((int(role[1:]), owners[mcid], lines[mcid].text.strip()))
         for fmcid, alt, bbox in figure_specs:
             figure_elem = pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.Figure, P=document_elem, Pg=page.obj, K=fmcid,
@@ -706,6 +710,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     struct_root.ParentTree = pdf.make_indirect(Dictionary(Nums=parent_tree_nums))
     struct_root.ParentTreeNextKey = next_parent_key
     pdf.Root.StructTreeRoot = struct_root
+    _build_outline(pdf, heading_entries)
     _set_metadata(pdf, title=title or source.stem, lang=lang)
     pdf.save(target, min_version="2.0")   # PDF/UA-2 requires a PDF 2.0 base (ISO 32000-2)
     pdf.close()
@@ -716,6 +721,50 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         figures=tuple(undescribed_figures),
         structure_ok=self_check.ok, structure_issues=self_check.issues,
     )
+
+
+def _build_outline(pdf: pikepdf.Pdf, heading_entries: list[tuple[int, pikepdf.Object, str]]) -> None:
+    """Build a document outline (bookmarks) from the headings remediate() already recovered, nested
+    by level, using real PDF 2.0 **structure destinations** -- an `/SD` reference straight into the
+    heading's own structure element -- rather than a page/coordinate destination, the kind PDF/UA-2
+    clause 8.8 forbids and `_strip_legacy_destinations` removes from the source.
+
+    A source's own outline (built by whatever authored it) always used the legacy kind and is
+    stripped; without this, a document that HAD bookmarks would end up with none at all -- a real
+    navigation loss for long documents (confirmed: Adobe's checker flags "Bookmarks are present in
+    large documents" for exactly this). `heading_entries` is `(level, struct_elem, title)` in
+    reading order, collected as headings are built (`remediate()`'s main loop); a heading whose
+    level jumps deeper than the currently open ancestor simply nests one level under it (the
+    normal case, since `_structure_roles` already guarantees levels never skip).
+    """
+    if not heading_entries:
+        return
+
+    outlines = pdf.make_indirect(Dictionary(Type=Name.Outlines))
+
+    def append_child(parent: pikepdf.Object, item: pikepdf.Object) -> None:
+        if "/First" not in parent:
+            parent.First = item
+            parent.Last = item
+        else:
+            item.Prev = parent.Last
+            parent.Last.Next = item
+            parent.Last = item
+        parent.Count = int(parent.get("/Count", 0)) + 1
+
+    stack: list[tuple[int, pikepdf.Object]] = []   # (level, item) for each currently open ancestor
+    for level, elem, title in heading_entries:
+        while stack and stack[-1][0] >= level:
+            stack.pop()
+        parent = stack[-1][1] if stack else outlines
+        item = pdf.make_indirect(Dictionary(
+            Title=String(title), Parent=parent,
+            Dest=Array([Dictionary(S=Name.XYZ, SD=elem)]),
+        ))
+        append_child(parent, item)
+        stack.append((level, item))
+
+    pdf.Root.Outlines = outlines
 
 
 def _strip_legacy_destinations(pdf: pikepdf.Pdf) -> None:

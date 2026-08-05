@@ -392,6 +392,45 @@ def test_tagged_table_is_pdf_ua_compliant(tmp_path: Path, verapdf_exe: Path):
     assert result.compliant, result.summary()
 
 
+def test_outline_is_built_from_recovered_headings_with_structure_destinations(
+        tmp_path: Path, verapdf_exe: Path):
+    # PDF/UA-2 clause 8.8 requires internal destinations to be structure destinations; nothing
+    # before PDF 2.0 could produce that, so a source's own outline is stripped
+    # (_strip_legacy_destinations) rather than shipped broken -- but a document that HAD bookmarks
+    # then has none, which Adobe flags for "large documents" (real sample: this regressed a
+    # previously-passing check). Rebind now builds its own outline from the headings it already
+    # recovers, nested by level, each entry a real structure destination (/SD) into the heading
+    # element itself -- not a page/coordinate destination.
+    from rebind.validate import validate_pdf_ua
+
+    source = born_digital_pdf(
+        "<h1>Chapter One</h1><p>Body text here.</p>"
+        "<h2>A Section</h2><p>More body text.</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        outlines = pdf.Root.get("/Outlines")
+        assert outlines is not None, "no outline was built"
+        assert int(outlines.Count) == 1   # one top-level item (Chapter One); A Section nests under it
+        top = outlines.First
+        assert str(top.Title) == "Chapter One"
+        assert int(top.Count) == 1        # one nested child
+        child = top.First
+        assert str(child.Title) == "A Section"
+        # Each destination is a real structure destination -- an /SD reference into the heading
+        # element -- never a page/coordinate destination (that's exactly what fails clause 8.8).
+        for item in (top, child):
+            dest = item.Dest[0]
+            assert str(dest.S) == "/XYZ"
+            assert "/SD" in dest
+            assert str(dest.SD.S).startswith("/H")
+
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
+
+
 def test_figure_is_decorative_until_described(tmp_path: Path):
     from tests.fixtures import born_digital_pdf_with_image
     source = born_digital_pdf_with_image(tmp_path / "in.pdf")
