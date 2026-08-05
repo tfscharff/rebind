@@ -25,6 +25,7 @@ from .extract import Page, TextLine, extract_pages
 from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines
 from .ocr import OcrEngine, recognize, render_page_to_image
 from .profile import build_profile, style_of
+from .validate import self_check_pdf_ua2
 
 # --- Line/page classification (relocated from the retired reconstruction pipeline) --------------
 # A page with a text layer AND a raster image covering at least this fraction of its area is an
@@ -99,6 +100,11 @@ class RemediationResult:
     # Figures with no description yet: each is {"id", "page", "thumb"} (a small preview data URI).
     # Give a figure a description and re-run with alt_texts to promote it to a tagged /Figure.
     figures: tuple[dict, ...] = ()
+    # A fast, dependency-free structural sanity check on the output (validate.self_check_pdf_ua2)
+    # -- not independent conformance validation (that's veraPDF, dev/CI-only). Lets the app show an
+    # honest "PDF/UA-2 tagged" badge without a JVM runtime dependency.
+    structure_ok: bool = True
+    structure_issues: tuple[str, ...] = ()
 
 
 def _page_figures(src_page) -> list[tuple[str, tuple[float, float, float, float]]]:
@@ -647,10 +653,12 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     _set_metadata(pdf, title=title or source.stem, lang=lang)
     pdf.save(target, min_version="2.0")   # PDF/UA-2 requires a PDF 2.0 base (ISO 32000-2)
     pdf.close()
+    self_check = self_check_pdf_ua2(target)
     return RemediationResult(
         pdf_path=target, page_count=len(source_pages),
         ocr_pages=tuple(ocr_pages), empty_pages=tuple(empty_pages), added_text_layer=added_layer,
         figures=tuple(undescribed_figures),
+        structure_ok=self_check.ok, structure_issues=self_check.issues,
     )
 
 

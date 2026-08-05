@@ -1,10 +1,39 @@
 from pathlib import Path
 
+import pikepdf
 import pytest
 
 from rebind.remediate import remediate
-from rebind.validate import ValidationResult, _parse_validation_report, validate_pdf_ua
+from rebind.validate import (
+    ValidationResult,
+    _parse_validation_report,
+    self_check_pdf_ua2,
+    validate_pdf_ua,
+)
 from tests.fixtures import born_digital_pdf
+
+
+def test_self_check_passes_on_real_remediate_output(tmp_path: Path):
+    # No veraPDF/JVM needed -- this is the always-available badge the app shows.
+    source = born_digital_pdf("<h1>Title</h1><p>Body text.</p>", tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    result = self_check_pdf_ua2(out)
+    assert result.ok, result.issues
+
+
+def test_self_check_reports_issues_on_a_plain_pdf(tmp_path: Path):
+    # A PDF with none of remediate()'s structure should fail every check, honestly, not silently
+    # report success.
+    target = tmp_path / "plain.pdf"
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(612, 792))
+    pdf.save(target)
+
+    result = self_check_pdf_ua2(target)
+    assert not result.ok
+    assert result.issues
 
 
 def test_conformant_pdf_is_compliant(tmp_path: Path, verapdf_exe: Path):

@@ -126,6 +126,10 @@ li.cond.attention{border-left-color:var(--attention)}
 .cond .pages{font-family:var(--mono);font-size:.8rem;color:var(--ink);margin:.5rem 0 0}
 .cond .pages b{color:var(--muted);font-weight:400}
 .clean{display:flex;gap:.7rem;align-items:center;color:var(--cloth);font-weight:600}
+.struct-badge{font-family:var(--mono);font-size:.78rem;text-transform:uppercase;letter-spacing:.03em;
+  margin:.3rem 0 0}
+.struct-badge.ok{color:var(--cloth)}
+.struct-badge.attention{color:var(--attention);text-transform:none;letter-spacing:normal}
 /* Figure description editor */
 .figures h2{font-family:var(--serif);font-size:1.2rem;margin:0 0 .2rem}
 .figrow{display:flex;gap:1rem;align-items:flex-start;padding:.9rem 0;border-top:1px solid var(--line)}
@@ -240,6 +244,7 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
     var review=s.review, figures=s.figures||[];
     var h='<h2 class="visually-hidden">Result</h2><div class="panel result">'+
       '<h2>Your accessible PDF is ready</h2>'+
+      structureBadge(s.structure_ok, s.structure_issues||[])+
       '<div class="downloads">'+
       '<a class="btn primary" href="/jobs/'+id+'/pdf" download>Download PDF</a>'+
       '</div></div>';
@@ -251,6 +256,12 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
     say(figures.length? ('Done. '+figures.length+' image'+(figures.length>1?'s':'')+' can be described for a screen reader.') : 'Done. Your accessible PDF is ready to download.');
     work.setAttribute('tabindex','-1');
     work.focus();
+  }
+
+  function structureBadge(ok, issues){
+    if(ok) return '<p class="struct-badge ok">PDF/UA-2 tagged</p>';
+    var list=issues.map(function(i){return esc(i);}).join(', ');
+    return '<p class="struct-badge attention">Structure check found an issue: '+list+'</p>';
   }
 
   function renderFigures(id, name, figures){

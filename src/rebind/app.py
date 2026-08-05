@@ -45,6 +45,8 @@ class _Job:
     review: dict | None = None
     figures: list = field(default_factory=list)   # figures still needing a description
     alt_texts: dict = field(default_factory=dict)  # descriptions the user has supplied so far
+    structure_ok: bool = True
+    structure_issues: tuple = ()
     error: str | None = None
 
 
@@ -84,6 +86,8 @@ def _run_conversion(job: _Job, source: Path) -> None:
                            alt_texts=job.alt_texts)
         job.pdf_path = result.pdf_path
         job.figures = list(result.figures)
+        job.structure_ok = result.structure_ok
+        job.structure_issues = result.structure_issues
         job.review = build_review(
             page_count=result.page_count, ocr_pages=result.ocr_pages,
             empty_pages=result.empty_pages,
@@ -131,6 +135,8 @@ def create_app() -> Starlette:
         if job.status == "done":
             body["review"] = job.review
             body["figures"] = job.figures
+            body["structure_ok"] = job.structure_ok
+            body["structure_issues"] = list(job.structure_issues)
         if job.status == "error":
             body["error"] = job.error
         return JSONResponse(body)

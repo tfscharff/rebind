@@ -1,4 +1,4 @@
-"""Thin wrapper over the veraPDF CLI.
+"""Thin wrapper over the veraPDF CLI, plus a dependency-free self-check.
 
 veraPDF validates PDF/UA structural conformance. It is not a WCAG checker — the criteria
 requiring human judgment are reported separately by Rebind. See the design spec, section 2.
@@ -12,6 +12,8 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import pikepdf
 
 
 class VeraPdfNotFound(RuntimeError):
@@ -125,3 +127,45 @@ def validate_pdf_ua(
 
     raw = json.loads(proc.stdout)
     return _parse_validation_report(raw)
+
+
+@dataclass(frozen=True)
+class SelfCheckResult:
+    ok: bool
+    issues: tuple[str, ...] = ()
+
+
+def self_check_pdf_ua2(pdf_path: Path) -> SelfCheckResult:
+    """A fast, dependency-free structural sanity check for what `remediate()` always builds.
+
+    This is NOT independent PDF/UA-2 conformance validation -- that requires a real validator
+    (veraPDF; see `validate_pdf_ua`), which needs a JVM Rebind does not bundle at runtime (adding
+    one would undo the installer-size work -- see the packaging notes in CLAUDE.md). This instead
+    confirms the handful of structural markers `remediate()` is responsible for and is tested
+    (via veraPDF, in CI) to always produce correctly, so the app can show an honest "PDF/UA-2
+    tagged" badge without a heavyweight runtime dependency, and catch a silent partial failure
+    rather than default to claiming success.
+    """
+    issues: list[str] = []
+    with pikepdf.open(pdf_path) as pdf:
+        if float(pdf.pdf_version) < 2.0:
+            issues.append("not saved as PDF 2.0")
+
+        struct_root = pdf.Root.get("/StructTreeRoot")
+        if struct_root is None:
+            issues.append("no structure tree")
+        elif "/Namespaces" not in struct_root:
+            issues.append("structure tree has no PDF/UA-2 namespace")
+
+        mark_info = pdf.Root.get("/MarkInfo")
+        if mark_info is None or not bool(mark_info.get("/Marked")):
+            issues.append("document not marked as tagged")
+
+        if "/Lang" not in pdf.Root:
+            issues.append("no document language set")
+
+        with pdf.open_metadata() as meta:
+            if meta.get("pdfuaid:part") != "2":
+                issues.append("missing PDF/UA-2 identification")
+
+    return SelfCheckResult(ok=not issues, issues=tuple(issues))

@@ -58,6 +58,9 @@ def test_convert_flow_end_to_end(tmp_path: Path):
         time.sleep(0.2)
     assert status["status"] == "done", status.get("error")
     assert "review" in status
+    # The structural self-check badge: no veraPDF/JVM needed, just remediate()'s own guarantees.
+    assert status["structure_ok"] is True
+    assert status["structure_issues"] == []
 
     pdf_resp = client.get(f"/jobs/{job_id}/pdf")
     assert pdf_resp.status_code == 200
