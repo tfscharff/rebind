@@ -323,23 +323,30 @@ def detect_table_lines(lines: list[TextLine]) -> set[int]:
     without depending on bbox/text equality.
     """
     rows = _rows_by_band(lines)
-    # Each row's horizontally-disjoint cells (a cell starts at/after the previous cell's right edge).
-    # A dense row -- cells covering more than TABLE_ROW_MAX_FILL of the row span -- is flowing
-    # multi-column text, not a table row, and contributes no cells. This is what removes the 1905
-    # bulletin's dense three-column articles before the regularity test below.
-    row_cells: list[list[TextLine]] = []
-    for row in rows:
+
+    def disjoint_cells(row: list[TextLine]) -> list[TextLine]:
+        # A row's horizontally-disjoint cells (a cell starts at/after the previous cell's right edge).
         cells = sorted(row, key=lambda ln: ln.bbox[0])
-        disjoint = [cells[0]] if cells else []
+        out = [cells[0]] if cells else []
         for ln in cells[1:]:
-            if ln.bbox[0] >= disjoint[-1].bbox[2]:
-                disjoint.append(ln)
-        if len(disjoint) >= MIN_COLUMNS_FOR_TABLE:
-            span = disjoint[-1].bbox[2] - disjoint[0].bbox[0]
-            fill = sum(c.bbox[2] - c.bbox[0] for c in disjoint) / span if span > 0 else 1.0
-            if fill > TABLE_ROW_MAX_FILL:
-                disjoint = []
-        row_cells.append(disjoint)
+            if ln.bbox[0] >= out[-1].bbox[2]:
+                out.append(ln)
+        return out
+
+    all_cells = [disjoint_cells(row) for row in rows]
+
+    # row_cells feeds ONLY the "does this region look tabular at all" signal below (establishing
+    # recurring columns) -- a dense row (cells covering more than TABLE_ROW_MAX_FILL of the row
+    # span, i.e. flowing multi-column text, not a table) must not by itself convince the detector a
+    # region is a table. This is what removes the 1905 bulletin's dense three-column articles.
+    row_cells: list[list[TextLine]] = []
+    for cells in all_cells:
+        if len(cells) >= MIN_COLUMNS_FOR_TABLE:
+            span = cells[-1].bbox[2] - cells[0].bbox[0]
+            fill = sum(c.bbox[2] - c.bbox[0] for c in cells) / span if span > 0 else 1.0
+            row_cells.append([] if fill > TABLE_ROW_MAX_FILL else cells)
+        else:
+            row_cells.append([])
 
     # Cluster every cell's left edge into candidate columns, and record which rows touch each.
     column_x: list[float] = []
@@ -367,8 +374,15 @@ def detect_table_lines(lines: list[TextLine]) -> set[int]:
         return [c for c in cells if any(abs(c.bbox[0] - cx) <= COLUMN_ALIGN_TOLERANCE_PT
                                         for cx in recurring_x)]
 
+    # Once a region is established as tabular (above, from the non-dense rows), test EVERY row --
+    # including ones excluded above for density -- against the columns already proven to recur. A
+    # real table row with one unusually long cell value is still tightly aligned with its
+    # neighbors; density only mattered for deciding whether the region was a table in the first
+    # place, not for whether an individual already-established row belongs to it (a real sample's
+    # row was otherwise dropped this way, fragmenting one table into two and mistagging the second
+    # fragment's first data row as a header).
     table_rows = [
-        row_index for row_index, cells in enumerate(row_cells)
+        row_index for row_index, cells in enumerate(all_cells)
         if len(cells_on_recurring(cells)) >= MIN_COLUMNS_FOR_TABLE
     ]
     if len(table_rows) < MIN_ROWS_FOR_TABLE:
@@ -376,6 +390,6 @@ def detect_table_lines(lines: list[TextLine]) -> set[int]:
 
     flagged: set[int] = set()
     for row_index in table_rows:
-        for cell in cells_on_recurring(row_cells[row_index]):
+        for cell in cells_on_recurring(all_cells[row_index]):
             flagged.add(id(cell))
     return flagged

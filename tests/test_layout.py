@@ -167,6 +167,41 @@ def test_two_column_flowing_text_is_not_a_table_via_order_page():
     assert layout.table_line_ids == set(), "two-column layout was mistaken for a table"
 
 
+def test_a_dense_row_on_established_columns_is_still_a_table_row():
+    from rebind.layout import detect_table_lines
+    # Real bboxes from a real sample (1429254.pdf, gitignored): a genuine table row whose middle
+    # cell has an unusually long value ("Initially pan-endothelial, enriched in arteries at later
+    # stages") pushes that ROW's own fill fraction to ~0.90 -- over TABLE_ROW_MAX_FILL (0.8) -- even
+    # though its three cells land on exactly the same recurring column positions as every other row.
+    # The dense-row filter exists to keep flowing multi-column prose (the 1905 bulletin) from
+    # manufacturing a false table; it must not, as a side effect, drop a real row of a real table
+    # just because one of its values happens to be longer than its neighbors'. This split one real
+    # table into two detected islands, and the second island's first (data) row was then mistagged
+    # as a header.
+    normal_rows = [
+        [_line(62, 236, 110, 244, "Marker genes"),
+         _line(124, 236, 200, 244, "Expression pattern"),
+         _line(330, 236, 390, 244, "Reference")],
+        [_line(61.8, 218, 75.6, 226, "Fli1a"),
+         _line(124.2, 218, 175.5, 226, "Pan-endothelial"),
+         _line(330.4, 218, 393.8, 226, "Brown et al. (2000)")],
+        [_line(61.8, 208, 75.6, 216, "tie2"),
+         _line(124.2, 208, 175.5, 216, "Pan-endothelial"),
+         _line(330.4, 208, 393.8, 216, "Lyons et al. (1998)")],
+    ]
+    dense_row = [
+        _line(61.7872, 198.0449, 97.5177, 206.039, "Kdrl (flk1)"),
+        _line(124.1461, 198.0449, 313.3506, 206.039,
+             "Initially pan-endothelial, enriched in arteries at later stages"),
+        _line(330.383, 198.0449, 478.2461, 206.039, "(Bussmann et al., 2008); Sumoy et al. (1997)"),
+    ]
+    lines = [ln for row in normal_rows for ln in row] + dense_row
+    flagged = detect_table_lines(lines)
+    assert all(id(ln) in flagged for ln in dense_row), (
+        "a genuine table row was dropped for being dense, fragmenting the table"
+    )
+
+
 def test_order_page_flags_a_real_table_grid():
     grid = [_grid_line(c, r, f"r{r}c{c}") for r in range(4) for c in range(3)]
     page = Page(number=1, width=612, height=792, lines=tuple(grid), images=())
