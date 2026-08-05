@@ -6,6 +6,7 @@ avoids bundling a native GUI toolkit and gives librarians a familiar interface.
 
 from __future__ import annotations
 
+import sys
 import tempfile
 import threading
 import time
@@ -220,15 +221,30 @@ def _log_file_path() -> Path:
     frozen executable (or the current working directory, unfrozen) is the minimum needed so a
     librarian who hits a crash has something to send back other than "it didn't work."
     """
-    import sys
-
     base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
     return base / "rebind.log"
+
+
+def _hold_single_instance_mutex() -> None:
+    """Create a named Win32 mutex and hold it for the process's lifetime (never closed -- the OS
+    releases it automatically on exit).
+
+    This is what lets `packaging/rebind.iss`'s `AppMutex=RebindSingleInstanceMutex` detect a
+    running instance during install/upgrade and offer to close it first, so re-running the
+    installer over an existing install just works -- no manual "quit Rebind, then install" step.
+    Windows-only; a no-op everywhere else (dev on macOS/Linux, if that ever happens).
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    ctypes.windll.kernel32.CreateMutexW(None, False, "RebindSingleInstanceMutex")
 
 
 def main() -> None:
     import uvicorn
 
+    _hold_single_instance_mutex()
     log_config = uvicorn.config.LOGGING_CONFIG
     # use_colors=None makes uvicorn's formatters call sys.stdout.isatty() at construction time.
     # In the console=False frozen build sys.stdout is None whenever the process is launched

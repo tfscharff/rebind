@@ -13,6 +13,10 @@ live inside rapidocr_onnxruntime and must be collected as data or the frozen exe
 The real bundle is guarded by `pytest -m packaging` (it OCRs through the shipping exe).
 """
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(SPEC)))
+import make_version_info  # noqa: E402 -- needs sys.path patched first; SPEC is PyInstaller-injected
 
 from PyInstaller.utils.hooks import collect_all
 
@@ -68,7 +72,10 @@ pyz = PYZ(a.pure)
 # version=: without an explicit version resource a PyInstaller exe has entirely blank Company/
 # Product/Description metadata, which is an antivirus heuristic trigger in its own right on top
 # of everything else about this binary that already looks suspicious (unsigned, large, packed,
-# bundling native DLLs, opens a local listener). See packaging/version_info.txt.
+# bundling native DLLs, opens a local listener). Generated fresh on every build from
+# rebind.__version__ (make_version_info.py) so the exe's Windows-visible version can never drift
+# from pyproject.toml/rebind.iss again -- it silently did, stuck at 0.0.1.0, for four releases.
+make_version_info.write()
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="rebind",
           console=False, icon="rebind.ico", version="version_info.txt")
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="rebind")

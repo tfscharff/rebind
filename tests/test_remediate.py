@@ -266,6 +266,32 @@ def test_born_digital_headings_are_tagged_as_headings(tmp_path: Path):
     assert headings[0] == "/H1"
 
 
+def test_bare_short_labels_are_not_mistaken_for_headings(tmp_path: Path):
+    # Figure-panel callout labels ("A", "B", "C" ...) are routinely bold, which alone qualifies a
+    # style as a heading candidate in profile.py (larger-or-bolder than body, no content check at
+    # all) -- confirmed on a real 28-page sample, whose recovered outline surfaced single-letter
+    # "headings" from exactly this. A real document heading is never a bare 1-2 character label;
+    # requiring a minimum amount of content costs nothing on genuine short headings ("Abstract",
+    # a real heading in that same sample, is 8 characters and must still be promoted).
+    source = born_digital_pdf(
+        "<h1>Chapter One</h1>"
+        "<p>Body paragraph here, with an inline figure panel labeled below it.</p>"
+        "<p style='font-weight:bold; font-size:18pt'>A</p>"
+        "<p>More body text describing the panel goes here.</p>"
+        "<h2>Abstract</h2><p>Even more body text follows this genuine short heading.</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        tags = _all_struct_tags(pdf)
+    headings = [t for t in tags if t.startswith("/H")]
+    assert headings == ["/H1", "/H2"], headings   # exactly the two real headings, bare "A" excluded
+
+    text = _selectable_text(out)
+    assert "Chapter One" in text and "Abstract" in text and "panel labeled" in text
+
+
 def test_first_heading_in_reading_order_is_always_h1(tmp_path: Path):
     # Global font-size ranking alone can put a LATER, larger heading at H1 while the document's
     # actual first heading (smaller font, but still a real heading, e.g. a modest "I. Introduction")
