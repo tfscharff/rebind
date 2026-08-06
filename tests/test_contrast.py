@@ -59,6 +59,43 @@ def test_pale_grey_text_is_reported_with_its_measured_ratio(tmp_path: Path):
     assert all(f.ratio < AA_NORMAL_RATIO for f in report.failures)
 
 
+def test_the_declared_ink_is_used_not_a_sample_of_the_glyphs(tmp_path: Path):
+    # Body text is thin enough that nearly every pixel of a glyph is an anti-aliased blend, so
+    # sampling reads pure black as mid-grey. On a real sample that turned a document with no
+    # contrast problem into forty-three reported failures. The page declares the colour; use it.
+    source = born_digital_pdf(
+        "<p style='font-size:9pt'>Small pure-black body text, thin strokes and all.</p>",
+        tmp_path / "in.pdf")
+    pages = list(extract_pages(source))
+    assert pages[0].lines[0].color == (0, 0, 0), "the declared ink should be read from the page"
+
+    report = measure(source, pages)
+    assert report.lowest is not None
+    assert report.lowest.ink == (0, 0, 0)
+    assert report.lowest.ratio == 21.0, "black on white is 21:1, not whatever the pixels blended to"
+
+
+def test_an_ocr_page_with_no_declared_colour_still_measures(tmp_path: Path):
+    # An OCR'd line has no declared colour to read, so the sample is all there is. It must still
+    # produce a measurement rather than silently dropping the line.
+    from rebind.extract import Page
+
+    source = born_digital_pdf("<p>Ordinary black body text on white.</p>", tmp_path / "in.pdf")
+    pages = list(extract_pages(source))
+    stripped = [
+        Page(number=p.number, width=p.width, height=p.height,
+             lines=tuple(TextLine(text=ln.text, page=ln.page, bbox=ln.bbox, font=ln.font,
+                                  size=ln.size, bold=ln.bold, italic=ln.italic,
+                                  ocr_confidence=0.9, color=None)
+                         for ln in p.lines),
+             images=p.images)
+        for p in pages
+    ]
+    report = measure(source, stripped)
+    assert report.measured > 0
+    assert report.ok
+
+
 def test_text_inside_a_figure_is_not_measured(tmp_path: Path):
     # A label burnt into a photograph is part of the image, described by the figure's alt text.
     # Measuring it samples the photograph's colours, not any choice the document made.

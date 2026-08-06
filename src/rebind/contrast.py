@@ -11,6 +11,12 @@ table row or a watermark, and the operator only names the ink. What matters to a
 rendered result, so that is what is sampled -- the actual pixels behind each line of text, from
 the same rasterizer already used for OCR.
 
+The ink is the exception: where the page declares its text colour, that declaration is used rather
+than sampled, because a glyph stroke is only a pixel or two wide and almost every pixel of it is an
+anti-aliased blend. Sampling alone read a real sample's pure-black body text as mid-grey and its
+pure-blue links as lilac, reporting forty-three failures in a document that has none. An OCR'd page
+declares nothing, so there the sample is all there is.
+
 The measurement follows WCAG 2.1 SC 1.4.3 (Contrast, Minimum): relative luminance per WCAG's own
 formula, a 4.5:1 threshold for body text and 3:1 for large text (>= 18pt, or >= 14pt bold).
 """
@@ -33,15 +39,29 @@ LARGE_BOLD_TEXT_PT = 14.0
 
 # Sampling. Text is anti-aliased, so the pixels along a glyph's edge are blends of ink and paper
 # and belong to neither: a plain mean of the crop would report the blend, not the colours a reader
-# actually sees. Taking a low and a high luminance percentile lands on the two real populations and
-# steps over the blend between them.
-INK_PERCENTILE = 5
-PAPER_PERCENTILE = 95
+# actually sees. Taking an extreme luminance percentile from each end lands on the two real
+# populations and steps over the blend between them.
+#
+# The percentiles are deliberately close to the extremes. Body text is thin -- at the sampling
+# resolution a 10pt stroke is only a pixel or two wide -- so *most* of a glyph's pixels are partly
+# blended, and a 5th percentile lands inside that blend and reports the text as lighter than it is.
+# Measured: #a8a8a8 text read back as #878787, a whole contrast point adrift, which both
+# over-reports failures and makes a corrected colour look uncorrected. 1% is far enough into the
+# tail to be real ink while still discarding a stray dark speck in a scan.
+INK_PERCENTILE = 1
 # A crop needs enough pixels for those percentiles to mean anything; below this the line is a stray
 # mark, not measurable text.
 MIN_SAMPLE_PIXELS = 40
-# 100 DPI is plenty: this measures colour, not shape, and every page gets rendered.
-SAMPLE_DPI = 100
+# A background counts as flat when at least this fraction of the line box's pixels sit within
+# FLAT_BACKGROUND_TOLERANCE luminance of the background colour. Ordinary text leaves well over half
+# its box as untouched paper; a photograph or gradient behind the text does not.
+FLAT_BACKGROUND_TOLERANCE = 40.0
+MIN_FLAT_BACKGROUND_FRACTION = 0.5
+# At or below this ratio the text is the same colour as what is behind it: invisible, not faint.
+INVISIBLE_RATIO = 1.1
+# 150 DPI rather than 100: at 100 a small glyph is so thin that even its core pixels are blends.
+# Still cheap -- a 28-page document measures in about a second.
+SAMPLE_DPI = 150
 
 
 @dataclass(frozen=True)
@@ -118,9 +138,24 @@ def _sample_line(page_image: np.ndarray, line: TextLine, page: Page
         return None
     luminance = crop @ np.array([0.2126, 0.7152, 0.0722])
     order = np.argsort(luminance)
+
+    # The paper is the crop's *median* pixel, not its lightest. Text occupies a minority of the
+    # pixels in its own box, so the median is whatever it sits on -- and that holds for white text
+    # on a dark panel just as well as black text on white. Taking the lightest instead reported the
+    # real sample's white figure callouts as white-on-white, a 1:1 "failure" for text that is
+    # perfectly legible against the dark artwork behind it.
+    paper_index = order[len(order) // 2]
+    paper = tuple(int(v) for v in crop[paper_index])
+
+    # And the background has to actually be uniform enough for one colour to describe it. Over a
+    # photograph or a gradient no pair of colours says what a reader sees, so the line is left to
+    # the human rather than scored against a fiction.
+    near_paper = np.abs(luminance - float(luminance[paper_index])) <= FLAT_BACKGROUND_TOLERANCE
+    if near_paper.mean() < MIN_FLAT_BACKGROUND_FRACTION:
+        return None
+
     ink_index = order[int(len(order) * INK_PERCENTILE / 100)]
-    paper_index = order[min(int(len(order) * PAPER_PERCENTILE / 100), len(order) - 1)]
-    return (tuple(int(v) for v in crop[ink_index]), tuple(int(v) for v in crop[paper_index]))
+    return (tuple(int(v) for v in crop[ink_index]), paper)
 
 
 def _inside(bbox: tuple[float, float, float, float],
@@ -158,12 +193,26 @@ def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI,
             sampled = _sample_line(page_image, line, page)
             if sampled is None:
                 continue
+            # The ink is taken from the page's own declaration when it makes one -- exact, where
+            # sampling a thin anti-aliased glyph is not. The paper is always sampled, because what
+            # is *behind* the text (a filled box, a shaded row, a photograph) is a fact about the
+            # rendered page that no colour operator states.
             ink, paper = sampled
+            if line.color is not None:
+                ink = line.color
             result = LineContrast(
                 page=page.number, text=line.text.strip()[:80], bbox=line.bbox,
                 ratio=round(contrast_ratio(ink, paper), 2), ink=ink, paper=paper,
                 required=required_ratio(line),
             )
+            if result.ratio <= INVISIBLE_RATIO:
+                # Ink and paper are the same colour: the text is not rendered at all. Confirmed in
+                # a real publisher sample, which carries white-on-white labels above its diagrams.
+                # That is not a contrast problem -- there is nothing on the page to perceive, and
+                # SC 1.4.3 is about text a reader can see. Reporting it would invite a "fix" that
+                # made deliberately hidden text visible, which is a far bigger change than the one
+                # being asked for.
+                continue
             measured += 1
             if lowest is None or result.ratio < lowest.ratio:
                 lowest = result
@@ -172,8 +221,12 @@ def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI,
     return ContrastReport(measured=measured, failures=tuple(failures), lowest=lowest)
 
 
-def summarize(report: ContrastReport) -> dict:
-    """The contrast section of the review: the measurement, and what failed it."""
+def summarize(report: ContrastReport, *, darkened: int = 0) -> dict:
+    """The contrast section of the review: the measurement, and what failed it.
+
+    `darkened` is how many text colours were corrected on this run (0 unless the user asked), so
+    the app can say what it changed rather than silently showing a document that now passes.
+    """
     def entry(line: LineContrast) -> dict:
         return {
             "page": line.page, "text": line.text, "ratio": line.ratio,
@@ -184,6 +237,7 @@ def summarize(report: ContrastReport) -> dict:
     return {
         "measured": report.measured,
         "ok": report.ok,
+        "darkened": darkened,
         "pages": list(report.pages),
         "lowest": entry(report.lowest) if report.lowest else None,
         "failures": [entry(line) for line in report.failures],

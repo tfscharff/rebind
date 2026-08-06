@@ -48,6 +48,10 @@ class TextLine:
     # born-digital text, which is exact by construction. `assemble` uses it as the node's confidence
     # and, below a threshold, replaces the line with an honest placeholder rather than a guess.
     ocr_confidence: float | None = None
+    # The ink colour the page itself declares for this line, as 8-bit sRGB. None when the page does
+    # not declare a plain device colour (a pattern or an unusual colour space), and always None for
+    # OCR'd lines, which have no declared colour to read -- `contrast` samples the render instead.
+    color: tuple[int, int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,50 @@ def _dominant_font(chars: list[LTChar]) -> tuple[str, float]:
     return max(counts.items(), key=lambda item: item[1])[0]
 
 
+def _device_rgb(ncolor) -> tuple[int, int, int] | None:
+    """A pdfminer non-stroking colour as 8-bit sRGB, or None if it is not a plain device colour."""
+    if isinstance(ncolor, (int, float)):
+        values = [float(ncolor)]
+    elif isinstance(ncolor, (tuple, list)):
+        try:
+            values = [float(v) for v in ncolor]
+        except (TypeError, ValueError):
+            return None      # a pattern, or a separation colourant named rather than numbered
+    else:
+        return None
+
+    def byte(v: float) -> int:
+        return round(max(0.0, min(1.0, v)) * 255)
+
+    if len(values) == 1:
+        return (byte(values[0]),) * 3
+    if len(values) == 3:
+        return tuple(byte(v) for v in values)
+    if len(values) == 4:
+        c, m, y, k = values
+        return tuple(byte(1 - min(1.0, channel + k)) for channel in (c, m, y))
+    return None
+
+
+def _dominant_color(chars: list[LTChar]) -> tuple[int, int, int] | None:
+    """The colour covering the most characters in a line, as declared by the page itself.
+
+    This is the ink's *exact* value, which sampling the rendered page cannot recover: a glyph stroke
+    is a pixel or two wide, so almost every one of its pixels is an anti-aliased blend of ink and
+    paper, and even the darkest lands well short of the truth. Measured on a real sample, pure black
+    body text sampled back as mid-grey and pure blue as lilac -- enough to report a document with no
+    contrast problem at all as having forty-three.
+    """
+    counts: dict[tuple[int, int, int], int] = {}
+    for char in chars:
+        rgb = _device_rgb(getattr(getattr(char, "graphicstate", None), "ncolor", None))
+        if rgb is not None:
+            counts[rgb] = counts.get(rgb, 0) + 1
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda item: item[1])[0]
+
+
 def _text_lines(element: LTTextContainer):
     """Yield the LTTextLine objects to turn into `TextLine`s from a top-level text element.
 
@@ -126,6 +174,7 @@ def _line_from_container(container, page_number: int) -> TextLine | None:
         bbox=(container.x0, container.y0, container.x1, container.y1),
         font=font,
         size=size,
+        color=_dominant_color(chars),
         # Font names carry weight and slant as a naming convention, not as metadata; there is no
         # reliable structured source for either in a PDF. This substring check is what every PDF
         # tool does and it is wrong for fonts that do not follow the convention.

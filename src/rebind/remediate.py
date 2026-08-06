@@ -22,7 +22,7 @@ from urllib.parse import urlsplit
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
-from . import contrast, review
+from . import contrast, recolor, review
 from .extract import Page, TextLine, extract_pages
 from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines, order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
@@ -905,7 +905,8 @@ def _rebuild_page(pdf: pikepdf.Pdf, page: pikepdf.Page, page_image, overlay: byt
 
 
 def remediate(source: Path, target: Path, *, title: str | None = None, lang: str = "en",
-              dpi: int = 300, alt_texts: dict[str, str] | None = None) -> RemediationResult:
+              dpi: int = 300, alt_texts: dict[str, str] | None = None,
+              darken_contrast: bool = False) -> RemediationResult:
     """Write `target`: the source made accessible, looking exactly like the original.
 
     The original pages are kept verbatim (vector text stays crisp, a scan stays a scan) and marked
@@ -913,6 +914,10 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     structure tree. Embedded figures are decorative by default (compliant); pass `alt_texts`
     (keyed by the figure ids in a prior result's `.figures`) to promote a figure to a tagged
     `/Figure` with that description.
+
+    `darken_contrast` is the one option that changes how the document *looks*: text failing WCAG
+    AA is darkened just enough to pass, keeping its hue (see `recolor`). Off by default, and the
+    app only offers it once it has measured a real failure to offer it about.
     """
     source, target = Path(source), Path(target)
     alt_texts = alt_texts or {}
@@ -945,6 +950,21 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     # loop only ever sees the annotations that survive -- the external links it goes on to tag into
     # the structure tree -- never the legacy-destination ones this call is about to remove.
     _strip_legacy_destinations(pdf)
+
+    # Recolouring happens before the page's own content is wrapped as an artifact. Anything that
+    # rasterizes a page (a rebuilt page, a figure crop, the contrast re-measurement) reads from a
+    # *file*, not from this in-memory Pdf, so the corrected document is written out once here and
+    # used as the render source from then on -- otherwise those renders would quietly show the
+    # original, uncorrected colours.
+    render_source = source
+    recoloured = 0
+    if darken_contrast:
+        for page in pdf.pages:
+            recoloured += recolor.darken_failing_text(pdf, page)
+        if recoloured:
+            render_source = target.with_name(target.stem + ".recoloured.tmp.pdf")
+            pdf.save(render_source)
+
     struct_root = pdf.make_indirect(Dictionary(Type=Name.StructTreeRoot))
     # PDF/UA-2 (ISO 14289-2) namespace. All the structure types below (/P, /H1-/H6, /Table, /TR,
     # /TD, /TH, /L, /LI, /LBody, /Figure) are retained as-is in the PDF 2.0 Standard Structure
@@ -1006,7 +1026,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         described = [(fid, bbox) for fid, bbox in figures if effective_alt[fid]]
         undescribed = [(fid, bbox) for fid, bbox in figures if not effective_alt[fid]]
         rebuild = _has_marked_content(page)
-        page_image = (render_page_to_image(source, src_page.number, dpi=dpi)
+        page_image = (render_page_to_image(render_source, src_page.number, dpi=dpi)
                       if rebuild or figures else None)
 
         # Draw each described figure (a crop of the rendered region) inside a tagged /Figure.
@@ -1101,11 +1121,17 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     for src_page, _layout in layouts:
         order = next(o for o in orders if o.page == src_page.number)
         if order.needs_review:
-            image = render_page_to_image(source, src_page.number, dpi=REVIEW_THUMB_DPI)
+            image = render_page_to_image(render_source, src_page.number, dpi=REVIEW_THUMB_DPI)
             thumbs[src_page.number] = _crop_data_uri(
                 image, (0.0, 0.0, src_page.width, src_page.height),
                 src_page.width, src_page.height, max_side=REVIEW_THUMB_PX)
-    measured = contrast.measure(source, source_pages, figures=figure_boxes)
+    # After recolouring, the pages extracted at the top of this function still carry the *old*
+    # declared ink colours, and the ink is what `contrast` trusts the declaration for. Re-read them
+    # from the corrected document so the report describes what was actually produced.
+    measured_pages = list(extract_pages(render_source)) if render_source != source else source_pages
+    measured = contrast.measure(render_source, measured_pages, figures=figure_boxes)
+    if render_source != source:
+        render_source.unlink(missing_ok=True)
 
     return RemediationResult(
         pdf_path=target, page_count=len(source_pages),
@@ -1113,7 +1139,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         figures=tuple(undescribed_figures),
         structure_ok=self_check.ok, structure_issues=self_check.issues,
         reading_order=review.summarize(orders, thumbs),
-        contrast=contrast.summarize(measured),
+        contrast=contrast.summarize(measured, darkened=recoloured),
     )
 
 

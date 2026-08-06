@@ -49,6 +49,8 @@ class _Job:
     contrast: dict = field(default_factory=dict)
     figures: list = field(default_factory=list)   # figures still needing a description
     alt_texts: dict = field(default_factory=dict)  # descriptions the user has supplied so far
+    # Set only when the user explicitly asks: the one option that changes the document's look.
+    darken_contrast: bool = False
     structure_ok: bool = True
     structure_issues: tuple = ()
     error: str | None = None
@@ -87,7 +89,7 @@ def _run_conversion(job: _Job, source: Path) -> None:
         job.stage = "Making it accessible (scanned pages are read page by page)..."
         stem = Path(job.filename).stem
         result = remediate(source, job.workdir / (stem + ".accessible.pdf"), title=stem,
-                           alt_texts=job.alt_texts)
+                           alt_texts=job.alt_texts, darken_contrast=job.darken_contrast)
         job.pdf_path = result.pdf_path
         job.figures = list(result.figures)
         job.structure_ok = result.structure_ok
@@ -167,6 +169,19 @@ def create_app() -> Starlette:
         threading.Thread(target=_run_conversion, args=(job, job.source_path), daemon=True).start()
         return JSONResponse({"job_id": job.id})
 
+    async def job_contrast(request: Request) -> JSONResponse:
+        """Re-run remediation with the contrast correction on -- the one change to the document's
+        appearance Rebind will make, and only ever because the user asked for it here."""
+        job = jobs.get(request.path_params["job_id"])
+        if job is None or job.source_path is None:
+            return JSONResponse({"error": "No such job."}, status_code=404)
+        job.darken_contrast = True
+        job.status = "running"
+        job.stage = "Darkening the text that was too faint to read..."
+        job.started = time.monotonic()
+        threading.Thread(target=_run_conversion, args=(job, job.source_path), daemon=True).start()
+        return JSONResponse({"job_id": job.id})
+
     async def job_pdf(request: Request):
         job = jobs.get(request.path_params["job_id"])
         if job is None or job.pdf_path is None or not job.pdf_path.exists():
@@ -213,6 +228,7 @@ def create_app() -> Starlette:
         Route("/convert", convert_endpoint, methods=["POST"]),
         Route("/jobs/{job_id}", job_status),
         Route("/jobs/{job_id}/describe", job_describe, methods=["POST"]),
+        Route("/jobs/{job_id}/contrast", job_contrast, methods=["POST"]),
         Route("/jobs/{job_id}/pdf", job_pdf),
         Route("/health", health),
         Route("/ocr-smoke", ocr_smoke, methods=["GET", "POST"]),

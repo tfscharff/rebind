@@ -167,6 +167,8 @@ li.cond.attention{border-left-color:var(--attention)}
 .ratios .need,.ratios .where{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
 .ratios .sample{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ratios .more{color:var(--muted);font-style:italic}
+.fixrow{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;margin-top:.9rem}
+.fixrow .caveat{font-size:.82rem;color:var(--muted);flex:1;min-width:16rem}
 .error{border-left:4px solid var(--attention)}
 .error .detail{color:var(--ink)}
 .visually-hidden{position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden}
@@ -281,6 +283,7 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
     h+='<a class="reset" href="/">Do another document</a>';
     work.innerHTML=h;
     if(figures.length){ wireFigures(id, name); }
+    wireContrast(id, name);
     say(figures.length? ('Done. '+figures.length+' image'+(figures.length>1?'s':'')+' can be described for a screen reader.') : 'Done. Your accessible PDF is ready to download.');
     work.setAttribute('tabindex','-1');
     work.focus();
@@ -355,7 +358,9 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
     var out='<section class="panel check" aria-labelledby="ct-h"><h2 id="ct-h">Colour contrast</h2>';
     var lowest=c.lowest? (' Lowest measured: '+c.lowest.ratio+':1.') : '';
     if(c.ok){
-      return out+'<p class="verdict ok">All '+c.measured+' lines of text meet WCAG AA against what is actually behind them.'+esc(lowest)+'</p></section>';
+      var how=c.darkened? ' '+c.darkened+' text colour'+(c.darkened>1?'s were':' was')+' darkened to get there — nothing else about the page changed.'
+                        : '';
+      return out+'<p class="verdict ok">All '+c.measured+' lines of text meet WCAG AA against what is actually behind them.'+esc(lowest)+esc(how)+'</p></section>';
     }
     out+='<p class="verdict attention">'+c.failures.length+' of '+c.measured+' lines fall below WCAG AA, on page'+(c.pages.length>1?'s':'')+' '+c.pages.join(', ')+'.</p>'+
       '<p class="sub">Measured from the rendered page, so this is the contrast a reader actually sees. This is how the original was published — Rebind changes nothing unless you ask it to.</p>'+
@@ -367,7 +372,24 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
         '<span class="sample">'+esc(f.text)+'</span></li>';
     });
     if(c.failures.length>12){ out+='<li class="more">…and '+(c.failures.length-12)+' more.</li>'; }
-    return out+'</ul></section>';
+    out+='</ul>'+
+      '<div class="fixrow"><button type="button" class="btn" id="darkenbtn">Darken this text to meet AA</button>'+
+      '<span class="caveat">Changes how the document looks. Only the text colours above are altered — never a colour the artwork also uses — and each keeps its hue.</span></div>';
+    return out+'</section>';
+  }
+
+  function wireContrast(id, name){
+    var btn=document.getElementById('darkenbtn');
+    if(!btn) return;
+    btn.addEventListener('click', function(){
+      btn.disabled=true;
+      renderWorking(name, Date.now()); say('Darkening the faint text…');
+      fetch('/jobs/'+id+'/contrast',{method:'POST'})
+        .then(function(r){return r.json();}).then(function(j){
+          if(j.error){ showError(j.error); return; }
+          watch(id, name, Date.now());
+        }).catch(function(){ showError('Could not adjust the contrast.'); });
+    });
   }
 
   function renderQueue(review){

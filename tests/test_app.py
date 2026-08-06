@@ -52,3 +52,14 @@ def test_a_finished_job_reports_the_two_manual_check_findings(tmp_path: Path):
     assert contrast["ok"] is False
     assert any("grey small print" in f["text"] for f in contrast["failures"])
     assert contrast["lowest"]["ratio"] < 4.5
+
+    # The correction is opt-in: it changes how the document looks, so it only happens on request.
+    client.post(f"/jobs/{job_id}/contrast")
+    for _ in range(120):
+        status = client.get(f"/jobs/{job_id}").json()
+        if status["status"] in ("done", "error"):
+            break
+        time.sleep(0.5)
+    assert status["status"] == "done", status.get("error")
+    assert status["contrast"]["ok"] is True, status["contrast"]["failures"]
+    assert status["contrast"]["darkened"] > 0

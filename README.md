@@ -77,10 +77,15 @@ pass, but it hands you the evidence instead of leaving you to gather it page by 
   page, but only for the pages where the order was a real decision (columns, a figure in the text
   flow, an ambiguous layout). Pages that read straight down are reported in bulk, so a 300-page
   document is a handful of pages to check, not 300.
-- **Colour contrast** — measured, not guessed: the actual pixels behind every line of text are
-  sampled from the rendered page and scored against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1 for large
-  text). Anything below threshold is listed with its real ratio and a swatch of the two colours.
-  Text inside a figure is skipped — it belongs to the image, and the figure's alt text describes it.
+- **Colour contrast** — measured, not guessed, and scored against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1
+  for large text). The ink comes from the page's own declaration, which is exact; the paper is
+  sampled from the rendered page, because what sits *behind* text — a filled box, a shaded row, a
+  photograph — is not stated anywhere. Anything below threshold is listed with its real ratio and a
+  swatch of the two colours. Text inside a figure, text over imagery too busy for one colour to
+  describe, and invisible same-colour text are all left to a human rather than scored against a
+  fiction. If there are failures, Rebind offers to darken exactly those text colours — keeping each
+  one's hue, never touching a colour the artwork also uses. That is the only thing Rebind will ever
+  do to change how a document looks, and it only happens if you ask.
 
 ## Running it
 
