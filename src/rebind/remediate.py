@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import io
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
+from . import contrast, review
 from .extract import Page, TextLine, extract_pages
 from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines, order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
@@ -137,6 +138,11 @@ MAX_HEADING_BURST_RUN = 2
 # between two separate tables cannot merge them: at most this many consecutive undetected lines.
 MAX_INTERNAL_TABLE_GAP = 2
 
+# Reading-order review thumbnails: big enough to recognize the page's shape and read the block
+# numbers laid over it, small enough that a dozen of them stay a page the browser renders at once.
+REVIEW_THUMB_DPI = 80
+REVIEW_THUMB_PX = 420
+
 
 @dataclass
 class RemediationResult:
@@ -153,6 +159,12 @@ class RemediationResult:
     # honest "PDF/UA-2 tagged" badge without a JVM runtime dependency.
     structure_ok: bool = True
     structure_issues: tuple[str, ...] = ()
+    # Evidence for the two checks Adobe's checker always leaves to a human (see `review`). Rebind
+    # cannot make either pass -- no tool can -- but it can show its work: `reading_order` is the
+    # order it chose, with the pages where that was a real decision flagged for an eye;
+    # `contrast` is a measurement of the rendered page, not a claim about it.
+    reading_order: dict = field(default_factory=dict)
+    contrast: dict = field(default_factory=dict)
 
 
 def _page_figures(src_page) -> list[tuple[str, tuple[float, float, float, float]]]:
@@ -507,7 +519,12 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int,
         lines = recognize(image, page_number=src_page.number, page_width=src_page.width,
                           page_height=src_page.height, engine=engine)
         used_ocr = True
-    layout = order_page(replace(src_page, lines=tuple(lines)), profile)
+    page = replace(src_page, lines=tuple(lines))
+    # Figure regions are found before ordering, not after, so a diagram's callout labels can be
+    # held out of the column cut (see order_page) instead of being read as column structure.
+    boxes = _page_figures(page)
+    boxes += [(fid, bbox) for fid, bbox, _cap in _vector_figures(page, lines, boxes)]
+    layout = order_page(page, profile, tuple(bbox for _fid, bbox in boxes))
     ordered = [placed.line for placed in layout.lines]
     return _merge_bare_markers(ordered), used_ocr, layout
 
@@ -950,6 +967,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     font = pdf.make_indirect(Dictionary(
         Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
     undescribed_figures: list[dict] = []
+    figure_boxes: dict[int, tuple] = {}
     heading_entries: list[tuple[int, pikepdf.Object, str]] = []   # (level, struct_elem, title)
 
     for struct_parent, (page, (src_page, lines, used_ocr), page_roles) in enumerate(
@@ -1057,6 +1075,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             document_elem.K.append(link_elem)
             next_parent_key += 1
 
+        figure_boxes[src_page.number] = tuple(bbox for _fid, bbox in figures)
         for fid, bbox in undescribed:
             undescribed_figures.append({
                 "id": fid, "page": src_page.number,
@@ -1070,11 +1089,31 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     pdf.save(target, min_version="2.0")   # PDF/UA-2 requires a PDF 2.0 base (ISO 32000-2)
     pdf.close()
     self_check = self_check_pdf_ua2(target)
+
+    # Evidence for the two checks a machine may never sign off on. Both read the SOURCE: contrast
+    # is a property of the page a reader sees, which remediation deliberately leaves untouched, and
+    # the reading order is the one just built above.
+    orders = [review.page_order(src_page, layout, figure_boxes.get(src_page.number, ()))
+              for src_page, layout in layouts]
+    # Only the flagged pages are rendered for their thumbnail -- on a 300-page catalogue the whole
+    # point is that the review is a handful of pages, and so is the work of preparing it.
+    thumbs = {}
+    for src_page, _layout in layouts:
+        order = next(o for o in orders if o.page == src_page.number)
+        if order.needs_review:
+            image = render_page_to_image(source, src_page.number, dpi=REVIEW_THUMB_DPI)
+            thumbs[src_page.number] = _crop_data_uri(
+                image, (0.0, 0.0, src_page.width, src_page.height),
+                src_page.width, src_page.height, max_side=REVIEW_THUMB_PX)
+    measured = contrast.measure(source, source_pages, figures=figure_boxes)
+
     return RemediationResult(
         pdf_path=target, page_count=len(source_pages),
         ocr_pages=tuple(ocr_pages), empty_pages=tuple(empty_pages), added_text_layer=added_layer,
         figures=tuple(undescribed_figures),
         structure_ok=self_check.ok, structure_issues=self_check.issues,
+        reading_order=review.summarize(orders, thumbs),
+        contrast=contrast.summarize(measured),
     )
 
 

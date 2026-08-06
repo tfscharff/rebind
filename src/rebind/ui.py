@@ -141,6 +141,32 @@ li.cond.attention{border-left-color:var(--attention)}
 .figfield textarea{width:100%;margin-top:.4rem;font:inherit;font-size:.95rem;padding:.5rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);resize:vertical}
 .figfield textarea:focus-visible{outline:3px solid var(--stamp);outline-offset:1px}
 #applyalts{margin-top:1rem}
+/* The two checks Adobe always leaves to a human: reading order and colour contrast */
+.check h2{font-family:var(--serif);font-size:1.2rem;margin:0 0 .5rem}
+.verdict{margin:0 0 .4rem;font-weight:600}
+.verdict.ok{color:var(--cloth)}
+.verdict.attention{color:var(--attention)}
+.pageorder{margin:1.1rem 0 0}
+.pageorder figcaption{font-family:var(--mono);font-size:.78rem;color:var(--muted);margin-bottom:.35rem}
+/* The numbered overlay: boxes are positioned in percentages of the page, so the sheet just has to
+   be a positioning context of the same aspect ratio as the thumbnail inside it. */
+.sheet{position:relative;display:inline-block;max-width:100%;border:1px solid var(--line);
+  border-radius:4px;overflow:hidden;background:#fff}
+.sheet img{display:block;max-width:100%;height:auto}
+.ob{position:absolute;border:1.5px solid var(--stamp);border-radius:2px;
+  background:color-mix(in srgb,var(--stamp) 7%,transparent)}
+.ob i{position:absolute;left:-1.5px;top:-1.5px;font-style:normal;font-family:var(--mono);
+  font-size:.68rem;line-height:1;padding:.15rem .28rem;background:var(--stamp);color:#fff;
+  border-radius:2px 0 2px 0}
+.ratios{list-style:none;margin:.7rem 0 0;padding:0;font-size:.9rem}
+.ratios li{display:flex;gap:.6rem;align-items:baseline;padding:.35rem 0;border-top:1px solid var(--line)}
+.ratios li:first-child{border-top:none}
+.ratios .swatch{font-family:var(--serif);padding:.1rem .35rem;border-radius:3px;
+  border:1px solid var(--line);flex:none}
+.ratios .ratio{font-family:var(--mono);font-weight:700;color:var(--attention)}
+.ratios .need,.ratios .where{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+.ratios .sample{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ratios .more{color:var(--muted);font-style:italic}
 .error{border-left:4px solid var(--attention)}
 .error .detail{color:var(--ink)}
 .visually-hidden{position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden}
@@ -250,6 +276,8 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
       '</div></div>';
     h+=renderFigures(id, name, figures);
     h+=renderQueue(review);
+    h+=renderReadingOrder(s.reading_order);
+    h+=renderContrast(s.contrast);
     h+='<a class="reset" href="/">Do another document</a>';
     work.innerHTML=h;
     if(figures.length){ wireFigures(id, name); }
@@ -297,6 +325,49 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
           watch(id, name, Date.now());
         }).catch(function(){ showError('Could not apply descriptions.'); });
     });
+  }
+
+  // The two checks Adobe's checker always hands back to a human. Rebind can't make them pass --
+  // nothing can -- so it shows its work instead: the order it chose, and a real measurement.
+  function renderReadingOrder(ro){
+    if(!ro || !ro.checked) return '';
+    var out='<section class="panel check" aria-labelledby="ro-h"><h2 id="ro-h">Reading order</h2>';
+    if(!ro.pages.length){
+      out+='<p class="verdict ok">All '+ro.checked+' page'+(ro.checked>1?'s':'')+' read straight down a single column — there is no ordering decision to second-guess.</p>';
+      return out+'</section>';
+    }
+    out+='<p class="verdict ok">'+ro.clear+' of '+ro.checked+' pages read straight down — nothing to check.</p>'+
+      '<p class="sub">These '+ro.pages.length+' had a real choice in them. The numbers show the order a screen reader will read each block. If a number is in the wrong place, the order is wrong.</p>';
+    ro.pages.forEach(function(p){
+      out+='<figure class="pageorder"><figcaption>Page '+esc(p.page)+' — '+esc(p.reason)+'</figcaption>'+
+        '<div class="sheet">'+
+        (p.thumb? '<img src="'+p.thumb+'" alt="Page '+esc(p.page)+'">' : '')+
+        p.blocks.map(function(b){
+          return '<span class="ob" style="left:'+b.left+'%;top:'+b.top+'%;width:'+b.width+'%;height:'+b.height+'%" title="'+esc(b.text)+'"><i>'+b.n+'</i></span>';
+        }).join('')+
+        '</div></figure>';
+    });
+    return out+'</section>';
+  }
+
+  function renderContrast(c){
+    if(!c || !c.measured) return '';
+    var out='<section class="panel check" aria-labelledby="ct-h"><h2 id="ct-h">Colour contrast</h2>';
+    var lowest=c.lowest? (' Lowest measured: '+c.lowest.ratio+':1.') : '';
+    if(c.ok){
+      return out+'<p class="verdict ok">All '+c.measured+' lines of text meet WCAG AA against what is actually behind them.'+esc(lowest)+'</p></section>';
+    }
+    out+='<p class="verdict attention">'+c.failures.length+' of '+c.measured+' lines fall below WCAG AA, on page'+(c.pages.length>1?'s':'')+' '+c.pages.join(', ')+'.</p>'+
+      '<p class="sub">Measured from the rendered page, so this is the contrast a reader actually sees. This is how the original was published — Rebind changes nothing unless you ask it to.</p>'+
+      '<ul class="ratios">';
+    c.failures.slice(0,12).forEach(function(f){
+      out+='<li><span class="swatch" style="background:'+esc(f.paper)+';color:'+esc(f.ink)+'">Aa</span>'+
+        '<span class="ratio">'+f.ratio+':1</span> <span class="need">needs '+f.required+':1</span>'+
+        '<span class="where">p. '+esc(f.page)+'</span>'+
+        '<span class="sample">'+esc(f.text)+'</span></li>';
+    });
+    if(c.failures.length>12){ out+='<li class="more">…and '+(c.failures.length-12)+' more.</li>'; }
+    return out+'</ul></section>';
   }
 
   function renderQueue(review){

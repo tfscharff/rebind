@@ -44,6 +44,9 @@ class _Job:
     source_path: Path | None = None   # kept so descriptions can re-run remediation
     pdf_path: Path | None = None
     review: dict | None = None
+    # Evidence for the two checks Adobe always leaves to a human (see rebind.review/rebind.contrast)
+    reading_order: dict = field(default_factory=dict)
+    contrast: dict = field(default_factory=dict)
     figures: list = field(default_factory=list)   # figures still needing a description
     alt_texts: dict = field(default_factory=dict)  # descriptions the user has supplied so far
     structure_ok: bool = True
@@ -93,6 +96,8 @@ def _run_conversion(job: _Job, source: Path) -> None:
             page_count=result.page_count, ocr_pages=result.ocr_pages,
             empty_pages=result.empty_pages,
         )
+        job.reading_order = result.reading_order
+        job.contrast = result.contrast
         job.status = "done"
     except ExtractionError as exc:
         job.status = "error"
@@ -138,6 +143,8 @@ def create_app() -> Starlette:
             body["figures"] = job.figures
             body["structure_ok"] = job.structure_ok
             body["structure_issues"] = list(job.structure_issues)
+            body["reading_order"] = job.reading_order
+            body["contrast"] = job.contrast
         if job.status == "error":
             body["error"] = job.error
         return JSONResponse(body)

@@ -123,13 +123,27 @@ def _sample_line(page_image: np.ndarray, line: TextLine, page: Page
     return (tuple(int(v) for v in crop[ink_index]), tuple(int(v) for v in crop[paper_index]))
 
 
-def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI) -> ContrastReport:
+def _inside(bbox: tuple[float, float, float, float],
+            boxes: tuple[tuple[float, float, float, float], ...]) -> bool:
+    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+    return any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in boxes)
+
+
+def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI,
+            figures: dict[int, tuple] | None = None) -> ContrastReport:
     """Measure every text line in `pages` against the rendered page behind it.
+
+    Text lying inside a figure is skipped. A panel label burnt into a photograph ("A", "petri
+    dish") is part of the image, not of the document's text: it is described by the figure's alt
+    text, a reader cannot restyle it, and sampling it measures the photograph's own colours rather
+    than any choice the document made. Confirmed on the real sample, where the only three
+    implausible failures were exactly that -- labels inside a micrograph.
 
     Pages with no text are skipped outright (nothing to measure, and no render paid for).
     """
     from .ocr import render_page_to_image
 
+    figures = figures or {}
     measured = 0
     failures: list[LineContrast] = []
     lowest: LineContrast | None = None
@@ -137,8 +151,9 @@ def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI) -> Contra
         if not page.lines:
             continue
         page_image = render_page_to_image(source, page.number, dpi=dpi)
+        in_figures = tuple(figures.get(page.number, ()))
         for line in page.lines:
-            if not line.text.strip():
+            if not line.text.strip() or _inside(line.bbox, in_figures):
                 continue
             sampled = _sample_line(page_image, line, page)
             if sampled is None:
@@ -155,3 +170,21 @@ def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI) -> Contra
             if not result.passes:
                 failures.append(result)
     return ContrastReport(measured=measured, failures=tuple(failures), lowest=lowest)
+
+
+def summarize(report: ContrastReport) -> dict:
+    """The contrast section of the review: the measurement, and what failed it."""
+    def entry(line: LineContrast) -> dict:
+        return {
+            "page": line.page, "text": line.text, "ratio": line.ratio,
+            "required": line.required,
+            "ink": "#%02x%02x%02x" % line.ink, "paper": "#%02x%02x%02x" % line.paper,
+        }
+
+    return {
+        "measured": report.measured,
+        "ok": report.ok,
+        "pages": list(report.pages),
+        "lowest": entry(report.lowest) if report.lowest else None,
+        "failures": [entry(line) for line in report.failures],
+    }

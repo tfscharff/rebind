@@ -190,9 +190,41 @@ def _widest_horizontal_gap(lines: list[TextLine], bbox: BBox) -> float | None:
     return best_y
 
 
+def _banner_split(lines: list[TextLine], bbox: BBox) -> float | None:
+    """The y at which to peel a full-width banner off the top so the columns below become visible.
+
+    A vertical cut is attempted over the whole region, but on the commonest article layout of all
+    -- a heading and an introductory paragraph or two spanning the full measure, with two columns
+    beneath -- those full-width lines cross the gutter and hide it. The horizontal cut does not
+    rescue it either: the space between the intro and the columns is ordinary paragraph leading,
+    far below the block-gap threshold. The region then collapses to a single block and is read
+    straight across the gutter, which is the exact defect the cut exists to prevent.
+
+    So when no gutter is found, look for the highest clean horizontal boundary that *reveals* one:
+    scan candidate boundaries top-down and take the first where the lines below split into columns.
+    Returning None (the common case) leaves the ordinary cut untouched -- this only ever fires
+    where a genuine gutter is waiting underneath.
+    """
+    x0, y0, x1, _y1 = bbox
+    ordered = sorted(lines, key=lambda ln: -ln.bbox[3])
+    for i in range(1, len(ordered)):
+        above, below = ordered[:i], ordered[i:]
+        if len(below) < COLUMN_MIN_LINES * 2:
+            return None
+        boundary = min(ln.bbox[1] for ln in above)
+        top_below = max(ln.bbox[3] for ln in below)
+        if top_below > boundary:
+            continue    # the bands overlap vertically -- not a clean place to cut
+        split_y = (boundary + top_below) / 2
+        if _widest_vertical_gutter(below, (x0, y0, x1, split_y)) is not None:
+            return split_y
+    return None
+
+
 def _xy_cut(lines: list[TextLine], bbox: BBox, marginal: list[bool] | None = None) -> Region:
-    """Recursively segment `lines` within `bbox`. Vertical (column) cuts win ties over horizontal
-    (block) cuts, so a full-width header above two columns is isolated before the columns split.
+    """Recursively segment `lines` within `bbox`. A vertical (column) cut is tried first; failing
+    that, a full-width banner is peeled off the top if doing so reveals columns (`_banner_split`),
+    and failing that a horizontal (block) cut is made.
     Appends True to `marginal` whenever an accepted gutter is only marginally wide.
     """
     if not lines:
@@ -210,7 +242,7 @@ def _xy_cut(lines: list[TextLine], bbox: BBox, marginal: list[bool] | None = Non
             _xy_cut(left, (x0, y0, split_x, y1), marginal),
             _xy_cut(right, (split_x, y0, x1, y1), marginal),
         ])
-    split_y = _widest_horizontal_gap(lines, bbox)
+    split_y = _banner_split(lines, bbox) or _widest_horizontal_gap(lines, bbox)
     if split_y is not None:
         top = [ln for ln in lines if ln.bbox[1] >= split_y]
         bottom = [ln for ln in lines if ln.bbox[1] < split_y]
@@ -251,15 +283,48 @@ def _reading_order(region: Region) -> list[PlacedLine]:
     return out
 
 
-def order_page(page: Page, profile: TypographicProfile) -> PageLayout:
+def _center_inside(bbox: BBox, boxes: tuple) -> bool:
+    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+    return any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in boxes)
+
+
+def _splice_figure_text(placed: list[PlacedLine], in_figure: list[TextLine]) -> list[PlacedLine]:
+    """Put a figure's own labels back into reading order at the height they sit at.
+
+    They are read top-to-bottom among themselves (nothing better is knowable about a scatter of
+    callouts) and inserted before the first body line that starts below them, which is where a
+    sighted reader encounters them.
+    """
+    if not in_figure:
+        return placed
+    out = list(placed)
+    for line in sorted(in_figure, key=lambda ln: (-ln.bbox[3], ln.bbox[0])):
+        column = next((p.column for p in out if p.line.bbox[3] <= line.bbox[3]), 0)
+        index = next((i for i, p in enumerate(out) if p.line.bbox[3] < line.bbox[3]), len(out))
+        out.insert(index, PlacedLine(line=line, column=max(column, 0)))
+    return out
+
+
+def order_page(page: Page, profile: TypographicProfile,
+               figure_boxes: tuple = ()) -> PageLayout:
     """Reading order for one page: body lines XY-cut into columns and blocks, then artifact lines
     (running headers/footers/page numbers, identified by the profile) appended with column == -1
     and excluded from the cut so they cannot manufacture spurious block breaks.
+
+    Text *inside* a figure is held out of the cut for the same reason, and matters more than it
+    sounds: a diagram's callout labels ("A", "B", "3 mm", "Ventral") are scattered across the
+    figure at whatever position the artwork put them, and XY-cut reads that scatter as column
+    structure. On the real sample one page of body text with a labelled schematic came out as
+    "8 columns". Those labels are then spliced back in at the figure's own vertical position, so
+    they stay where a reader meets them rather than being deferred to the end of the page.
     """
     body: list[TextLine] = []
     artifacts: list[TextLine] = []
+    in_figure: list[TextLine] = []
     for line in page.lines:
-        if profile.role_of(line, page_height=page.height) == "artifact":
+        if _center_inside(line.bbox, figure_boxes):
+            in_figure.append(line)
+        elif profile.role_of(line, page_height=page.height) == "artifact":
             artifacts.append(line)
         else:
             body.append(line)
@@ -267,6 +332,7 @@ def order_page(page: Page, profile: TypographicProfile) -> PageLayout:
     marginal: list[bool] = []
     region = _xy_cut(body, (0.0, 0.0, page.width, page.height), marginal)
     placed = _reading_order(region)
+    placed = _splice_figure_text(placed, in_figure)
 
     # Table detection runs on all body lines (a table's inter-cell gaps look like column gutters to
     # XY-cut, which fragments the grid, so per-column detection would miss it). It only *flags*;

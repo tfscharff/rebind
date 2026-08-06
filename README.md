@@ -19,7 +19,10 @@ Per page:
 - **A page with no recoverable text** (blank, or an image with no words) is kept as it is and
   reported.
 
-Reading order for multi-column pages is recovered by recursive XY-cut over the text-line boxes.
+Reading order for multi-column pages is recovered by recursive XY-cut over the text-line boxes,
+including the ordinary article layout where a full-width heading sits above the columns and hides
+the gutter from a naive cut. A figure's own callout labels are held out of that cut and spliced
+back in at the height they sit at, so a labelled diagram cannot invent column structure.
 
 A born-digital page carries markup (font size, tags) that names its own structure directly. A
 scanned page, after OCR, does not — recognition returns only text and a bounding box per line. For
@@ -63,6 +66,21 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
 Text is never fabricated: every text node traces to recognizer output with a confidence score.
 Below threshold it becomes an explicit placeholder — `[text not recoverable from source scan,
 p. 214]` — rather than a guess.
+
+## The two checks no tool can pass for you
+
+Adobe's checker reports **Logical Reading Order** and **Colour contrast** as *needs manual check* on
+every document, always — both are ultimately about what a person perceives. Rebind can't make them
+pass, but it hands you the evidence instead of leaving you to gather it page by page:
+
+- **Reading order** — the order Rebind chose is shown as numbered blocks over a picture of the
+  page, but only for the pages where the order was a real decision (columns, a figure in the text
+  flow, an ambiguous layout). Pages that read straight down are reported in bulk, so a 300-page
+  document is a handful of pages to check, not 300.
+- **Colour contrast** — measured, not guessed: the actual pixels behind every line of text are
+  sampled from the rendered page and scored against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1 for large
+  text). Anything below threshold is listed with its real ratio and a swatch of the two colours.
+  Text inside a figure is skipped — it belongs to the image, and the figure's alt text describes it.
 
 ## Running it
 

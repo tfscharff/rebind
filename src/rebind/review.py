@@ -105,9 +105,26 @@ def page_order(page: Page, layout: PageLayout, figure_boxes: tuple = ()) -> Page
                      width=page.width, height=page.height)
 
 
-def summarize(orders: list[PageOrder]) -> dict:
-    """The reading-order section of the review: a bulk verdict plus the pages needing an eye."""
+def summarize(orders: list[PageOrder], thumbs: dict[int, str] | None = None) -> dict:
+    """The reading-order section of the review: a bulk verdict plus the pages needing an eye.
+
+    Block boxes are emitted as percentages of the page, so the UI can lay the numbered overlay
+    over a thumbnail of any size without knowing the page's point dimensions. PDF's y axis runs
+    bottom-up and CSS's runs top-down, so `top` is flipped here rather than in the browser.
+    """
+    thumbs = thumbs or {}
     flagged = [order for order in orders if order.needs_review]
+
+    def box(order: PageOrder, b: Block) -> dict:
+        x0, y0, x1, y1 = b.bbox
+        return {
+            "n": b.number, "text": b.text,
+            "left": round(100 * x0 / order.width, 2),
+            "top": round(100 * (order.height - y1) / order.height, 2),
+            "width": round(100 * (x1 - x0) / order.width, 2),
+            "height": round(100 * (y1 - y0) / order.height, 2),
+        }
+
     return {
         "checked": len(orders),
         "clear": len(orders) - len(flagged),
@@ -115,12 +132,8 @@ def summarize(orders: list[PageOrder]) -> dict:
             {
                 "page": order.page,
                 "reason": order.reason,
-                "width": order.width,
-                "height": order.height,
-                "blocks": [
-                    {"n": b.number, "bbox": [round(v, 1) for v in b.bbox], "text": b.text}
-                    for b in order.blocks
-                ],
+                "thumb": thumbs.get(order.page, ""),
+                "blocks": [box(order, b) for b in order.blocks],
             }
             for order in flagged
         ],

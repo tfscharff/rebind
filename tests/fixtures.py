@@ -235,6 +235,29 @@ def born_digital_pdf_with_image(target: Path) -> Path:
     return born_digital_pdf(html, target)
 
 
+def born_digital_pdf_heading_over_two_columns(target: Path) -> Path:
+    """Two text columns with a full-width heading and intro paragraphs above them.
+
+    The ordinary shape of an article page, and the one that defeats a naive XY-cut: those
+    full-width lines straddle the gutter, so a vertical cut attempted over the whole page finds no
+    column boundary at all, and the gap below them is far too small to trigger a block cut.
+    """
+    left = "".join(f"<p>LEFT line {i} of the first column of this article.</p>"
+                   for i in range(1, 10))
+    right = "".join(f"<p>RIGHT line {i} of the second column of this article.</p>"
+                    for i in range(1, 10))
+    html = (
+        "<h1>Annual Review of Sample Documents</h1>"
+        "<p>An ordinary opening paragraph running the full width of the page.</p>"
+        "<p>A second full-width paragraph of introductory material.</p>"
+        "<p>A third full-width paragraph before the columns begin.</p>"
+        f"<div class='cols'><div class='col'>{left}</div><div class='col'>{right}</div></div>"
+    )
+    css = (".cols { display: flex; gap: 40pt; } .col { width: 200pt; } "
+           "p { margin: 0 0 6pt 0; font-size: 10pt; }")
+    return born_digital_pdf(html, target, extra_css=css)
+
+
 def born_digital_pdf_two_column(target: Path) -> Path:
     """A born-digital PDF with two genuine text columns.
 

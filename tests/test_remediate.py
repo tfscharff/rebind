@@ -257,6 +257,26 @@ def test_two_column_text_is_read_down_each_column_not_across_the_gutter(tmp_path
         f"columns are interleaved rather than read one after the other: {sides}")
 
 
+def test_columns_are_found_even_under_a_full_width_heading(tmp_path: Path):
+    # The ordinary article page: a heading and intro spanning the full width, two columns below.
+    # Those full-width lines cross the gutter, so a vertical cut over the whole page finds nothing,
+    # and the gap beneath them is far too small for a block cut -- the page collapses to one block
+    # and is read straight across. The commonest real layout, and the commonest way to get it wrong.
+    from tests.fixtures import born_digital_pdf_heading_over_two_columns
+
+    source = born_digital_pdf_heading_over_two_columns(tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    text = _tagged_text_in_order(out)
+    sides = [t.split()[0] for t in text if t.split() and t.split()[0] in ("LEFT", "RIGHT")]
+    assert sides == sorted(sides, key=lambda s: 0 if s == "LEFT" else 1), (
+        f"columns under a heading are interleaved: {sides}")
+    heading = next(i for i, t in enumerate(text) if "Annual Review" in t)
+    first_column = next(i for i, t in enumerate(text) if t.startswith("LEFT"))
+    assert heading < first_column, "the heading must still be read before the columns"
+
+
 def test_a_drawn_figure_is_found_and_described_from_its_caption(tmp_path: Path):
     # A schematic drawn with path operators leaves no /Image behind, so an image-only search misses
     # it entirely -- on the real sample that was six of eight figures, and Acrobat agreed with the
