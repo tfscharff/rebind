@@ -207,6 +207,17 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
 
   function say(msg){ live.textContent=msg; }
 
+  // Rebind has no window of its own, so closing this tab is the only way a user can quit it.
+  // The heartbeat is what the server actually watches: stop sending it and the process exits,
+  // which is what keeps an invisible instance from lingering (and from blocking the next
+  // install). The beacon on the way out is a courtesy that makes quitting immediate; it is not
+  // relied upon, because it is never sent by a browser that was killed rather than closed.
+  fetch('/heartbeat').catch(function(){});
+  setInterval(function(){ fetch('/heartbeat').catch(function(){}); }, 5000);
+  window.addEventListener('pagehide', function(){
+    if(navigator.sendBeacon) navigator.sendBeacon('/shutdown', '');
+  });
+
   ['dragenter','dragover'].forEach(function(e){
     drop.addEventListener(e,function(ev){ev.preventDefault();drop.classList.add('over');});
   });

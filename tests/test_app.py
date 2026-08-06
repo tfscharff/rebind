@@ -27,6 +27,16 @@ def test_ocr_smoke_endpoint_recognizes_text():
     assert "REBIND" in (body["recovered"] or "").upper()
 
 
+def test_the_idle_watchdog_is_off_unless_asked_for():
+    # A developer's `rebind serve`, and every test, must never be killed by a heartbeat nobody is
+    # sending. Only the installed app (which opens a browser tab) turns this on.
+    client = TestClient(create_app())
+    assert client.get("/heartbeat").json()["status"] == "ok"
+    assert client.post("/shutdown").json()["status"] == "ok"
+    # Still alive and serving.
+    assert client.get("/health").json()["status"] == "ok"
+
+
 def test_a_finished_job_reports_the_two_manual_check_findings(tmp_path: Path):
     # Adobe's checker always defers "Logical Reading Order" and "Colour contrast" to a human. The
     # app has to hand that human the evidence, so a finished job must carry both -- with a real

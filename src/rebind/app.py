@@ -6,6 +6,7 @@ avoids bundling a native GUI toolkit and gives librarians a familiar interface.
 
 from __future__ import annotations
 
+import os
 import sys
 import tempfile
 import threading
@@ -109,10 +110,27 @@ def _run_conversion(job: _Job, source: Path) -> None:
         job.error = f"Rebind could not process this document: {exc}"
 
 
-def create_app() -> Starlette:
+# How long the server keeps running with nobody watching. The page sends a heartbeat every few
+# seconds; when the tab closes, the heartbeats stop and this is how long until the process exits.
+# Generously longer than a browser's background-tab timer throttling (Chrome slows an idle tab's
+# setInterval to roughly once a minute), so a minimised window is not mistaken for a closed one.
+IDLE_SHUTDOWN_SECONDS = 150.0
+HEARTBEAT_CHECK_SECONDS = 5.0
+
+
+def create_app(*, exit_when_idle: bool = False) -> Starlette:
     """The Rebind ASGI app. Starlette (not FastAPI): the routes take raw bodies and return plain
-    dicts, so FastAPI's pydantic layer bought nothing and only added weight to the bundle."""
+    dicts, so FastAPI's pydantic layer bought nothing and only added weight to the bundle.
+
+    `exit_when_idle` makes the process exit once the browser stops sending heartbeats. That is
+    what the installed app wants: Rebind has no window of its own, so closing the tab is the only
+    "quit" gesture a user has, and without this the server stayed running invisibly -- discovered
+    the hard way, as an instance that had to be killed by hand before an upgrade could install.
+    Off by default so `TestClient` and a developer's `rebind serve` are never killed by a heartbeat
+    that no one is sending.
+    """
     jobs = _JobStore()
+    watching = {"last_seen": time.monotonic(), "armed": False}
 
     async def index(request: Request) -> HTMLResponse:
         from rebind.ui import index_html  # absolute: relative imports fail in the frozen __main__
@@ -192,6 +210,30 @@ def create_app() -> Starlette:
     async def health(request: Request) -> JSONResponse:
         return JSONResponse({"status": "ok"})
 
+    async def heartbeat(request: Request) -> JSONResponse:
+        """The open page saying it is still there. The first one arms the idle watchdog, so the
+        server never exits during the second or two before the browser has finished starting."""
+        watching["last_seen"] = time.monotonic()
+        watching["armed"] = True
+        return JSONResponse({"status": "ok"})
+
+    async def shutdown(request: Request) -> JSONResponse:
+        """The page closing, reported by `navigator.sendBeacon`. This is only a courtesy -- it
+        makes quitting instant -- and the heartbeat watchdog is what actually guarantees the
+        process goes away, since a beacon is not delivered from a crashed or killed browser."""
+        if exit_when_idle:
+            threading.Timer(0.3, lambda: os._exit(0)).start()
+        return JSONResponse({"status": "ok"})
+
+    def _watchdog() -> None:
+        while True:
+            time.sleep(HEARTBEAT_CHECK_SECONDS)
+            if watching["armed"] and time.monotonic() - watching["last_seen"] > IDLE_SHUTDOWN_SECONDS:
+                os._exit(0)
+
+    if exit_when_idle:
+        threading.Thread(target=_watchdog, daemon=True).start()
+
     async def ocr_smoke(request: Request) -> JSONResponse:
         """Recognize known text through the real OCR path, from the frozen bundle.
 
@@ -231,6 +273,8 @@ def create_app() -> Starlette:
         Route("/jobs/{job_id}/contrast", job_contrast, methods=["POST"]),
         Route("/jobs/{job_id}/pdf", job_pdf),
         Route("/health", health),
+        Route("/heartbeat", heartbeat, methods=["GET", "POST"]),
+        Route("/shutdown", shutdown, methods=["POST"]),
         Route("/ocr-smoke", ocr_smoke, methods=["GET", "POST"]),
     ])
 
@@ -285,7 +329,8 @@ def main() -> None:
     log_config["handlers"]["access"].pop("stream", None)
 
     threading.Timer(1.5, lambda: webbrowser.open(f"http://{HOST}:{PORT}/")).start()
-    uvicorn.run(create_app(), host=HOST, port=PORT, log_level="info", log_config=log_config)
+    uvicorn.run(create_app(exit_when_idle=True), host=HOST, port=PORT, log_level="info",
+                log_config=log_config)
 
 
 if __name__ == "__main__":
