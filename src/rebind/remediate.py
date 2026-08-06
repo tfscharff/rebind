@@ -921,15 +921,52 @@ class Edits:
         )
 
 
-# What a person may retag an element as. Every one of these is legal as a direct child of the
-# document element in the PDF 2.0 Standard Structure Namespace, which is where Rebind puts a page's
-# top-level elements -- ISO 32005 Table 5 is strict about this, and veraPDF enforces it: offering
-# /Caption and /Quote here (tried, and caught by validation) produced a document that failed
-# "<Document> shall not contain <Caption>", because a caption belongs inside the table or figure it
-# captions and a quote is inline content inside a paragraph. Types whose internals Rebind cannot
-# build from a retag are also absent: relabelling a paragraph "Table" would assert a grid of rows
-# and cells that does not exist.
-EDITABLE_TAGS = ("H1", "H2", "H3", "H4", "H5", "H6", "P")
+# What a person may retag an element as, and how each has to be built. ISO 32005 Table 5 governs
+# what may appear directly under the document element, and veraPDF enforces it strictly -- every
+# entry below was checked by producing a document that uses it and validating the result, because
+# guessing got it wrong twice (/Caption and /Quote both look reasonable and are both illegal there).
+#
+# Three shapes, because "legal under Document" is not the same as "may hold content directly":
+#   * CONTENT -- takes the page's marked content as its own children. The ordinary case.
+#   * GROUPING -- a container that may only hold block-level children, so the content is wrapped
+#     in a /P inside it. Tagging one of these directly over content fails; wrapping is the fix.
+#   * built specially -- /Figure needs an /Alt, /Table needs rows and cells, /L needs list items,
+#     /Caption must sit inside the figure or table it captions rather than beside it.
+#
+# Two names that look obviously right and are not. /Aside is HTML5's, not PDF 2.0's, and fails
+# "all structure elements shall belong to one of the following namespaces". /TOC is legal, and can
+# be built (its children must be /TOCI, never /P), but every /TOCI must carry a /Ref identifying
+# what the entry points at -- and Rebind cannot know which heading a line of a contents list refers
+# to without guessing. So it is not offered: a table of contents that names the wrong targets is
+# worse than one tagged as ordinary paragraphs.
+CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "Formula", "Form")
+GROUPING_TAGS = ("Sect", "Div", "Part", "Art", "Index", "NonStruct")
+SPECIAL_TAGS = ("Figure", "Table", "L", "Caption")
+EDITABLE_TAGS = CONTENT_TAGS + GROUPING_TAGS + SPECIAL_TAGS
+
+# One keystroke per type, so retagging is Tab-and-press rather than Tab-and-open-a-menu. Chosen for
+# the first letter of the thing wherever it is free, and the digits for heading levels. Defined
+# here rather than in the page's script so the keys, the labels and the tags cannot drift apart.
+TAG_KEYS = (
+    ("p", "P", "Paragraph"),
+    ("1", "H1", "Heading 1"), ("2", "H2", "Heading 2"), ("3", "H3", "Heading 3"),
+    ("4", "H4", "Heading 4"), ("5", "H5", "Heading 5"), ("6", "H6", "Heading 6"),
+    ("q", "BlockQuote", "Block quote"),
+    ("c", "Caption", "Caption"),
+    ("f", "Figure", "Figure"),
+    ("t", "Table", "Table"),
+    ("l", "L", "List"),
+    ("s", "Sect", "Section"),
+    ("d", "Div", "Division"),
+    ("a", "Art", "Article"),
+    ("r", "Part", "Part"),
+    ("i", "Index", "Index"),
+    ("n", "NonStruct", "No structure"),
+    ("m", "Formula", "Formula (maths)"),
+    ("e", "Code", "Code"),
+    ("o", "Form", "Form field"),
+    ("x", "Artifact", "Not read (page furniture)"),
+)
 
 
 def _element_records(src_page, plan: list[dict], lines: list[TextLine],
@@ -947,6 +984,7 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
             "id": entry["id"],
             "page": src_page.number,
             "kind": entry["kind"],
+            "alt": entry.get("alt", ""),
             "text": " ".join(ln.text.strip() for ln in members).strip()[:300],
             "left": round(100 * box[0] / src_page.width, 2),
             "top": round(100 * (src_page.height - box[3]) / src_page.height, 2),
@@ -1017,7 +1055,8 @@ def plan_page(lines: list[TextLine], page_roles: list[str]) -> list[dict]:
 
 def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
                     mcid_of: list[int | None],
-                    document_elem: pikepdf.Object, page_obj: pikepdf.Object):
+                    document_elem: pikepdf.Object, page_obj: pikepdf.Object,
+                    caption_hosts: list | None = None):
     """Build one page's structure elements from an (already decided, possibly edited) plan.
 
     Returns (top-level elements in reading order, owners) where `owners[mcid]` is the leaf element
@@ -1033,35 +1072,88 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
         owners[mcid] = elem
         return elem
 
+    def spanning(kind: str, parent, indices: list[int]) -> pikepdf.Object:
+        """One element holding every line's marked content directly."""
+        elem = pdf.make_indirect(Dictionary(
+            Type=Name.StructElem, S=Name("/" + kind), P=parent, Pg=page_obj,
+            K=Array([mcid_of[i] for i in indices]) if len(indices) > 1 else mcid_of[indices[0]]))
+        for i in indices:
+            owners[mcid_of[i]] = elem
+        return elem
+
+    captions: list[tuple[int, pikepdf.Object]] = []      # (first line, the caption element)
     for entry in plan:
         first, last, kind = entry["first"], entry["last"], entry["kind"]
         if any(mcid_of[i] is None for i in range(first, last + 1)):
             continue        # every line of this element was removed by an edit
+        indices = list(range(first, last + 1))
+
         if kind == "Table":
-            tops.append(_tagged_table(pdf, [(i, lines[i]) for i in range(first, last + 1)],
+            tops.append(_tagged_table(pdf, [(i, lines[i]) for i in indices],
                                       document_elem, page_obj, leaf))
         elif kind == "L":
             lst = pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.L, P=document_elem, K=Array([])))
             items = []
-            for i in range(first, last + 1):
+            for i in indices:
                 li = pdf.make_indirect(Dictionary(
                     Type=Name.StructElem, S=Name.LI, P=lst, K=Array([])))
                 li.K = Array([leaf(i, Name.LBody, li)])
                 items.append(li)
             lst.K = Array(items)
             tops.append(lst)
-        elif first == last:
-            tops.append(leaf(first, Name("/" + kind), document_elem))
+        elif kind in GROUPING_TAGS:
+            # A grouping element may only hold block-level children, never content of its own --
+            # tagging one straight over the text fails validation, so the text goes in a /P inside.
+            group = pdf.make_indirect(Dictionary(
+                Type=Name.StructElem, S=Name("/" + kind), P=document_elem, K=Array([])))
+            group.K = Array([spanning("P", group, indices)])
+            tops.append(group)
+        elif kind == "Figure":
+            figure = spanning("Figure", document_elem, indices)
+            # Never fabricated: a figure made out of text is described by that text unless the
+            # person typed something better, which is what the editor's description box is for.
+            figure.Alt = String(entry.get("alt")
+                                or " ".join(lines[i].text.strip() for i in indices).strip()
+                                or "Figure")
+            tops.append(figure)
+        elif kind == "Caption":
+            captions.append((first, spanning("Caption", document_elem, indices)))
         else:
-            # A multi-line element the user merged by hand: one element holding every line's MCID.
-            elem = pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name("/" + kind), P=document_elem, Pg=page_obj,
-                K=Array([mcid_of[i] for i in range(first, last + 1)])))
-            for i in range(first, last + 1):
-                owners[mcid_of[i]] = elem
-            tops.append(elem)
+            tops.append(spanning(kind, document_elem, indices))
+
+    # A /Caption is not legal beside the thing it captions -- it belongs inside it. Each is moved
+    # into the nearest figure or table on the page; one with nothing to caption stays where it is,
+    # as a paragraph, rather than being dropped or made non-conformant.
+    for first, caption in captions:
+        host = _caption_host(list(caption_hosts or []) + tops, page_obj)
+        if host is None:
+            caption.S = Name.P
+            tops.insert(_position_for(tops, first, plan), caption)
+            continue
+        caption.P = host
+        kids = host.get("/K")
+        host.K = Array(list(kids) + [caption]) if isinstance(kids, Array) else Array(
+            [kids, caption] if kids is not None else [caption])
     return tops, owners
+
+
+def _caption_host(tops: list, page_obj) -> pikepdf.Object | None:
+    """The figure or table a caption should live inside: the last one built on this page."""
+    for elem in reversed(tops):
+        if str(elem.get("/S")) in ("/Figure", "/Table"):
+            return elem
+    return None
+
+
+def _position_for(tops: list, first: int, plan: list[dict]) -> int:
+    """Where an element starting at line `first` belongs among the page's elements."""
+    seen = 0
+    for entry in plan:
+        if entry["first"] >= first:
+            return min(seen, len(tops))
+        seen += 1
+    return len(tops)
 
 
 def _has_marked_content(page: pikepdf.Page) -> bool:
@@ -1289,6 +1381,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         for entry in plan:
             entry["id"] = f"p{src_page.number}n{content_source[entry['first']]}"
             entry["kind"] = edits.tags.get(entry["id"], entry["kind"])
+            entry["alt"] = edits.alts.get(entry["id"], "")
         plan = [entry for entry in plan if entry["id"] not in edits.removed]
 
         kept = {i for entry in plan for i in range(entry["first"], entry["last"] + 1)}
@@ -1351,8 +1444,18 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         page.obj.StructParents = struct_parent
         page.obj.Tabs = Name.S
 
+        # Figures are built before the rest of the page's structure, because a /Caption the user
+        # marked has to be put *inside* the figure it captions and so needs it to exist already.
+        figure_elems = [
+            pdf.make_indirect(Dictionary(
+                Type=Name.StructElem, S=Name.Figure, P=document_elem, Pg=page.obj, K=fmcid,
+                Alt=String(alt),
+                A=Dictionary(O=Name.Layout, BBox=Array([round(v, 2) for v in bbox]))))
+            for fmcid, alt, bbox, _anchor in figure_specs
+        ]
         tops, owner_of_mcid = _page_structure(pdf, content_lines, plan, mcid_of,
-                                              document_elem, page.obj)
+                                              document_elem, page.obj,
+                                              caption_hosts=figure_elems)
         # The parent tree is indexed BY marked-content id, so every slot must hold the element that
         # owns that id. Appending here instead of assigning (as this briefly did) shifts the figure
         # entries past their own ids and leaves nulls behind -- content that names a structure
@@ -1374,11 +1477,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # this did originally) put every figure after the whole page's prose -- so a screen reader
         # met a page's figures only once it had finished reading the page.
         placements: list[tuple[int, pikepdf.Object]] = []
-        for fmcid, alt, bbox, anchor in figure_specs:
-            figure_elem = pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name.Figure, P=document_elem, Pg=page.obj, K=fmcid,
-                Alt=String(alt),
-                A=Dictionary(O=Name.Layout, BBox=Array([round(v, 2) for v in bbox]))))
+        for (fmcid, _alt, _bbox, anchor), figure_elem in zip(figure_specs, figure_elems):
             owners[fmcid] = figure_elem
             placements.append((_top_index_for(tops, owners, anchor), figure_elem))
         for position, figure_elem in sorted(placements, key=lambda p: -p[0]):

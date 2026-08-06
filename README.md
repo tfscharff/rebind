@@ -99,21 +99,30 @@ it stops.
 
 ### The page editor
 
-Beside the report is an editor showing every element Rebind tagged, laid over a picture of the
-page and listed in the order a screen reader will read them. Tabbing through the list walks the
-document; the matching region lights up on the page. For any element you can:
+Three columns: the keys on the left, the page in the middle, and every element Rebind tagged on
+the right, listed in the order a screen reader will read them. Tab moves one element at a time and
+the matching region lights up on the page; a single keystroke sets what that element is.
 
-- **change what it is** — a paragraph that should be a heading, a heading at the wrong level;
-- **remove it** from the reading order, which marks its content as an artifact rather than
-  untagging it (untagged content is a conformance failure, not a fix);
-- **add one back** — page furniture and text inside figures are listed greyed out as "not read";
-  giving one a type puts it into the reading order. This is the same control as removal, so
-  nothing is ever one-way;
-- **describe a picture in place** — a figure's alt text is editable right where you see it.
+| key | | key | | key | |
+|---|---|---|---|---|---|
+| `p` | Paragraph | `q` | Block quote | `s` | Section |
+| `1`–`6` | Heading 1–6 | `c` | Caption | `d` | Division |
+| `f` | Figure | `t` | Table | `a` | Article |
+| `l` | List | `m` | Formula | `r` | Part |
+| `e` | Code | `o` | Form field | `i` | Index |
+| `n` | No structure | `x` | Not read | `[` `]` | Previous / next page |
 
-Applying rebuilds the document from the corrected plan, rather than patching the structure tree
-afterwards, so grouping decisions change too. Only element types that are legal as direct children
-of the document are offered — ISO 32005 Table 5 is strict, and veraPDF enforces it.
+Removing an element (`x`) marks its content as an artifact rather than untagging it — untagged
+content is a conformance failure, not a fix. Page furniture and text inside figures are listed
+greyed as "not read"; giving one a type puts it into the reading order, so nothing is one-way. A
+figure's alt text is editable in place.
+
+Applying rebuilds the document from the corrected plan rather than patching the structure tree
+afterwards, so grouping decisions change too. Every offered type has a test that applies it and
+validates the result, because what is legal here is not obvious: `/Caption` and `/Quote` are
+illegal directly under the document, `/Aside` is not a PDF 2.0 name at all, a grouping element may
+not hold content directly (its text is wrapped in a `/P`), a `/Figure` needs an `/Alt`, and a
+`/Caption` has to be nested inside the figure or table it captions.
 
 **Command line.**
 

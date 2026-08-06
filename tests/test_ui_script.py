@@ -25,8 +25,11 @@ def _script() -> str:
 def test_the_inline_script_parses():
     # `--check` parses without executing, which is exactly the question: would the browser have
     # thrown before running a line of it?
+    # encoding must be explicit: the page contains non-ASCII (arrow glyphs in the key legend, an
+    # em dash or two) and Windows' default for a pipe is cp1252, which cannot carry them.
     result = subprocess.run(
-        ["node", "--check", "-"], input=_script(), capture_output=True, text=True)
+        ["node", "--check", "-"], input=_script(), capture_output=True, text=True,
+        encoding="utf-8")
     assert result.returncode == 0, result.stderr
 
 

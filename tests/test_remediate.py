@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pikepdf
 import pypdfium2 as pdfium
+import pytest
 
-from rebind.remediate import _encode_winansi, remediate
+from rebind.remediate import EDITABLE_TAGS, _encode_winansi, remediate
 from tests.fixtures import born_digital_pdf, pdf_image_only_scan
 
 
@@ -339,27 +340,42 @@ def test_edited_tags_and_removals_still_produce_a_conformant_document(tmp_path: 
     assert {e["id"]: e["kind"] for e in restored.elements}[paragraphs[1]] == "P"
 
 
-def test_every_offered_tag_is_legal_directly_under_the_document(tmp_path: Path,
-                                                                verapdf_exe: Path):
-    # ISO 32005 Table 5 restricts what a Document element may contain, and veraPDF enforces it:
-    # offering /Caption or /Quote here produced "<Document> shall not contain <Caption>". Every
-    # type the editor offers has to survive being applied.
-    from rebind.remediate import EDITABLE_TAGS, Edits
+@pytest.mark.parametrize("tag", EDITABLE_TAGS)
+def test_every_offered_tag_produces_a_conformant_document(tag: str, tmp_path: Path,
+                                                          verapdf_exe: Path):
+    # ISO 32005 Table 5 restricts what a Document element may contain and veraPDF enforces it
+    # strictly, so every offered type is checked by applying it and validating the result. Guessing
+    # got this wrong repeatedly: /Caption and /Quote are illegal there, /Aside is not a PDF 2.0 name
+    # at all, a grouping element may not hold content directly, and /Figure needs an /Alt. One case
+    # per tag, so a failure names the tag rather than "one of them".
+    from rebind.remediate import Edits
     from rebind.validate import validate_pdf_ua
-    from tests.fixtures import born_digital_pdf
+    from tests.fixtures import born_digital_pdf_with_captioned_drawing
 
-    body = "".join(f"<p>Paragraph number {i} of the document.</p>"
-                   for i in range(1, len(EDITABLE_TAGS) + 2))
-    source = born_digital_pdf("<h1>Title</h1>" + body, tmp_path / "in.pdf")
+    # A page with a real figure on it, so /Caption has something to be nested inside.
+    source = born_digital_pdf_with_captioned_drawing(tmp_path / "in.pdf")
     plain = remediate(source, tmp_path / "plain.pdf", title="T")
-    paragraphs = [e["id"] for e in plain.elements if e["kind"] == "P"]
-    assert len(paragraphs) >= len(EDITABLE_TAGS), plain.elements
+    target = next(e["id"] for e in plain.elements if e["kind"] == "P")
 
-    out = tmp_path / "out.pdf"
-    remediate(source, out, title="T",
-              edits=Edits(tags=dict(zip(paragraphs, EDITABLE_TAGS))))
-    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
-    assert result.compliant, result.summary()
+    out = tmp_path / f"{tag}.pdf"
+    result = remediate(source, out, title="T", edits=Edits(tags={target: tag}))
+    assert {e["id"]: e["kind"] for e in result.elements}[target] == tag
+
+    report = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert report.compliant, f"{tag}: {report.summary()}"
+
+
+def test_every_hotkey_names_a_tag_that_exists():
+    from rebind.remediate import TAG_KEYS
+
+    keys = [key for key, _tag, _label in TAG_KEYS]
+    assert len(keys) == len(set(keys)), "hotkeys must be unique"
+    for key, tag, label in TAG_KEYS:
+        assert len(key) == 1, f"{tag}: a hotkey should be one keystroke, got {key!r}"
+        assert tag in EDITABLE_TAGS or tag == "Artifact", tag
+        assert label, tag
+    assert set(EDITABLE_TAGS) <= {tag for _k, tag, _l in TAG_KEYS}, (
+        "every offered tag needs a key, or it cannot be reached from the keyboard")
 
 
 def test_a_running_footer_is_an_artifact_not_content(tmp_path: Path):

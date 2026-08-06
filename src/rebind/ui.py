@@ -174,10 +174,20 @@ li.cond.attention{border-left-color:var(--attention)}
 .fixrow .caveat{font-size:.82rem;color:var(--muted);flex:1;min-width:16rem}
 /* Two columns: the report on the left, the page editor on the right where it has room to be big
    and can stay in view while the left column is read. Collapses to one column when narrow. */
-.workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(24rem,44%);gap:1.3rem;
+.workspace{display:grid;grid-template-columns:11rem minmax(0,1fr) minmax(22rem,34%);gap:1.2rem;
   align-items:start}
-@media (max-width:64rem){ .workspace{grid-template-columns:minmax(0,1fr)} }
-.col-side{position:sticky;top:1rem}
+@media (max-width:78rem){ .workspace{grid-template-columns:minmax(0,1fr) minmax(20rem,38%)}
+  .col-keys{grid-column:1 / -1} }
+@media (max-width:56rem){ .workspace{grid-template-columns:minmax(0,1fr)} }
+.col-side,.col-keys{position:sticky;top:1rem}
+.keys h2{font-family:var(--serif);font-size:1.05rem;margin:0 0 .2rem}
+.keylist{margin:.5rem 0 0;display:grid;gap:.22rem}
+.keylist>div{display:flex;gap:.45rem;align-items:baseline}
+.keylist dt{margin:0;flex:none}
+.keylist dd{margin:0;font-size:.78rem;color:var(--muted);line-height:1.25}
+kbd{font-family:var(--mono);font-size:.72rem;background:var(--paper);border:1px solid var(--line);
+  border-bottom-width:2px;border-radius:4px;padding:.05rem .3rem;color:var(--ink)}
+.pageview{padding:.7rem}
 .editor h2{font-family:var(--serif);font-size:1.2rem;margin:0}
 .edhead{display:flex;gap:1rem;align-items:baseline;justify-content:space-between;flex-wrap:wrap}
 .pager{display:flex;gap:.4rem;align-items:center}
@@ -192,9 +202,11 @@ li.cond.attention{border-left-color:var(--attention)}
 .ob.gone i{background:var(--muted)}
 .ob.on{border-width:3px;box-shadow:0 0 0 3px color-mix(in srgb,var(--stamp) 35%,transparent)}
 /* The element list IS the reading order, so its DOM order is the tab order -- no tabindex games. */
-.ellist{list-style:none;margin:0;padding:0;max-height:26rem;overflow-y:auto}
-.elrow{display:flex;gap:.6rem;align-items:flex-start;padding:.5rem 0;
-  border-top:1px solid var(--line)}
+.ellist{list-style:none;margin:0;padding:0;max-height:34rem;overflow-y:auto}
+.elrow{display:flex;gap:.6rem;align-items:flex-start;padding:.5rem .35rem;border-radius:5px;
+  border-top:1px solid var(--line);scroll-margin:2rem}
+.elrow:focus{outline:3px solid var(--stamp);outline-offset:-1px;
+  background:color-mix(in srgb,var(--stamp) 7%,transparent)}
 .elrow:first-child{border-top:none}
 .elrow.gone{opacity:.55}
 .elrow .num{font-family:var(--mono);font-size:.72rem;color:#fff;background:var(--stamp);
@@ -337,7 +349,11 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
     // Two columns: everything above on the left, the page editor on the right where it can be
     // tall and stay put while the left column is read.
     document.body.classList.add('wide');
-    work.innerHTML='<div class="workspace"><div class="col-main">'+h+'</div>'+
+    // Three columns: the hotkeys to the left, the page (where the highlight follows the focused
+    // element) in the middle with the report beneath it, and the element list on the right.
+    work.innerHTML='<div class="workspace">'+
+      '<div class="col-keys" id="keys"></div>'+
+      '<div class="col-main"><div id="pageview"></div>'+h+'</div>'+
       '<div class="col-side" id="editor"></div></div>';
     if(figures.length){ wireFigures(id, name); }
     wireContrast(id, name);
@@ -454,8 +470,8 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
   // What Rebind decided, laid over a picture of the page, with every decision changeable. The
   // list is the reading order, so tabbing through it is tabbing through the document as a screen
   // reader will meet it.
-  var ed={id:null,name:null,elements:[],pages:{},tags:[],page:1,pageList:[],
-          tags_edit:{},removed:{},alts:{}};
+  var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
+          tags_edit:{},removed:{},alts:{},focused:null};
 
   function loadEditor(id, name){
     ed.id=id; ed.name=name;
@@ -465,7 +481,7 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
       '<p class="sub">Loading the page…</p></section>';
     fetch('/jobs/'+id+'/elements').then(function(r){return r.json();}).then(function(d){
       if(d.error){ host.innerHTML=''; return; }
-      ed.elements=d.elements||[]; ed.pages=d.pages||{}; ed.tags=d.tags||[];
+      ed.elements=d.elements||[]; ed.pages=d.pages||{}; ed.tags=d.tags||[]; ed.keys=d.keys||[];
       ed.tags_edit=(d.edits&&d.edits.tags)||{};
       ed.removed={}; ((d.edits&&d.edits.removed)||[]).forEach(function(k){ ed.removed[k]=true; });
       ed.alts=(d.edits&&d.edits.alts)||{};
@@ -500,16 +516,6 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
       'any of them is, remove one that should not be read, or describe a picture. Greyed rows '+
       'are page furniture Rebind left out — give one a type to have it read after all.</p>';
 
-    h+='<div class="sheet big">'+
-       (ed.pages[ed.page]? '<img src="'+ed.pages[ed.page]+'" alt="Page '+ed.page+'">':'')+
-       items.map(function(e,i){
-         var k=kindOf(e);
-         var cls='ob'+(ed.removed[e.id]||k==='Artifact'?' gone':'')+(k==='Figure'?' fig':'');
-         return '<span class="'+cls+'" data-box="'+esc(e.id)+'" style="left:'+e.left+'%;top:'+
-           e.top+'%;width:'+e.width+'%;height:'+e.height+'%"><i>'+(i+1)+'</i></span>';
-       }).join('')+
-       '</div>';
-
     if(!items.length){
       h+='<p class="sub">Nothing is tagged on this page.</p>';
     }
@@ -518,19 +524,18 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
       var kind=kindOf(e);
       var untagged=(kind==='Artifact');
       var gone=!!ed.removed[e.id]||untagged;
-      h+='<li class="elrow'+(gone?' gone':'')+'" data-row="'+esc(e.id)+'">'+
+      // The row is the tab stop; the controls inside it are reachable by mouse but out of the tab
+      // order, so Tab walks elements one press at a time and a key sets the type immediately.
+      h+='<li class="elrow'+(gone?' gone':'')+'" data-row="'+esc(e.id)+'" tabindex="0"'+
+        ' aria-label="'+esc((untagged?'Not read':tagLabel(kind))+': '+
+          (e.text||e.alt||'picture').slice(0,80))+'">'+
         '<span class="num">'+(untagged?'—':(i+1))+'</span>'+
         '<div class="elbody">'+
         '<label class="visually-hidden" for="k-'+esc(e.id)+'">Element type for item '+(i+1)+'</label>'+
-        '<select id="k-'+esc(e.id)+'" class="kind" data-id="'+esc(e.id)+'"'+
-          (kind==='Figure'?' disabled':'')+'>'+
-          (kind==='Figure'? '<option>Figure</option>'
-            : (untagged?['Artifact']:[]).concat(kind==='L'?['L']:[])
-                .concat(kind==='Table'?['Table']:[]).concat(ed.tags)
-                .map(function(t){
-                  return '<option value="'+t+'"'+(t===kind?' selected':'')+'>'+tagLabel(t)+
-                    '</option>';
-                }).join(''))+
+        '<select id="k-'+esc(e.id)+'" class="kind" tabindex="-1" data-id="'+esc(e.id)+'">'+
+          ['Artifact'].concat(ed.tags).map(function(t){
+            return '<option value="'+t+'"'+(t===kind?' selected':'')+'>'+tagLabel(t)+'</option>';
+          }).join('')+
         '</select>'+
         (kind==='Figure'
           ? '<label class="altlab">Description<textarea class="alt" data-id="'+esc(e.id)+
@@ -538,9 +543,7 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
             esc(ed.alts[e.id]!==undefined?ed.alts[e.id]:(e.alt||''))+'</textarea></label>'
           : '<p class="eltext">'+esc(e.text||'(no text)')+'</p>')+
         '</div>'+
-        (untagged? '<span class="tagme">not read</span>'
-                 : '<button type="button" class="btn small ghost" data-del="'+esc(e.id)+'">'+
-                   (ed.removed[e.id]?'Restore':'Remove')+'</button>')+
+        (untagged? '<span class="tagme">not read</span>' : '')+
         '</li>';
     });
     h+='</ol>'+
@@ -550,13 +553,79 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
                                     : 'Make a change to enable this.')+'</span></div>'+
       '</section>';
     host.innerHTML=h;
+    drawPageView();
+    drawKeys();
     wireEditor();
   }
 
+  // The page itself lives in the middle column, and the highlight moves with the focused row.
+  function drawPageView(){
+    var view=document.getElementById('pageview');
+    if(!view) return;
+    var items=elementsOnPage();
+    view.innerHTML='<section class="panel pageview"><div class="sheet big">'+
+      (ed.pages[ed.page]? '<img src="'+ed.pages[ed.page]+'" alt="Page '+ed.page+'">':'')+
+      items.map(function(e,i){
+        var k=kindOf(e);
+        var cls='ob'+(ed.removed[e.id]||k==='Artifact'?' gone':'')+(k==='Figure'?' fig':'')+
+          (ed.focused===e.id?' on':'');
+        return '<span class="'+cls+'" data-box="'+esc(e.id)+'" style="left:'+e.left+'%;top:'+
+          e.top+'%;width:'+e.width+'%;height:'+e.height+'%"><i>'+
+          (k==='Artifact'?'—':(i+1))+'</i></span>';
+      }).join('')+'</div></section>';
+  }
+
+  function drawKeys(){
+    var host=document.getElementById('keys');
+    if(!host) return;
+    host.innerHTML='<section class="panel keys" aria-labelledby="kh"><h2 id="kh">Keys</h2>'+
+      '<p class="sub">Tab to an element, then press a key to set what it is.</p>'+
+      '<dl class="keylist">'+ed.keys.map(function(k){
+        return '<div><dt><kbd>'+esc(k.key)+'</kbd></dt><dd>'+esc(k.label)+'</dd></div>';
+      }).join('')+
+      '<div><dt><kbd>↑</kbd><kbd>↓</kbd></dt><dd>Previous / next element</dd></div>'+
+      '<div><dt><kbd>[</kbd><kbd>]</kbd></dt><dd>Previous / next page</dd></div>'+
+      '</dl></section>';
+  }
+
+  function highlight(elementId){
+    var view=document.getElementById('pageview');
+    if(!view) return;
+    view.querySelectorAll('.ob').forEach(function(b){ b.classList.remove('on'); });
+    var box=view.querySelector('[data-box="'+elementId+'"]');
+    if(box){
+      box.classList.add('on');
+      if(box.scrollIntoView) box.scrollIntoView({block:'nearest'});
+    }
+  }
+
+  // Setting a type redraws, then puts focus back on the same row so a run of corrections is one
+  // uninterrupted pass: Tab, key, Tab, key.
+  function setKind(elementId, tag){
+    if(tag==='Artifact') delete ed.tags_edit[elementId]; else ed.tags_edit[elementId]=tag;
+    // "Not read" on something Rebind did tag means removing it; on furniture it means leave it.
+    var known=null;
+    ed.elements.forEach(function(e){ if(e.id===elementId) known=e; });
+    if(tag==='Artifact' && known && known.kind!=='Artifact') ed.removed[elementId]=true;
+    else delete ed.removed[elementId];
+    drawEditor();
+    var row=document.querySelector('.elrow[data-row="'+elementId+'"]');
+    if(row){ row.focus(); }
+    say(tagLabel(tag)+' set.');
+  }
+
+  function turnPage(step){
+    var at=ed.pageList.indexOf(ed.page);
+    var next=ed.pageList[Math.min(Math.max(at+step,0),ed.pageList.length-1)];
+    if(next===ed.page) return;
+    ed.page=next; drawEditor();
+    var first=document.querySelector('.elrow');
+    if(first) first.focus();
+  }
+
   function tagLabel(t){
-    var names={H1:'Heading 1',H2:'Heading 2',H3:'Heading 3',H4:'Heading 4',H5:'Heading 5',
-               H6:'Heading 6',P:'Paragraph',L:'List',Table:'Table',Figure:'Figure',
-               Artifact:'Not read (page furniture)'};
+    var names={Artifact:'Not read (page furniture)'};
+    ed.keys.forEach(function(k){ names[k.tag]=k.label; });
     return names[t]||t;
   }
 
@@ -564,21 +633,11 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
     var host=document.getElementById('editor');
     if(!host) return;
     var prev=document.getElementById('edprev'), next=document.getElementById('ednext');
-    if(prev) prev.addEventListener('click',function(){
-      ed.page=ed.pageList[Math.max(0,ed.pageList.indexOf(ed.page)-1)]; drawEditor(); });
-    if(next) next.addEventListener('click',function(){
-      ed.page=ed.pageList[Math.min(ed.pageList.length-1,ed.pageList.indexOf(ed.page)+1)];
-      drawEditor(); });
+    if(prev) prev.addEventListener('click',function(){ turnPage(-1); });
+    if(next) next.addEventListener('click',function(){ turnPage(1); });
 
     host.querySelectorAll('select.kind').forEach(function(sel){
-      sel.addEventListener('change',function(){
-        var key=sel.getAttribute('data-id');
-        // Choosing "not read" again is how an added element is taken back out.
-        if(sel.value==='Artifact') delete ed.tags_edit[key]; else ed.tags_edit[key]=sel.value;
-        drawEditor();
-        var again=document.getElementById('k-'+sel.getAttribute('data-id'));
-        if(again) again.focus();
-      });
+      sel.addEventListener('change',function(){ setKind(sel.getAttribute('data-id'), sel.value); });
     });
     host.querySelectorAll('textarea.alt').forEach(function(t){
       t.addEventListener('input',function(){
@@ -586,19 +645,28 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
         var apply=document.getElementById('edapply'); if(apply) apply.disabled=false;
       });
     });
-    host.querySelectorAll('[data-del]').forEach(function(b){
-      b.addEventListener('click',function(){
-        var key=b.getAttribute('data-del');
-        if(ed.removed[key]) delete ed.removed[key]; else ed.removed[key]=true;
-        drawEditor();
-      });
-    });
-    // Focusing a row lights up its box on the page, so tabbing through the list walks the page.
-    host.querySelectorAll('.elrow').forEach(function(row){
+    // Focusing a row lights up its region on the page in the middle column, so tabbing through
+    // the list walks the page. Typing a key while a row has focus sets what it is, at once.
+    var rows=Array.prototype.slice.call(host.querySelectorAll('.elrow'));
+    rows.forEach(function(row,index){
       row.addEventListener('focusin',function(){
-        host.querySelectorAll('.ob').forEach(function(b){ b.classList.remove('on'); });
-        var box=host.querySelector('[data-box="'+row.getAttribute('data-row')+'"]');
-        if(box) box.classList.add('on');
+        ed.focused=row.getAttribute('data-row');
+        highlight(ed.focused);
+      });
+      row.addEventListener('keydown',function(ev){
+        if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
+        var key=(ev.key||'').toLowerCase();
+        if(key==='arrowdown'||key==='arrowup'){
+          var next=rows[index+(key==='arrowdown'?1:-1)];
+          if(next){ ev.preventDefault(); next.focus(); }
+          return;
+        }
+        if(key==='['||key===']'){
+          ev.preventDefault(); turnPage(key===']'?1:-1); return;
+        }
+        var hit=null;
+        ed.keys.forEach(function(k){ if(k.key===key) hit=k.tag; });
+        if(hit){ ev.preventDefault(); setKind(row.getAttribute('data-row'), hit); }
       });
     });
 

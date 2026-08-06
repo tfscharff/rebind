@@ -51,8 +51,11 @@ def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
     kinds = [(e["id"], e["kind"], e["text"]) for e in body["elements"]]
     assert [k for _i, k, _t in kinds] == ["H1", "P", "P", "P"], kinds
     assert body["pages"]["1"].startswith("data:image/png;base64,"), "the page picture is missing"
-    assert "H2" in body["tags"] and "Table" not in body["tags"], (
-        "only element types Rebind can actually build should be offered")
+    for expected in ("H2", "P", "BlockQuote", "Caption", "Figure", "Table", "L"):
+        assert expected in body["tags"], body["tags"]
+    keys = {entry["key"] for entry in body["keys"]}
+    assert len(keys) == len(body["keys"]), "every hotkey must be unique"
+    assert {"p", "1", "q", "c", "f", "t", "x"} <= keys, sorted(keys)
     for element in body["elements"]:
         assert 0 <= element["left"] <= 100 and 0 <= element["top"] <= 100, element
 
