@@ -235,6 +235,21 @@ def born_digital_pdf_with_image(target: Path) -> Path:
     return born_digital_pdf(html, target)
 
 
+def born_digital_pdf_two_column(target: Path) -> Path:
+    """A born-digital PDF with two genuine text columns.
+
+    Every line is tagged with the column it belongs to, so a test can assert the order the text is
+    actually read in: a screen reader must finish the left column before starting the right, not
+    ping-pong across the gutter line by line.
+    """
+    left = "".join(f"<p>LEFT line {i} of the first column.</p>" for i in range(1, 9))
+    right = "".join(f"<p>RIGHT line {i} of the second column.</p>" for i in range(1, 9))
+    html = f"<div class='cols'><div class='col'>{left}</div><div class='col'>{right}</div></div>"
+    css = (".cols { display: flex; gap: 40pt; } .col { width: 200pt; } "
+           "p { margin: 0 0 6pt 0; font-size: 10pt; }")
+    return born_digital_pdf(html, target, extra_css=css)
+
+
 def born_digital_pdf_with_captioned_drawing(target: Path) -> Path:
     """A born-digital PDF whose figure is *drawn* (vector paths), not placed as an image, with a
     caption directly below it -- the shape of six of the eight figures in a real sample

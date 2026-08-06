@@ -216,6 +216,47 @@ def test_link_annotation_with_an_unfollowable_target_is_dropped(tmp_path: Path):
     assert kept == {"https://example.org/x", "mailto:someone@example.org", "doi:10.1016/j.example"}
 
 
+def _tagged_text_in_order(pdf_path: Path) -> list[str]:
+    """The text of the tagged (non-artifact) layer, in the order it is marked up.
+
+    This is the order a screen reader announces: the structure tree's MCIDs index into this same
+    sequence. The original page content is drawn first, inside an /Artifact block, and is skipped.
+    """
+    out: list[str] = []
+    with pikepdf.open(pdf_path) as pdf:
+        depth_artifact = 0
+        for operands, op in pikepdf.parse_content_stream(pdf.pages[0]):
+            token = str(op)
+            if token in ("BMC", "BDC"):
+                if operands and str(operands[0]) == "/Artifact":
+                    depth_artifact += 1
+                elif depth_artifact:
+                    depth_artifact += 1
+            elif token == "EMC" and depth_artifact:
+                depth_artifact -= 1
+            elif token == "Tj" and not depth_artifact and operands:
+                out.append(bytes(operands[0]).decode("cp1252", "replace"))
+    return out
+
+
+def test_two_column_text_is_read_down_each_column_not_across_the_gutter(tmp_path: Path):
+    # The classic way reading order goes wrong: sorting lines purely top-to-bottom on a two-column
+    # page interleaves the columns, and a screen reader reads "LEFT line 1, RIGHT line 1, LEFT
+    # line 2..." -- word salad. Rebind's XY-cut recovers the columns; this asserts the pipeline
+    # actually applies it, which is the whole point of the recovery.
+    from tests.fixtures import born_digital_pdf_two_column
+
+    source = born_digital_pdf_two_column(tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    sides = [t.split()[0] for t in _tagged_text_in_order(out) if t.split()]
+    sides = [s for s in sides if s in ("LEFT", "RIGHT")]
+    assert sides, "no tagged column text was found at all"
+    assert sides == sorted(sides, key=lambda s: 0 if s == "LEFT" else 1), (
+        f"columns are interleaved rather than read one after the other: {sides}")
+
+
 def test_a_drawn_figure_is_found_and_described_from_its_caption(tmp_path: Path):
     # A schematic drawn with path operators leaves no /Image behind, so an image-only search misses
     # it entirely -- on the real sample that was six of eight figures, and Acrobat agreed with the

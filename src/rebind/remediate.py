@@ -23,7 +23,7 @@ import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
 from .extract import Page, TextLine, extract_pages
-from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines
+from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines, order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
 from .profile import build_profile, style_of
 from .validate import self_check_pdf_ua2
@@ -488,8 +488,17 @@ def _merge_bare_markers(lines: list[TextLine]) -> list[TextLine]:
     return out
 
 
-def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int) -> tuple[list[TextLine], bool]:
-    """The page's text lines in reading order, and whether OCR was used."""
+def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int,
+               profile) -> tuple[list[TextLine], bool, object]:
+    """The page's text lines in reading order, whether OCR was used, and the page's layout.
+
+    Reading order comes from `layout.order_page`'s recursive XY-cut, NOT from a top-to-bottom sort.
+    On a single-column page the two agree. On a two-column page they emphatically do not: a
+    top-to-bottom sort interleaves the columns line by line, so a screen reader reads "left line 1,
+    right line 1, left line 2, ..." -- word salad, and precisely the failure Adobe's "Logical
+    Reading Order" check exists to catch. The cut was written and tested long before this, but the
+    pipeline was still sorting by y; that gap is what `review.page_order` now reports on.
+    """
     if src_page.has_text_layer:
         lines = list(src_page.lines)
         used_ocr = False
@@ -498,8 +507,9 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int) -> tuple[lis
         lines = recognize(image, page_number=src_page.number, page_width=src_page.width,
                           page_height=src_page.height, engine=engine)
         used_ocr = True
-    lines.sort(key=lambda ln: (-ln.bbox[3], ln.bbox[0]))     # reading order: top-to-bottom
-    return _merge_bare_markers(lines), used_ocr
+    layout = order_page(replace(src_page, lines=tuple(lines)), profile)
+    ordered = [placed.line for placed in layout.lines]
+    return _merge_bare_markers(ordered), used_ocr, layout
 
 
 def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, font: pikepdf.Object, name: str) -> None:
@@ -899,8 +909,10 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
 
     # Pass one: recover each page's text lines (from its text layer or OCR) in reading order.
     per_page: list[tuple] = []
+    layouts: list[tuple] = []
     for src_page in source_pages:
-        lines, used_ocr = _lines_for(source, src_page, engine, dpi)
+        lines, used_ocr, layout = _lines_for(source, src_page, engine, dpi, profile)
+        layouts.append((src_page, layout))
         if used_ocr and lines:
             ocr_pages.append(src_page.number)
             added_layer = True
