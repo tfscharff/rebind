@@ -216,27 +216,36 @@ def test_link_annotation_with_an_unfollowable_target_is_dropped(tmp_path: Path):
     assert kept == {"https://example.org/x", "mailto:someone@example.org", "doi:10.1016/j.example"}
 
 
-def _tagged_text_in_order(pdf_path: Path) -> list[str]:
-    """The text of the tagged (non-artifact) layer, in the order it is marked up.
+def _mcid_text(pdf_path: Path, page_index: int = 0) -> dict[int, str]:
+    """Map each marked-content id on a page to the text drawn under it.
 
-    This is the order a screen reader announces: the structure tree's MCIDs index into this same
-    sequence. The original page content is drawn first, inside an /Artifact block, and is skipped.
+    Text drawn inside an /Artifact sequence has no MCID and never appears here -- that is the whole
+    point of an artifact. Text drawn inside a /Figure's sequence lands under the *figure's* MCID,
+    because it belongs to the figure rather than standing on its own.
     """
-    out: list[str] = []
+    out: dict[int, str] = {}
     with pikepdf.open(pdf_path) as pdf:
-        depth_artifact = 0
-        for operands, op in pikepdf.parse_content_stream(pdf.pages[0]):
+        stack: list[int | None] = []
+        for operands, op in pikepdf.parse_content_stream(pdf.pages[page_index]):
             token = str(op)
             if token in ("BMC", "BDC"):
-                if operands and str(operands[0]) == "/Artifact":
-                    depth_artifact += 1
-                elif depth_artifact:
-                    depth_artifact += 1
-            elif token == "EMC" and depth_artifact:
-                depth_artifact -= 1
-            elif token == "Tj" and not depth_artifact and operands:
-                out.append(bytes(operands[0]).decode("cp1252", "replace"))
+                mcid = None
+                if len(operands) > 1 and isinstance(operands[1], pikepdf.Dictionary):
+                    raw = operands[1].get("/MCID")
+                    mcid = int(raw) if raw is not None else None
+                stack.append(mcid if mcid is not None else (stack[-1] if stack else None))
+            elif token == "EMC" and stack:
+                stack.pop()
+            elif token == "Tj" and operands and stack and stack[-1] is not None:
+                text = bytes(operands[0]).decode("cp1252", "replace")
+                out[stack[-1]] = (out.get(stack[-1], "") + " " + text).strip()
     return out
+
+
+def _tagged_text_in_order(pdf_path: Path) -> list[str]:
+    """The text of the tagged (non-artifact) layer, in marked-content id order."""
+    mapping = _mcid_text(pdf_path)
+    return [mapping[key] for key in sorted(mapping)]
 
 
 def test_two_column_text_is_read_down_each_column_not_across_the_gutter(tmp_path: Path):
@@ -275,6 +284,89 @@ def test_columns_are_found_even_under_a_full_width_heading(tmp_path: Path):
     heading = next(i for i, t in enumerate(text) if "Annual Review" in t)
     first_column = next(i for i, t in enumerate(text) if t.startswith("LEFT"))
     assert heading < first_column, "the heading must still be read before the columns"
+
+
+def _structure_sequence(pdf_path: Path) -> list[tuple[str, str]]:
+    """The document's top-level structure elements in reading order, as (tag, its text)."""
+    mapping = _mcid_text(pdf_path)
+    out: list[tuple[str, str]] = []
+    with pikepdf.open(pdf_path) as pdf:
+        for kid in pdf.Root.StructTreeRoot.K[0].K:
+            mcids: list[int] = []
+
+            def collect(elem, into=mcids):
+                kids = elem.get("/K")
+                for item in (kids if isinstance(kids, pikepdf.Array) else [kids]):
+                    if isinstance(item, int):
+                        into.append(item)
+                    elif isinstance(item, pikepdf.Dictionary) and "/S" in item:
+                        collect(item, into)
+
+            collect(kid)
+            text = " ".join(mapping.get(m, "") for m in mcids).strip()
+            out.append((str(kid.get("/S")).lstrip("/"), text))
+    return out
+
+
+def test_a_running_footer_is_an_artifact_not_content(tmp_path: Path):
+    # PDF/UA requires page furniture to be marked as an artifact. Tagged as content, a screen
+    # reader announces the running head and folio in the middle of the prose on every page.
+    from tests.fixtures import born_digital_pdf
+
+    body = "".join(
+        f"<p>Body paragraph {i} of the running text on this page.</p>" for i in range(1, 60))
+    source = born_digital_pdf(
+        body, tmp_path / "in.pdf",
+        extra_css=("@page { margin: 50pt; "
+                   "@bottom-center { content: 'A Running Footer'; font-size: 8pt; } "
+                   "@bottom-right { content: counter(page); font-size: 8pt; } }"))
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        page_count = len(pdf.pages)
+    assert page_count > 1, "the fixture needs several pages for a footer to be a running one"
+
+    for index in range(page_count):
+        tagged = list(_mcid_text(out, index).values())
+        assert any("Body paragraph" in t for t in tagged), f"page {index}: body text must survive"
+        assert not any("Running Footer" in t for t in tagged), (
+            f"page {index}: the footer should be an artifact, not tagged content: {tagged}")
+        assert not any(t.strip().isdigit() for t in tagged), (
+            f"page {index}: the folio should be an artifact: {tagged}")
+
+
+def test_a_figure_is_one_element_not_a_picture_plus_loose_labels(tmp_path: Path):
+    # A diagram's callout labels belong to the diagram. Tagged as separate paragraphs they are
+    # read out as if they were prose -- "A", "B", "3 mm" -- and the figure stops being one thing.
+    from tests.fixtures import born_digital_pdf_with_labelled_drawing
+
+    source = born_digital_pdf_with_labelled_drawing(tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    sequence = _structure_sequence(out)
+    figures = [(tag, text) for tag, text in sequence if tag == "Figure"]
+    assert len(figures) == 1, sequence
+    for label in ("Inlet port", "Outlet port"):
+        owners = [tag for tag, text in sequence if label in text]
+        assert owners == ["Figure"], (
+            f"{label!r} belongs to the figure, not to {owners}: {sequence}")
+
+
+def test_a_figure_is_read_where_it_sits_not_after_the_whole_page(tmp_path: Path):
+    # Reading order is a sequence, so a figure needs a place in it. Appended after everything else,
+    # a screen reader meets the page's figures only once it has finished reading the page.
+    from tests.fixtures import born_digital_pdf_with_captioned_drawing
+
+    source = born_digital_pdf_with_captioned_drawing(tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    tags = [tag for tag, _text in _structure_sequence(out)]
+    assert "Figure" in tags, tags
+    assert tags.index("Figure") < len(tags) - 1, (
+        f"the figure should not be last -- text follows it on the page: {tags}")
 
 
 def test_a_drawn_figure_is_found_and_described_from_its_caption(tmp_path: Path):

@@ -258,6 +258,39 @@ def born_digital_pdf_heading_over_two_columns(target: Path) -> Path:
     return born_digital_pdf(html, target, extra_css=css)
 
 
+def born_digital_pdf_with_labelled_drawing(target: Path) -> Path:
+    """A drawn figure with callout labels sitting on top of the artwork, plus its caption.
+
+    The shape of every schematic in the real sample: the diagram carries "A", "Inlet port",
+    "3 mm" and the like, positioned over the drawing rather than in the flow of the prose.
+    """
+    import base64
+
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='240' height='160' viewBox='0 0 240 160'>"
+        "<rect x='20' y='20' width='200' height='120' fill='none' stroke='black' stroke-width='2'/>"
+        "<circle cx='70' cy='80' r='30' fill='none' stroke='black' stroke-width='2'/>"
+        "<circle cx='170' cy='80' r='30' fill='none' stroke='black' stroke-width='2'/>"
+        "<path d='M20 40 C80 10 160 150 220 120' fill='none' stroke='black' stroke-width='2'/>"
+        "<path d='M40 140 L200 140' stroke='black' stroke-width='2'/>"
+        "<path d='M100 20 L100 140' stroke='black' stroke-width='2'/>"
+        "</svg>"
+    )
+    uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode("ascii")
+    html = (
+        "<h1>Report</h1><p>Body text before the figure.</p>"
+        f"<div class='fig'><img src='{uri}' width='240' height='160'>"
+        "<span class='lbl' style='left:30pt;top:40pt'>Inlet port</span>"
+        "<span class='lbl' style='left:150pt;top:100pt'>Outlet port</span></div>"
+        "<p style='font-size:8pt'>Fig. 2 Apparatus for perfusing the specimen. Water enters at "
+        "the inlet and leaves at the outlet as described in the text.</p>"
+        "<p>Body text continues after the caption.</p>"
+    )
+    css = (".fig { position: relative; width: 240pt; } "
+           ".lbl { position: absolute; font-size: 7pt; }")
+    return born_digital_pdf(html, target, extra_css=css)
+
+
 def born_digital_pdf_two_column(target: Path) -> Path:
     """A born-digital PDF with two genuine text columns.
 

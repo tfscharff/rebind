@@ -103,6 +103,10 @@ VECTOR_CAPTION_MAX_GAP_PT = 30.0
 MIN_VECTOR_PATHS = 6
 RULE_MAX_THICKNESS_PT = 3.0
 RULE_MIN_LENGTH_RATIO = 0.5
+# How far outside a figure's ink a callout label may sit and still belong to it. Observed on the
+# real sample: "Bonding" and "2-10 ml glass syringe" print 3-11pt above the top of the apparatus
+# they label, at the end of their leader lines. Comfortably smaller than the gap to a caption.
+FIGURE_TEXT_TOLERANCE_PT = 12.0
 
 # OCR heading recovery. A single OCR line's box height is noisy (a body line can crop tall), so no
 # one signal is trusted: a heading must be markedly taller than the page's body text AND set apart
@@ -452,23 +456,33 @@ def _encode_winansi(text: str) -> bytes:
     return text.encode("cp1252", errors="replace")
 
 
-def _tagged_text_stream(lines: list[TextLine], font_name: str) -> bytes:
-    """Invisible text (render mode 3), one marked-content paragraph per line.
+def _draw_line(out: io.BytesIO, line: TextLine, font_name: str) -> None:
+    """The invisible (render mode 3) text for one line, with no marked-content wrapper of its own."""
+    x0, y0, x1, y1 = line.bbox
+    size = max(y1 - y0, 1.0)
+    out.write(b"q BT 3 Tr /" + font_name.encode("ascii") + b" 1 Tf\n")
+    out.write(f"{size:.2f} 0 0 {size:.2f} {x0:.2f} {y0:.2f} Tm (".encode("ascii"))
+    out.write(_encode_winansi(_escape(line.text)))
+    out.write(b") Tj\nET Q\n")
 
-    Each line is wrapped in `/P <</MCID n>> BDC ... EMC` so it can be referenced from the structure
-    tree; the MCID is the line index. Drawn after the artifact-marked page image, so it never
-    changes the visible page.
+
+def _tagged_text_stream(lines: list[TextLine], font_name: str,
+                        mcids: list[int | None]) -> bytes:
+    """Invisible text (render mode 3), one marked-content sequence per line.
+
+    A line with an MCID is wrapped in `/P <</MCID n>> BDC ... EMC` so the structure tree can point
+    at it. A line with `None` is wrapped in `/Artifact BMC ... EMC` instead: page furniture -- a
+    running header, a footer, a folio -- which PDF/UA requires be marked as an artifact rather than
+    tagged as content, so a screen reader does not announce "Makoto Kamei et al., 34" in the middle
+    of the prose on every single page. The text is still drawn, so it stays selectable and
+    searchable; it simply is not part of the document's content.
     """
     out = io.BytesIO()
-    for mcid, line in enumerate(lines):
-        x0, y0, x1, y1 = line.bbox
-        size = max(y1 - y0, 1.0)
-        out.write(f"/P <</MCID {mcid}>> BDC\n".encode("ascii"))
-        out.write(b"q BT 3 Tr /" + font_name.encode("ascii") + b" 1 Tf\n")
-        out.write(f"{size:.2f} 0 0 {size:.2f} {x0:.2f} {y0:.2f} Tm (".encode("ascii"))
-        out.write(_encode_winansi(_escape(line.text)))
-        out.write(b") Tj\n")
-        out.write(b"ET Q\nEMC\n")
+    for line, mcid in zip(lines, mcids):
+        out.write(b"/Artifact BMC\n" if mcid is None
+                  else f"/P <</MCID {mcid}>> BDC\n".encode("ascii"))
+        _draw_line(out, line, font_name)
+        out.write(b"EMC\n")
     return out.getvalue()
 
 
@@ -787,6 +801,92 @@ def _table_summary(column_count: int, row_count: int, header_texts: list[str]) -
     return summary
 
 
+def _center_in_box(bbox: tuple, box: tuple) -> bool:
+    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+    return box[0] <= cx <= box[2] and box[1] <= cy <= box[3]
+
+
+def _figure_text(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
+    """The lines belonging to a figure: its own callout labels, not the prose around it.
+
+    A label sits *on* the artwork, but the figure's box is the extent of its ink, and a label
+    routinely sits just past that -- "Bonding" printed a few points above the top of the drawing it
+    names, at the end of a leader line. So the box is tested with a small tolerance, and ownership
+    grows: a line near the figure joins it and widens the box, which may in turn reach a label near
+    only that. Prose does not sit on artwork, so it is never reached.
+
+    Growth is floored at the caption. The caption is real text that belongs in the reading order in
+    its own right -- it is also what the figure's alt text was taken from -- so neither it nor the
+    body text beneath it may be swallowed, however close the artwork comes to it.
+    """
+    floor = max(
+        (ln.bbox[3] for ln in lines
+         if _caption_number(ln.text) and ln.bbox[3] <= bbox[1] + FIGURE_TEXT_TOLERANCE_PT),
+        default=None,
+    )
+    candidates = [ln for ln in lines if floor is None or ln.bbox[3] > floor]
+    owned: list[TextLine] = []
+    box = bbox
+    changed = True
+    while changed:
+        changed = False
+        grown = (box[0] - FIGURE_TEXT_TOLERANCE_PT, box[1] - FIGURE_TEXT_TOLERANCE_PT,
+                 box[2] + FIGURE_TEXT_TOLERANCE_PT, box[3] + FIGURE_TEXT_TOLERANCE_PT)
+        for line in candidates:
+            if any(line is seen for seen in owned):
+                continue
+            if _center_in_box(line.bbox, grown) or _overlaps(line.bbox, grown):
+                owned.append(line)
+                box = (min(box[0], line.bbox[0]), min(box[1], line.bbox[1]),
+                       max(box[2], line.bbox[2]), max(box[3], line.bbox[3]))
+                changed = True
+    return owned
+
+
+def _figure_anchor(lines: list[TextLine], mcids: list[int | None], figure_index: int,
+                   owner_figure: dict[int, int], bbox: tuple) -> int | None:
+    """The MCID of the content line a figure should be read *before*, or None to read it last.
+
+    Reading order is a sequence, so a figure needs a place in it. Its own labels were already
+    spliced to the right height by the layout pass, so the line following them is where the figure
+    belongs; failing that (a figure with no labels of its own) the first content line starting
+    below the figure serves the same purpose.
+    """
+    seen_own_text = False
+    for line, mcid in zip(lines, mcids):
+        if owner_figure.get(id(line)) == figure_index:
+            seen_own_text = True
+            continue
+        if mcid is None:
+            continue
+        if seen_own_text or line.bbox[3] <= bbox[1]:
+            return mcid
+    return None
+
+
+def _top_index_for(tops: list, owners: list, anchor: int | None) -> int:
+    """Where in `tops` an element anchored before MCID `anchor` belongs."""
+    if anchor is None or anchor >= len(owners):
+        return len(tops)
+    owner = owners[anchor]
+    for position, top in enumerate(tops):
+        if top is owner or _contains(top, owner):
+            return position
+    return len(tops)
+
+
+def _contains(parent, target) -> bool:
+    """Whether `target` is `parent` or sits somewhere beneath it in the structure tree."""
+    kids = parent.get("/K")
+    if not isinstance(kids, Array):
+        return False
+    for kid in kids:
+        if isinstance(kid, Dictionary):
+            if kid == target or _contains(kid, target):
+                return True
+    return False
+
+
 def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], page_roles: list[str],
                     document_elem: pikepdf.Object, page_obj: pikepdf.Object):
     """Build the structure elements for one page from its lines, grouping list and table runs.
@@ -1029,22 +1129,57 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         page_image = (render_page_to_image(render_source, src_page.number, dpi=dpi)
                       if rebuild or figures else None)
 
-        # Draw each described figure (a crop of the rendered region) inside a tagged /Figure.
+        # Classify every line before anything is drawn. Three kinds, and only one of them is the
+        # document's content:
+        #   * page furniture (running head, footer, folio) -> an /Artifact, never tagged content;
+        #   * text belonging to a described figure -> drawn INSIDE that figure's marked content, so
+        #     the figure is one thing in the reading order rather than a picture plus a scatter of
+        #     loose labels ("A", "B", "3 mm") a screen reader would read out as if it were prose;
+        #   * everything else -> ordinary content, tagged with its own MCID.
+        owner_figure: dict[int, int] = {}   # id(line) -> index into `described`
+        for k, (_fid, fbox) in enumerate(described):
+            for line in _figure_text(lines, fbox):
+                owner_figure[id(line)] = k
+        is_artifact = [
+            id(ln) not in owner_figure
+            and profile.role_of(ln, page_height=src_page.height) == "artifact"
+            for ln in lines
+        ]
+
+        content_lines: list[TextLine] = []
+        content_roles: list[str] = []
+        mcids: list[int | None] = []
+        for line, role, artifact in zip(lines, page_roles, is_artifact):
+            if artifact or id(line) in owner_figure:
+                mcids.append(None)          # drawn as an artifact, or inside its figure below
+                continue
+            mcids.append(len(content_lines))
+            content_lines.append(line)
+            content_roles.append(role)
+
+        # Draw each described figure (a crop of the rendered region) inside a tagged /Figure,
+        # together with any text that belongs to it, all under the figure's single MCID.
         figure_stream = b""
         extra_xobjects: dict = {}
-        figure_specs: list[tuple] = []   # (mcid, alt, bbox)
-        mcid = len(lines)
+        figure_specs: list[tuple] = []   # (mcid, alt, bbox, anchor line index)
+        mcid = len(content_lines)
         for k, (fid, bbox) in enumerate(described):
             extra_xobjects[f"Fig{k}"] = _figure_xobject(
                 pdf, page_image, bbox, src_page.width, src_page.height)
             x0, y0, x1, y1 = bbox
-            figure_stream += (
-                f"/Figure <</MCID {mcid}>> BDC q {x1 - x0:.2f} 0 0 {y1 - y0:.2f} "
-                f"{x0:.2f} {y0:.2f} cm /Fig{k} Do Q EMC\n").encode()
-            figure_specs.append((mcid, effective_alt[fid], bbox))
+            block = io.BytesIO()
+            block.write(f"/Figure <</MCID {mcid}>> BDC q {x1 - x0:.2f} 0 0 {y1 - y0:.2f} "
+                        f"{x0:.2f} {y0:.2f} cm /Fig{k} Do Q\n".encode())
+            for line in lines:
+                if owner_figure.get(id(line)) == k:
+                    _draw_line(block, line, "RebindF")
+            block.write(b"EMC\n")
+            figure_stream += block.getvalue()
+            figure_specs.append((mcid, effective_alt[fid], bbox, _figure_anchor(lines, mcids, k,
+                                                                               owner_figure, bbox)))
             mcid += 1
 
-        overlay = _tagged_text_stream(lines, "RebindF") + figure_stream
+        overlay = _tagged_text_stream(lines, "RebindF", mcids) + figure_stream
 
         if rebuild:
             _rebuild_page(pdf, page, page_image, overlay, extra_xobjects, font,
@@ -1058,17 +1193,26 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         page.obj.StructParents = struct_parent
         page.obj.Tabs = Name.S
 
-        tops, owners = _page_structure(pdf, lines, page_roles, document_elem, page.obj)
-        for mcid, role in enumerate(page_roles):
-            if role.startswith("H") and lines[mcid].text.strip():
-                heading_entries.append((int(role[1:]), owners[mcid], lines[mcid].text.strip()))
-        for fmcid, alt, bbox in figure_specs:
+        tops, owners = _page_structure(pdf, content_lines, content_roles, document_elem, page.obj)
+        for index, role in enumerate(content_roles):
+            if role.startswith("H") and content_lines[index].text.strip():
+                heading_entries.append(
+                    (int(role[1:]), owners[index], content_lines[index].text.strip()))
+        # A figure goes into the reading order where it actually sits, not after everything else.
+        # `tops` holds the page's top-level elements in reading order; each figure is spliced in at
+        # the element that owns the first content line below it. Appending them all at the end (as
+        # this did originally) put every figure after the whole page's prose -- so a screen reader
+        # met a page's figures only once it had finished reading the page.
+        placements: list[tuple[int, pikepdf.Object]] = []
+        for fmcid, alt, bbox, anchor in figure_specs:
             figure_elem = pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.Figure, P=document_elem, Pg=page.obj, K=fmcid,
                 Alt=String(alt),
                 A=Dictionary(O=Name.Layout, BBox=Array([round(v, 2) for v in bbox]))))
-            tops.append(figure_elem)
             owners.append(figure_elem)
+            placements.append((_top_index_for(tops, owners, anchor), figure_elem))
+        for position, figure_elem in sorted(placements, key=lambda p: -p[0]):
+            tops.insert(position, figure_elem)
         document_elem.K.extend(tops)
         parent_tree_nums.append(struct_parent)
         parent_tree_nums.append(pdf.make_indirect(Array(owners)))

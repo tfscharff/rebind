@@ -54,6 +54,11 @@ class PageOrder:
         return bool(self.reason)
 
 
+def _in_any(bbox: tuple[float, float, float, float], boxes: tuple) -> bool:
+    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
+    return any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in boxes)
+
+
 def _group_blocks(placed) -> list[tuple[int, list[TextLine]]]:
     """Consecutive placed lines grouped into visual blocks, preserving reading order."""
     blocks: list[tuple[int, list[TextLine]]] = []
@@ -80,7 +85,13 @@ def page_order(page: Page, layout: PageLayout, figure_boxes: tuple = ()) -> Page
     position in the order is a judgement call), and a layout the cut itself was unsure about.
     Everything else reads top to bottom, where there is nothing to second-guess.
     """
-    grouped = _group_blocks(layout.lines)
+    # Only content is numbered. Page furniture (column -1: running heads, folios) is an artifact a
+    # screen reader never announces, and a figure's callout labels belong to the figure rather than
+    # standing alone -- showing either as its own numbered block would depict a reading order that
+    # is not the one the document actually has.
+    content = [placed for placed in layout.lines
+               if placed.column >= 0 and not _in_any(placed.line.bbox, figure_boxes)]
+    grouped = _group_blocks(content)
     blocks = tuple(
         Block(
             number=index,

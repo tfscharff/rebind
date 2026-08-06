@@ -35,6 +35,24 @@ def style_of(line: TextLine) -> Style:
     return Style(font=line.font, size=line.size, bold=line.bold, italic=line.italic)
 
 
+def _is_folio(text: str) -> bool:
+    """Whether a line is nothing but a page number.
+
+    The recurrence rule below cannot catch every folio: a chapter's opening page often carries its
+    number at the *bottom* while every later page carries it at the top, so that one instance never
+    recurs at its own edge and stays tagged as content -- a screen reader then announces a bare
+    "27" in the middle of the prose. A line in the page's edge band whose entire content is a
+    number is furniture with no ambiguity about it, whatever the rest of the document does. The
+    test is deliberately narrow: a number and nothing else, so a real one-line paragraph or a
+    footnote can never match it.
+    """
+    stripped = text.strip().strip(".-—–[]() \t")
+    if not stripped or len(stripped) > 12:
+        return False
+    return stripped.isdigit() or (
+        stripped.upper().strip("IVXLCDM") == "" and stripped.isalpha())
+
+
 def _edge_band(line: TextLine, page_height: float) -> str | None:
     """Which page edge a line sits in, if any."""
     margin = page_height * EDGE_FRACTION
@@ -64,6 +82,8 @@ class TypographicProfile:
         style = style_of(line)
         band = _edge_band(line, page_height)
         if band is not None and (style, band) in self.artifact_keys:
+            return "artifact"
+        if band is not None and _is_folio(line.text):
             return "artifact"
         if self.heading_level(style):
             return "heading"
