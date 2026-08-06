@@ -47,9 +47,9 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
   it is found by anchoring on its caption: everything drawn in the band above a "Fig. N ..."
   caption is that caption's figure. An uncaptioned drawing is left alone rather than guessed at,
   which also keeps a table's rules and a page's furniture from being mistaken for figures.
-  A figure adjacent to a "Fig. N ..." caption is described
-  automatically from that caption text — no app interaction needed — including when the caption is
-  split across a page break and its real text sits on another page. A caption that is only a bare
+  Either kind of figure is described automatically from its caption — no app interaction needed —
+  including when the caption is split across a page break and its real text sits on another page.
+  A caption that is only a bare
   label ("Fig. 8", "Fig. 8 (Continued)") is never accepted as alt text: it would tick a checker's
   box while telling a screen-reader user nothing. Otherwise images are decorative artifacts by
   default; the app shows each one so a description can be typed, which promotes it to a tagged
