@@ -47,3 +47,6 @@ desktop.ini
 
 # Local session handoff notes — kept out of the public repo
 docs/NEXT-SESSION.md
+
+# Runtime log written next to the app when it runs from the repo
+rebind.log
