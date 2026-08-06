@@ -181,6 +181,54 @@ def test_surviving_link_annotation_is_tagged_into_the_structure_tree(tmp_path: P
     assert result.compliant, result.summary()
 
 
+def test_link_annotation_with_an_unfollowable_target_is_dropped(tmp_path: Path):
+    # A publisher's auto-linker can fire on text that merely looks URL-ish and emit a target that
+    # resolves to nothing -- confirmed on a real sample, where "0.5-0.75" (a numeric range) became
+    # a link to "http:0.5-0.75". Rebind cannot repair that (there is no correct target to guess),
+    # and keeping it announces a link that goes nowhere to a screen-reader user. Drop it, exactly
+    # as an internal legacy destination is dropped. A usable link is never touched.
+    from pikepdf import Array, Dictionary, Name, String
+
+    clean = born_digital_pdf("<h1>Title</h1><p>Body text.</p>", tmp_path / "clean.pdf")
+    source = tmp_path / "in.pdf"
+    with pikepdf.open(clean) as pdf:
+        page = pdf.pages[0]
+
+        def link(y, uri):
+            return pdf.make_indirect(Dictionary(
+                Type=Name.Annot, Subtype=Name.Link, Rect=Array([0, y, 10, y + 10]),
+                A=Dictionary(S=Name.URI, URI=String(uri))))
+
+        page.obj.Annots = Array([
+            link(0, "http:0.5–0.75"),        # the real sample's defect, en dash and all
+            link(20, "http:theminplace.We"),      # ditto: a sentence boundary, auto-linked
+            link(40, "https://example.org/x"),    # a real link
+            link(60, "mailto:someone@example.org"),
+            link(80, "doi:10.1016/j.example"),    # an unfamiliar scheme is kept, not judged
+        ])
+        pdf.save(source)
+
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+
+    with pikepdf.open(out) as pdf:
+        kept = {str(a.A.URI) for a in (pdf.pages[0].obj.get("/Annots") or [])}
+    assert kept == {"https://example.org/x", "mailto:someone@example.org", "doi:10.1016/j.example"}
+
+
+def test_a_bare_figure_label_is_never_accepted_as_alt_text(tmp_path: Path):
+    # A caption that is only its own label ("Fig. 8", or the "(Continued)" page-break artifact)
+    # conveys nothing about the image -- WCAG 1.1.1. Accepting it would tick a checker's "has /Alt"
+    # box while suppressing the app's prompt, so the figure must instead be reported as still
+    # needing a description, i.e. the user gets asked.
+    from tests.fixtures import born_digital_pdf_with_captioned_image
+
+    pdf_path = born_digital_pdf_with_captioned_image(
+        tmp_path / "in.pdf", caption="Fig. 8 (Continued)")
+    result = remediate(pdf_path, tmp_path / "out.pdf", title="T")
+    assert len(result.figures) == 1, "a bare label should leave the figure needing a description"
+
+
 def test_non_ascii_text_is_tagged_without_corrupting_the_font_encoding(tmp_path: Path,
                                                                         verapdf_exe: Path):
     # The invisible overlay's font declares WinAnsiEncoding; text drawn into it must be encoded as

@@ -17,6 +17,7 @@ import io
 import re
 from dataclasses import dataclass, replace
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
@@ -79,10 +80,14 @@ FIGURE_MAX_COVERAGE = 0.6
 # gaps of ~11-14pt between an image and its "Fig. N" caption. A genuinely long caption wraps
 # across several physical lines with a much smaller line-to-line gap than that (~2-10pt observed);
 # the cap on line count is just a safety backstop against ever running into unrelated body text.
+# That cap has to be generous: the real sample's Fig. 8 caption is 15 wrapped lines, and an
+# earlier cap of 8 silently truncated its alt text mid-sentence ("...connected via silicone tubing
+# through two"), which reads worse to a screen reader than no caption at all. The continuation-gap
+# rule, not the line count, is what actually bounds a caption block.
 CAPTION_MARKER_RE = re.compile(r"^fig(?:ure)?s?\.?\s*(\d+)", re.IGNORECASE)
 CAPTION_MAX_GAP_PT = 20.0
 CAPTION_CONTINUATION_GAP_PT = 10.0
-CAPTION_MAX_LINES = 8
+CAPTION_MAX_LINES = 24
 # A caption that's just its own label ("Fig. 8", or "Fig. 8 (Continued)" -- a page-break artifact)
 # isn't usable as alt text on its own (WCAG 1.1.1: a figure's bare label never conveys its actual
 # content) and signals _document_captions should look for a fuller caption elsewhere instead.
@@ -854,12 +859,22 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # 1.1.1) falls back to document_captions, which may have found the real caption elsewhere.
         # Explicit user-supplied text (alt_texts) always wins over either -- the user may have
         # deliberately typed something better, or the caption match may be imperfect.
+        #
+        # If NOTHING substantial turns up anywhere, this returns None on purpose, so the figure
+        # lands in the app's describe list and the user is asked. A bare label ("Fig. 8", or the
+        # "Fig. 8 (Continued)" page-break artifact) must never be accepted as alt text just because
+        # it exists: it satisfies a checker's "has /Alt" box while telling a screen-reader user
+        # nothing about the image, which is the exact failure WCAG 1.1.1 is about. Silence that
+        # prompts a human beats a placeholder that suppresses the prompt.
         def caption_for(fid: str, bbox: tuple) -> str | None:
             local = _figure_caption(lines, bbox)
             if local and _caption_is_substantial(local):
                 return local
             number = (_caption_number(local) if local else None) or _nearby_caption_number(lines, bbox)
-            return (number and document_captions.get(number)) or local
+            elsewhere = document_captions.get(number) if number else None
+            if elsewhere and _caption_is_substantial(elsewhere):
+                return elsewhere
+            return None
 
         effective_alt = {fid: alt_texts.get(fid) or caption_for(fid, bbox)
                          for fid, bbox in figures}
@@ -1031,8 +1046,9 @@ def _strip_legacy_destinations(pdf: pikepdf.Pdf) -> None:
     drop the legacy kind rather than ship a document that claims PDF/UA-2 and fails it. This is real
     navigation lost, not merely a formality -- worth restoring properly, see progress notes.
 
-    External links (a URI action, or GoToR into another file) are untouched -- clause 8.8 is only
-    about destinations *within* this document.
+    A *working* external link (a URI action, or GoToR into another file) is untouched -- clause 8.8
+    is only about destinations *within* this document. A URI link whose target is unusable is
+    dropped too, for a different reason entirely; see `_is_usable_uri`.
     """
     root = pdf.Root
     if "/Outlines" in root:
@@ -1049,13 +1065,55 @@ def _strip_legacy_destinations(pdf: pikepdf.Pdf) -> None:
             continue
         keep = []
         for annot in annots:
-            is_internal_link = annot.get("/Subtype") == Name.Link and (
-                "/Dest" in annot or annot.get("/A", {}).get("/S") == Name.GoTo
+            is_link = annot.get("/Subtype") == Name.Link
+            action = annot.get("/A") or Dictionary()
+            is_internal_link = is_link and ("/Dest" in annot or action.get("/S") == Name.GoTo)
+            is_broken_link = (
+                is_link
+                and action.get("/S") == Name.URI
+                and not _is_usable_uri(str(action.get("/URI", "")))
             )
-            if not is_internal_link:
+            if not is_internal_link and not is_broken_link:
                 keep.append(annot)
         if len(keep) != len(annots):
             page.obj.Annots = Array(keep)
+
+
+# Schemes whose targets are meaningless without an authority ("//host"). A URI in one of these
+# with no host is not a link anyone can follow, whatever the producer meant by it.
+_AUTHORITY_SCHEMES = frozenset({"http", "https", "ftp", "ftps"})
+
+
+def _is_usable_uri(uri: str) -> bool:
+    """Whether a Link annotation's URI target is something a reader could actually follow.
+
+    A publisher's own auto-linker can fire on text that merely *looks* like a URL and emit a target
+    that resolves to nothing -- confirmed in a real sample (1429254.pdf), where all four URI links
+    are production defects: "http:0.5<en-dash>0.75" over a numeric range, "http:theminplace.We"
+    over a sentence boundary. Rebind cannot repair those (there is no correct target to guess), and
+    keeping them costs twice: a screen-reader user is announced a link that goes nowhere, and Adobe
+    Acrobat's "Tagged annotations" / "Other elements alternate text" checks fail on them regardless
+    of how the tagging is done. So they are dropped, exactly as legacy internal destinations are --
+    removing a thing that never worked, never inventing a plausible-looking replacement.
+
+    Deliberately permissive: anything with a scheme this can't reason about (doi:, urn:, tel:, a
+    custom handler) is kept. Only a clearly unusable target is removed.
+    """
+    uri = uri.strip()
+    if not uri or any(ch.isspace() or ord(ch) < 0x20 for ch in uri):
+        return False
+    parsed = urlsplit(uri)
+    if not parsed.scheme:
+        return False
+    if parsed.scheme.lower() in _AUTHORITY_SCHEMES:
+        # A bare host is legal DNS but never how a real document links out; requiring a dot is what
+        # separates "example.com" from the auto-linker's "0.5<en-dash>0.75" garbage... which also
+        # has dots, hence the hostname character check.
+        host = parsed.hostname or ""
+        return "." in host and all(c.isalnum() or c in "-." for c in host)
+    if parsed.scheme.lower() == "mailto":
+        return "@" in parsed.path
+    return True
 
 
 def _set_metadata(pdf: pikepdf.Pdf, *, title: str, lang: str) -> None:

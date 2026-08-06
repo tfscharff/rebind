@@ -40,13 +40,18 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
   scoped to their column, empty cells fill gaps so rows stay aligned, and the table carries its own
   `/Alt` summary (column/row count and header text — never a guess at what the table means).
 - **Figures** (`/Figure` with `/Alt`). A figure adjacent to a "Fig. N ..." caption is described
-  automatically from that caption text — no app interaction needed. Otherwise images are
-  decorative artifacts by default; the app shows each one so a description can be typed, which
-  promotes it to a tagged figure with alt text.
-- **Links** — an external link (URI) is tagged into the structure tree with an object reference
-  back to its annotation. An internal link using a legacy page/coordinate destination is removed
-  rather than left non-conformant (PDF/UA-2 requires internal destinations to be structure
-  destinations, which nothing before PDF 2.0 could produce).
+  automatically from that caption text — no app interaction needed — including when the caption is
+  split across a page break and its real text sits on another page. A caption that is only a bare
+  label ("Fig. 8", "Fig. 8 (Continued)") is never accepted as alt text: it would tick a checker's
+  box while telling a screen-reader user nothing. Otherwise images are decorative artifacts by
+  default; the app shows each one so a description can be typed, which promotes it to a tagged
+  figure with alt text.
+- **Links** — a working external link (URI) is tagged into the structure tree with an object
+  reference back to its annotation. Two kinds are removed rather than carried through: an internal
+  link using a legacy page/coordinate destination (PDF/UA-2 requires internal destinations to be
+  structure destinations, which nothing before PDF 2.0 could produce), and a link whose target is
+  unfollowable — a publisher's auto-linker firing on text that merely looks URL-ish, e.g. the
+  numeric range `0.5–0.75` turned into a link to `http:0.5–0.75`.
 - **Bookmarks** — an outline built from the recovered headings, nested by level, each entry a real
   PDF 2.0 structure destination into the heading itself.
 
