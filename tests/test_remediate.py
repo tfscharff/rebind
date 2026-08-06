@@ -216,6 +216,35 @@ def test_link_annotation_with_an_unfollowable_target_is_dropped(tmp_path: Path):
     assert kept == {"https://example.org/x", "mailto:someone@example.org", "doi:10.1016/j.example"}
 
 
+def test_a_drawn_figure_is_found_and_described_from_its_caption(tmp_path: Path):
+    # A schematic drawn with path operators leaves no /Image behind, so an image-only search misses
+    # it entirely -- on the real sample that was six of eight figures, and Acrobat agreed with the
+    # undercount because it was reading the same absence. The caption is what identifies it: the
+    # page's horizontal rule is vector geometry too and must not become a figure of its own.
+    from tests.fixtures import born_digital_pdf_with_captioned_drawing
+
+    source = born_digital_pdf_with_captioned_drawing(tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T")
+
+    assert result.figures == (), "the drawing's own caption should describe it, with no prompt"
+    alts = []
+    with pikepdf.open(out) as pdf:
+
+        def walk(elem):
+            if str(elem.get("/S")) == "/Figure":
+                alts.append(str(elem.get("/Alt")))
+            kids = elem.get("/K")
+            for kid in (kids if isinstance(kids, pikepdf.Array) else [kids]):
+                if isinstance(kid, pikepdf.Dictionary):
+                    walk(kid)
+
+        walk(pdf.Root.StructTreeRoot)
+
+    assert len(alts) == 1, f"expected exactly one figure, got {len(alts)}: {alts}"
+    assert "Preparation of resin" in alts[0]
+
+
 def test_a_bare_figure_label_is_never_accepted_as_alt_text(tmp_path: Path):
     # A caption that is only its own label ("Fig. 8", or the "(Continued)" page-break artifact)
     # conveys nothing about the image -- WCAG 1.1.1. Accepting it would tick a checker's "has /Alt"

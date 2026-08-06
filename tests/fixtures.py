@@ -235,6 +235,39 @@ def born_digital_pdf_with_image(target: Path) -> Path:
     return born_digital_pdf(html, target)
 
 
+def born_digital_pdf_with_captioned_drawing(target: Path) -> Path:
+    """A born-digital PDF whose figure is *drawn* (vector paths), not placed as an image, with a
+    caption directly below it -- the shape of six of the eight figures in a real sample
+    (1429254.pdf, gitignored), where a schematic diagram leaves no /Image behind at all.
+
+    The page also carries a horizontal rule elsewhere, which is vector geometry too: detection has
+    to tell a figure from page furniture, so the fixture contains both.
+    """
+    import base64
+
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='220' height='150' viewBox='0 0 220 150'>"
+        "<rect x='10' y='10' width='90' height='60' fill='none' stroke='black' stroke-width='2'/>"
+        "<rect x='120' y='10' width='90' height='60' fill='none' stroke='black' stroke-width='2'/>"
+        "<circle cx='55' cy='105' r='28' fill='none' stroke='black' stroke-width='2'/>"
+        "<circle cx='165' cy='105' r='28' fill='none' stroke='black' stroke-width='2'/>"
+        "<path d='M55 70 C55 85 165 85 165 70' fill='none' stroke='black' stroke-width='2'/>"
+        "<path d='M10 140 C60 120 160 160 210 140' fill='none' stroke='black' stroke-width='2'/>"
+        "<path d='M100 40 L120 40' stroke='black' stroke-width='2'/>"
+        "</svg>"
+    )
+    uri = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode("ascii")
+    html = (
+        "<h1>Report</h1><p>Body text before the figure.</p>"
+        "<hr>"
+        f"<img src='{uri}' width='220' height='150'>"
+        "<p style='font-size:8pt'>Fig. 4 Preparation of resin for injection. Commercial resin is "
+        "supplied as two parts which are mixed and extracted as described in the text.</p>"
+        "<p>Body text continues after the caption.</p>"
+    )
+    return born_digital_pdf(html, target)
+
+
 def born_digital_pdf_with_captioned_image(target: Path, *, caption: str | None = None) -> Path:
     """A born-digital PDF with an embedded raster image immediately followed by a caption
     paragraph -- the real shape (image, then "Fig. N ..." directly below it) confirmed against a

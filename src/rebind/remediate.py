@@ -93,6 +93,16 @@ CAPTION_MAX_LINES = 24
 # content) and signals _document_captions should look for a fuller caption elsewhere instead.
 MIN_CAPTION_WORDS = 3
 
+# Vector (line-art) figure recovery -- see `_vector_figures`. A drawing sits a little further from
+# its caption than a raster image does (the caption marker's own top edge vs the drawing's lowest
+# ink): 11-23pt observed on the real sample, hence a wider tolerance than CAPTION_MAX_GAP_PT. The
+# path-count floor is what keeps a lone rule above a caption from being promoted to a figure --
+# observed exactly that, a 1-path horizontal rule directly above a "Fig. 8" continuation caption.
+VECTOR_CAPTION_MAX_GAP_PT = 30.0
+MIN_VECTOR_PATHS = 6
+RULE_MAX_THICKNESS_PT = 3.0
+RULE_MIN_LENGTH_RATIO = 0.5
+
 # OCR heading recovery. A single OCR line's box height is noisy (a body line can crop tall), so no
 # one signal is trusted: a heading must be markedly taller than the page's body text AND set apart
 # by whitespace AND not fill the column -- the combination an inflated body line, which still sits
@@ -158,6 +168,88 @@ def _page_figures(src_page) -> list[tuple[str, tuple[float, float, float, float]
         if FIGURE_MIN_COVERAGE <= coverage <= FIGURE_MAX_COVERAGE:
             figures.append((f"p{src_page.number}f{index}", image.bbox))
     return figures
+
+
+def _is_rule(bbox: tuple[float, float, float, float], page_width: float) -> bool:
+    """A long, hairline-thin path: a horizontal rule, a table border, an underline. Page furniture,
+    never a figure, and it must not stretch a real figure's box to the full column width."""
+    width, height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    return (min(width, height) <= RULE_MAX_THICKNESS_PT
+            and max(width, height) >= page_width * RULE_MIN_LENGTH_RATIO)
+
+
+def _vector_figures(src_page, lines: list[TextLine],
+                    taken: list[tuple]) -> list[tuple[str, tuple, str]]:
+    """Line-art figures -- schematics, charts, labelled diagrams -- drawn with path operators
+    rather than placed as an image, found by anchoring on their captions.
+
+    A raster image is self-evidently a figure: something is there, and no text describes it. Vector
+    paths are not, because *everything* is vector paths -- a table's rules, a header underline, a
+    footer barcode and a hand-drawn apparatus diagram are indistinguishable as geometry. Clustering
+    them bottom-up does not resolve this either: on the real sample it splits a single captioned
+    figure into its lettered panels (Fig. 5 becomes eight separate blobs) while happily promoting a
+    page's decorative rules into a ninth.
+
+    So detection runs the other way round, from a signal the author left behind: a "Fig. N ..."
+    caption. Everything drawn in the band above a caption -- bounded above by the previous caption
+    on the page, so two figures stacked on one page stay separate -- is that caption's figure. This
+    cannot invent a figure where the author named none (invariant 1: when in doubt, nothing), and
+    it hands back the caption as the figure's alt text for free. The cost is the honest one: an
+    uncaptioned chart is still missed, and stays a decorative artifact rather than a wrong guess.
+
+    Each result is (stable id, bbox, the anchoring caption's text). The caption travels with the
+    figure rather than being rediscovered by proximity later: this function already knows exactly
+    which caption it matched, and a drawing sits further from its caption than a raster image does,
+    so re-deriving it downstream loses figures that were found perfectly well here.
+    """
+    page_area = src_page.width * src_page.height
+    if page_area <= 0 or not src_page.drawings:
+        return []
+    paths = [d.bbox for d in src_page.drawings if not _is_rule(d.bbox, src_page.width)]
+    if not paths:
+        return []
+
+    # Caption marker lines, top of page downwards. Each one closes off the band below the previous.
+    markers = sorted((ln for ln in lines if _caption_number(ln.text)),
+                     key=lambda ln: -ln.bbox[3])
+    figures: list[tuple[str, tuple, str]] = []
+    band_top = src_page.height
+    for index, marker in enumerate(markers):
+        band_bottom = marker.bbox[3]
+        inside = [p for p in paths if p[1] >= band_bottom and p[3] <= band_top]
+        band_top = _caption_block_bottom(lines, marker)
+        caption = _caption_block(sorted((ln for ln in lines if ln.bbox[3] <= marker.bbox[3]),
+                                        key=lambda ln: -ln.bbox[3])) or ""
+        if len(inside) < MIN_VECTOR_PATHS:
+            continue
+        bbox = (min(p[0] for p in inside), min(p[1] for p in inside),
+                max(p[2] for p in inside), max(p[3] for p in inside))
+        if bbox[1] - band_bottom > VECTOR_CAPTION_MAX_GAP_PT:
+            continue    # drawn far above the caption: unrelated page furniture, not its figure
+        coverage = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) / page_area
+        if not (FIGURE_MIN_COVERAGE <= coverage <= FIGURE_MAX_COVERAGE):
+            continue
+        if any(_overlaps(bbox, other) for _fid, other in taken):
+            continue    # already found as a raster image; never describe the same region twice
+        figures.append((f"p{src_page.number}v{index}", bbox, caption))
+    return figures
+
+
+def _caption_block_bottom(lines: list[TextLine], marker: TextLine) -> float:
+    """The y of the bottom of a caption's full wrapped block -- the ceiling for the next figure
+    down the page, which must not reach up into the caption above it."""
+    ordered = sorted((ln for ln in lines if ln.bbox[3] <= marker.bbox[3]),
+                     key=lambda ln: -ln.bbox[3])
+    bottom = marker.bbox[1]
+    for prev, nxt in zip(ordered, ordered[1:]):
+        if prev.bbox[1] - nxt.bbox[3] > CAPTION_CONTINUATION_GAP_PT:
+            break
+        bottom = nxt.bbox[1]
+    return bottom
+
+
+def _overlaps(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
 
 
 def _horizontally_overlaps(a: tuple[float, float, float, float],
@@ -852,6 +944,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         zip(pdf.pages, per_page, roles)
     ):
         figures = _page_figures(src_page)
+        vector = _vector_figures(src_page, list(lines), figures)
+        figures += [(fid, bbox) for fid, bbox, _caption in vector]
+        anchored = {fid: caption for fid, _bbox, caption in vector}
         # A figure sitting directly under (or, less commonly, above) a "Fig. N ..." caption needs
         # no manual description at all: the author's own words are more accurate than anything
         # Rebind could invent, and this skips the app's describe step entirely. A thin local match
@@ -867,7 +962,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # nothing about the image, which is the exact failure WCAG 1.1.1 is about. Silence that
         # prompts a human beats a placeholder that suppresses the prompt.
         def caption_for(fid: str, bbox: tuple) -> str | None:
-            local = _figure_caption(lines, bbox)
+            local = anchored.get(fid) or _figure_caption(lines, bbox)
             if local and _caption_is_substantial(local):
                 return local
             number = (_caption_number(local) if local else None) or _nearby_caption_number(lines, bbox)

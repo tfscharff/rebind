@@ -39,7 +39,12 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
 - **Tables** (`/Table` → `/TR` → `/TD`) as a regular grid; the top row is header cells (`/TH`)
   scoped to their column, empty cells fill gaps so rows stay aligned, and the table carries its own
   `/Alt` summary (column/row count and header text — never a guess at what the table means).
-- **Figures** (`/Figure` with `/Alt`). A figure adjacent to a "Fig. N ..." caption is described
+- **Figures** (`/Figure` with `/Alt`), whether placed as an image or *drawn* with path operators.
+  A line-art figure — a schematic, a chart, a labelled diagram — leaves no image behind at all, so
+  it is found by anchoring on its caption: everything drawn in the band above a "Fig. N ..."
+  caption is that caption's figure. An uncaptioned drawing is left alone rather than guessed at,
+  which also keeps a table's rules and a page's furniture from being mistaken for figures.
+  A figure adjacent to a "Fig. N ..." caption is described
   automatically from that caption text — no app interaction needed — including when the caption is
   split across a page break and its real text sits on another page. A caption that is only a bare
   label ("Fig. 8", "Fig. 8 (Continued)") is never accepted as alt text: it would tick a checker's
@@ -85,8 +90,8 @@ Implemented: on-device OCR with deskew/denoise restoration, multi-column reading
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,
 links, bookmarks).
 
-Not implemented: full page dewarp for spine-curved scans, vector-diagram figure detection (only
-raster images are currently recognized as figures), and mathematics/chemistry/music recognition.
+Not implemented: full page dewarp for spine-curved scans, detection of an *uncaptioned* drawn
+figure, and mathematics/chemistry/music recognition.
 Output is not byte-reproducible (see ADR 0003).
 
 ## Runtime

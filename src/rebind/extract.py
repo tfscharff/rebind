@@ -16,7 +16,15 @@ from pathlib import Path
 
 import pikepdf
 from pdfminer.high_level import extract_pages as _pdfminer_pages
-from pdfminer.layout import LAParams, LTChar, LTFigure, LTImage, LTTextContainer, LTTextLine
+from pdfminer.layout import (
+    LAParams,
+    LTChar,
+    LTCurve,
+    LTFigure,
+    LTImage,
+    LTTextContainer,
+    LTTextLine,
+)
 from pdfminer.pdfdocument import PDFEncryptionError
 from pdfminer.pdfparser import PDFSyntaxError
 
@@ -57,6 +65,13 @@ class Page:
     height: float
     lines: tuple[TextLine, ...]
     images: tuple[ImageRegion, ...]
+    # Bounding boxes of the page's vector path primitives (strokes, curves, filled shapes), in page
+    # coordinates. Not figures on their own -- a table rule, an underline and a hand-drawn diagram
+    # are all "vector paths" here, and telling them apart is `remediate`'s job. Recorded because a
+    # line-art figure (a schematic, a chart, a labelled diagram) leaves no /Image behind at all:
+    # confirmed on a real sample where six of eight figures are drawn purely with curve operators,
+    # so an image-only search finds two figures and silently misses the rest.
+    drawings: tuple[ImageRegion, ...] = ()
 
     @property
     def has_text_layer(self) -> bool:
@@ -120,7 +135,8 @@ def _line_from_container(container, page_number: int) -> TextLine | None:
 
 
 def _collect_figure(
-    figure: LTFigure, page_number: int, lines: list[TextLine], images: list[ImageRegion]
+    figure: LTFigure, page_number: int, lines: list[TextLine], images: list[ImageRegion],
+    drawings: list[ImageRegion],
 ) -> tuple[bool, bool]:
     """Recurse into a Form XObject, contributing its text lines and embedded images separately.
 
@@ -157,9 +173,14 @@ def _collect_figure(
             )
             found_image = True
         elif isinstance(child, LTFigure):
-            nested_text, nested_image = _collect_figure(child, page_number, lines, images)
+            nested_text, nested_image = _collect_figure(
+                child, page_number, lines, images, drawings)
             found_text = found_text or nested_text
             found_image = found_image or nested_image
+        elif isinstance(child, LTCurve):
+            drawings.append(
+                ImageRegion(page=page_number, bbox=(child.x0, child.y0, child.x1, child.y1))
+            )
     if not found_text and not found_image:
         images.append(
             ImageRegion(page=page_number, bbox=(figure.x0, figure.y0, figure.x1, figure.y1))
@@ -183,6 +204,7 @@ def extract_pages(source: Path) -> Iterator[Page]:
         for index, layout in enumerate(layouts, start=1):
             lines: list[TextLine] = []
             images: list[ImageRegion] = []
+            drawings: list[ImageRegion] = []
             for element in layout:
                 if isinstance(element, LTTextContainer):
                     for container in _text_lines(element):
@@ -190,9 +212,19 @@ def extract_pages(source: Path) -> Iterator[Page]:
                         if line is not None:
                             lines.append(line)
                 elif isinstance(element, LTFigure):
-                    _collect_figure(element, index, lines, images)
+                    _collect_figure(element, index, lines, images, drawings)
                 elif isinstance(element, LTImage):
                     images.append(
+                        ImageRegion(
+                            page=index,
+                            bbox=(element.x0, element.y0, element.x1, element.y1),
+                        )
+                    )
+                elif isinstance(element, LTCurve):
+                    # LTCurve covers every painted path: LTLine and LTRect are subclasses, so one
+                    # branch catches rules, boxes, strokes and Beziers alike. Recorded raw; see
+                    # Page.drawings on why no filtering happens here.
+                    drawings.append(
                         ImageRegion(
                             page=index,
                             bbox=(element.x0, element.y0, element.x1, element.y1),
@@ -204,6 +236,7 @@ def extract_pages(source: Path) -> Iterator[Page]:
                 height=layout.height,
                 lines=tuple(lines),
                 images=tuple(images),
+                drawings=tuple(drawings),
             )
     except PDFSyntaxError as exc:
         raise ExtractionError(f"{source} is not a readable PDF: {exc}") from exc
