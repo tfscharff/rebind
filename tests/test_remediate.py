@@ -308,6 +308,60 @@ def _structure_sequence(pdf_path: Path) -> list[tuple[str, str]]:
     return out
 
 
+def test_edited_tags_and_removals_still_produce_a_conformant_document(tmp_path: Path,
+                                                                      verapdf_exe: Path):
+    # A removed element's content must become an artifact, not merely lose its tag: content that
+    # names a structure element the tree cannot resolve reads as untagged content and fails
+    # clause 8.2.2. Caught exactly that way -- the self-check passed, veraPDF did not.
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf
+
+    source = born_digital_pdf(
+        "<h1>Title</h1><p>First paragraph.</p><p>Second paragraph.</p>"
+        "<p>Third paragraph.</p><p>Fourth paragraph.</p>", tmp_path / "in.pdf")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    paragraphs = [e["id"] for e in plain.elements if e["kind"] == "P"]
+    assert len(paragraphs) >= 3, plain.elements
+
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T", edits=Edits(
+        tags={paragraphs[0]: "H2"}, removed={paragraphs[1]}))
+
+    kinds = {e["id"]: e["kind"] for e in result.elements}
+    assert kinds[paragraphs[0]] == "H2"
+    assert kinds[paragraphs[1]] == "Artifact", "a removed element must not be read"
+    assert validate_pdf_ua(out, verapdf_exe=verapdf_exe).compliant
+
+    # ...and the same element can be given a tag again, which is how it comes back.
+    restored = remediate(source, tmp_path / "back.pdf", title="T",
+                         edits=Edits(tags={paragraphs[1]: "P"}))
+    assert {e["id"]: e["kind"] for e in restored.elements}[paragraphs[1]] == "P"
+
+
+def test_every_offered_tag_is_legal_directly_under_the_document(tmp_path: Path,
+                                                                verapdf_exe: Path):
+    # ISO 32005 Table 5 restricts what a Document element may contain, and veraPDF enforces it:
+    # offering /Caption or /Quote here produced "<Document> shall not contain <Caption>". Every
+    # type the editor offers has to survive being applied.
+    from rebind.remediate import EDITABLE_TAGS, Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf
+
+    body = "".join(f"<p>Paragraph number {i} of the document.</p>"
+                   for i in range(1, len(EDITABLE_TAGS) + 2))
+    source = born_digital_pdf("<h1>Title</h1>" + body, tmp_path / "in.pdf")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    paragraphs = [e["id"] for e in plain.elements if e["kind"] == "P"]
+    assert len(paragraphs) >= len(EDITABLE_TAGS), plain.elements
+
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T",
+              edits=Edits(tags=dict(zip(paragraphs, EDITABLE_TAGS))))
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
+
+
 def test_a_running_footer_is_an_artifact_not_content(tmp_path: Path):
     # PDF/UA requires page furniture to be marked as an artifact. Tagged as content, a screen
     # reader announces the running head and folio in the middle of the prose on every page.

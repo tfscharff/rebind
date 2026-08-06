@@ -94,7 +94,26 @@ pass, but it hands you the evidence instead of leaving you to gather it page by 
 result. Images that need a description are listed so you can type one in the app. The result view
 shows a structure badge: a fast, dependency-free check of what remediation is expected to have
 built (not independent conformance validation — that's veraPDF, dev/CI-only; see ADR 0006). Nothing
-is uploaded.
+is uploaded. Closing the tab quits Rebind — the page sends a heartbeat, and the server exits when
+it stops.
+
+### The page editor
+
+Beside the report is an editor showing every element Rebind tagged, laid over a picture of the
+page and listed in the order a screen reader will read them. Tabbing through the list walks the
+document; the matching region lights up on the page. For any element you can:
+
+- **change what it is** — a paragraph that should be a heading, a heading at the wrong level;
+- **remove it** from the reading order, which marks its content as an artifact rather than
+  untagging it (untagged content is a conformance failure, not a fix);
+- **add one back** — page furniture and text inside figures are listed greyed out as "not read";
+  giving one a type puts it into the reading order. This is the same control as removal, so
+  nothing is ever one-way;
+- **describe a picture in place** — a figure's alt text is editable right where you see it.
+
+Applying rebuilds the document from the corrected plan, rather than patching the structure tree
+afterwards, so grouping decisions change too. Only element types that are legal as direct children
+of the document are offered — ISO 32005 Table 5 is strict, and veraPDF enforces it.
 
 **Command line.**
 

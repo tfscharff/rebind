@@ -75,7 +75,10 @@ _PAGE = r"""<!doctype html>
 html{color-scheme:light dark}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
   line-height:1.55;-webkit-font-smoothing:antialiased}
-.wrap{max-width:var(--maxw);margin:0 auto;padding:0 1.25rem}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 1.25rem;transition:max-width .2s}
+/* The result view carries the page editor beside the report, so it needs more room than the
+   reading measure the upload page is set to. */
+body.wide .wrap{max-width:82rem}
 header.site{border-bottom:1px solid var(--line);padding:1.4rem 0}
 .brand{display:flex;align-items:baseline;gap:.7rem}
 .brand h1{font-family:var(--serif);font-weight:600;font-size:1.7rem;margin:0;letter-spacing:-.01em}
@@ -169,6 +172,45 @@ li.cond.attention{border-left-color:var(--attention)}
 .ratios .more{color:var(--muted);font-style:italic}
 .fixrow{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;margin-top:.9rem}
 .fixrow .caveat{font-size:.82rem;color:var(--muted);flex:1;min-width:16rem}
+/* Two columns: the report on the left, the page editor on the right where it has room to be big
+   and can stay in view while the left column is read. Collapses to one column when narrow. */
+.workspace{display:grid;grid-template-columns:minmax(0,1fr) minmax(24rem,44%);gap:1.3rem;
+  align-items:start}
+@media (max-width:64rem){ .workspace{grid-template-columns:minmax(0,1fr)} }
+.col-side{position:sticky;top:1rem}
+.editor h2{font-family:var(--serif);font-size:1.2rem;margin:0}
+.edhead{display:flex;gap:1rem;align-items:baseline;justify-content:space-between;flex-wrap:wrap}
+.pager{display:flex;gap:.4rem;align-items:center}
+.pager .pageno{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+.btn.small{padding:.2rem .55rem;font-size:.85rem}
+.btn.ghost{background:transparent;color:var(--cloth);border:1px solid var(--line)}
+.sheet.big{width:100%;margin:.6rem 0 .9rem}
+.sheet.big img{width:100%}
+.ob.fig{border-style:dashed}
+.ob.gone{border-color:var(--muted);background:repeating-linear-gradient(45deg,
+  color-mix(in srgb,var(--muted) 18%,transparent) 0 4px,transparent 4px 8px)}
+.ob.gone i{background:var(--muted)}
+.ob.on{border-width:3px;box-shadow:0 0 0 3px color-mix(in srgb,var(--stamp) 35%,transparent)}
+/* The element list IS the reading order, so its DOM order is the tab order -- no tabindex games. */
+.ellist{list-style:none;margin:0;padding:0;max-height:26rem;overflow-y:auto}
+.elrow{display:flex;gap:.6rem;align-items:flex-start;padding:.5rem 0;
+  border-top:1px solid var(--line)}
+.elrow:first-child{border-top:none}
+.elrow.gone{opacity:.55}
+.elrow .num{font-family:var(--mono);font-size:.72rem;color:#fff;background:var(--stamp);
+  border-radius:2px;padding:.1rem .3rem;flex:none;margin-top:.2rem}
+.elrow.gone .num{background:var(--muted)}
+.elbody{flex:1;min-width:0}
+.elbody select{font:inherit;font-size:.85rem;padding:.15rem .3rem;border:1px solid var(--line);
+  border-radius:4px;background:var(--panel);color:var(--ink)}
+.eltext{margin:.25rem 0 0;font-size:.86rem;color:var(--muted);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.altlab{display:block;font-size:.8rem;font-weight:600;margin-top:.3rem}
+.altlab textarea{width:100%;margin-top:.2rem;font:inherit;font-size:.86rem;padding:.35rem .45rem;
+  border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--ink);
+  resize:vertical}
+.elrow .tagme{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:none;margin-top:.3rem}
+.editor :focus-visible{outline:3px solid var(--stamp);outline-offset:2px}
 .error{border-left:4px solid var(--attention)}
 .error .detail{color:var(--ink)}
 .visually-hidden{position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden}
@@ -292,9 +334,14 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
     h+=renderReadingOrder(s.reading_order);
     h+=renderContrast(s.contrast);
     h+='<a class="reset" href="/">Do another document</a>';
-    work.innerHTML=h;
+    // Two columns: everything above on the left, the page editor on the right where it can be
+    // tall and stay put while the left column is read.
+    document.body.classList.add('wide');
+    work.innerHTML='<div class="workspace"><div class="col-main">'+h+'</div>'+
+      '<div class="col-side" id="editor"></div></div>';
     if(figures.length){ wireFigures(id, name); }
     wireContrast(id, name);
+    loadEditor(id, name);
     say(figures.length? ('Done. '+figures.length+' image'+(figures.length>1?'s':'')+' can be described for a screen reader.') : 'Done. Your accessible PDF is ready to download.');
     work.setAttribute('tabindex','-1');
     work.focus();
@@ -400,6 +447,171 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
           if(j.error){ showError(j.error); return; }
           watch(id, name, Date.now());
         }).catch(function(){ showError('Could not adjust the contrast.'); });
+    });
+  }
+
+  // ---- Page editor -------------------------------------------------------------------------
+  // What Rebind decided, laid over a picture of the page, with every decision changeable. The
+  // list is the reading order, so tabbing through it is tabbing through the document as a screen
+  // reader will meet it.
+  var ed={id:null,name:null,elements:[],pages:{},tags:[],page:1,pageList:[],
+          tags_edit:{},removed:{},alts:{}};
+
+  function loadEditor(id, name){
+    ed.id=id; ed.name=name;
+    var host=document.getElementById('editor');
+    if(!host) return;
+    host.innerHTML='<section class="panel editor"><h2>Page elements</h2>'+
+      '<p class="sub">Loading the page…</p></section>';
+    fetch('/jobs/'+id+'/elements').then(function(r){return r.json();}).then(function(d){
+      if(d.error){ host.innerHTML=''; return; }
+      ed.elements=d.elements||[]; ed.pages=d.pages||{}; ed.tags=d.tags||[];
+      ed.tags_edit=(d.edits&&d.edits.tags)||{};
+      ed.removed={}; ((d.edits&&d.edits.removed)||[]).forEach(function(k){ ed.removed[k]=true; });
+      ed.alts=(d.edits&&d.edits.alts)||{};
+      ed.pageList=Object.keys(ed.pages).map(Number).sort(function(a,b){return a-b;});
+      if(ed.pageList.indexOf(ed.page)<0) ed.page=ed.pageList[0]||1;
+      drawEditor();
+    }).catch(function(){ host.innerHTML=''; });
+  }
+
+  function elementsOnPage(){
+    return ed.elements.filter(function(e){ return e.page===ed.page; });
+  }
+
+  function kindOf(e){ return ed.tags_edit[e.id]||e.kind; }
+
+  function drawEditor(){
+    var host=document.getElementById('editor');
+    if(!host) return;
+    var items=elementsOnPage();
+    var pos=ed.pageList.indexOf(ed.page);
+    var dirty=Object.keys(ed.tags_edit).length||Object.keys(ed.removed).length||
+              Object.keys(ed.alts).length;
+    var h='<section class="panel editor" aria-labelledby="ed-h">'+
+      '<div class="edhead"><h2 id="ed-h">Page elements</h2>'+
+      '<div class="pager">'+
+      '<button type="button" class="btn small" id="edprev"'+(pos<=0?' disabled':'')+'>‹</button>'+
+      '<span class="pageno">Page '+ed.page+' of '+(ed.pageList.length||1)+'</span>'+
+      '<button type="button" class="btn small" id="ednext"'+
+        (pos>=ed.pageList.length-1?' disabled':'')+'>›</button>'+
+      '</div></div>'+
+      '<p class="sub">The numbered items are what a screen reader reads, in order. Change what '+
+      'any of them is, remove one that should not be read, or describe a picture. Greyed rows '+
+      'are page furniture Rebind left out — give one a type to have it read after all.</p>';
+
+    h+='<div class="sheet big">'+
+       (ed.pages[ed.page]? '<img src="'+ed.pages[ed.page]+'" alt="Page '+ed.page+'">':'')+
+       items.map(function(e,i){
+         var k=kindOf(e);
+         var cls='ob'+(ed.removed[e.id]||k==='Artifact'?' gone':'')+(k==='Figure'?' fig':'');
+         return '<span class="'+cls+'" data-box="'+esc(e.id)+'" style="left:'+e.left+'%;top:'+
+           e.top+'%;width:'+e.width+'%;height:'+e.height+'%"><i>'+(i+1)+'</i></span>';
+       }).join('')+
+       '</div>';
+
+    if(!items.length){
+      h+='<p class="sub">Nothing is tagged on this page.</p>';
+    }
+    h+='<ol class="ellist">';
+    items.forEach(function(e,i){
+      var kind=kindOf(e);
+      var untagged=(kind==='Artifact');
+      var gone=!!ed.removed[e.id]||untagged;
+      h+='<li class="elrow'+(gone?' gone':'')+'" data-row="'+esc(e.id)+'">'+
+        '<span class="num">'+(untagged?'—':(i+1))+'</span>'+
+        '<div class="elbody">'+
+        '<label class="visually-hidden" for="k-'+esc(e.id)+'">Element type for item '+(i+1)+'</label>'+
+        '<select id="k-'+esc(e.id)+'" class="kind" data-id="'+esc(e.id)+'"'+
+          (kind==='Figure'?' disabled':'')+'>'+
+          (kind==='Figure'? '<option>Figure</option>'
+            : (untagged?['Artifact']:[]).concat(kind==='L'?['L']:[])
+                .concat(kind==='Table'?['Table']:[]).concat(ed.tags)
+                .map(function(t){
+                  return '<option value="'+t+'"'+(t===kind?' selected':'')+'>'+tagLabel(t)+
+                    '</option>';
+                }).join(''))+
+        '</select>'+
+        (kind==='Figure'
+          ? '<label class="altlab">Description<textarea class="alt" data-id="'+esc(e.id)+
+            '" rows="2" placeholder="What does this picture show?">'+
+            esc(ed.alts[e.id]!==undefined?ed.alts[e.id]:(e.alt||''))+'</textarea></label>'
+          : '<p class="eltext">'+esc(e.text||'(no text)')+'</p>')+
+        '</div>'+
+        (untagged? '<span class="tagme">not read</span>'
+                 : '<button type="button" class="btn small ghost" data-del="'+esc(e.id)+'">'+
+                   (ed.removed[e.id]?'Restore':'Remove')+'</button>')+
+        '</li>';
+    });
+    h+='</ol>'+
+      '<div class="fixrow"><button type="button" class="btn primary" id="edapply"'+
+      (dirty?'':' disabled')+'>Apply changes</button>'+
+      '<span class="caveat">'+(dirty? 'The document is rebuilt with your changes.'
+                                    : 'Make a change to enable this.')+'</span></div>'+
+      '</section>';
+    host.innerHTML=h;
+    wireEditor();
+  }
+
+  function tagLabel(t){
+    var names={H1:'Heading 1',H2:'Heading 2',H3:'Heading 3',H4:'Heading 4',H5:'Heading 5',
+               H6:'Heading 6',P:'Paragraph',L:'List',Table:'Table',Figure:'Figure',
+               Artifact:'Not read (page furniture)'};
+    return names[t]||t;
+  }
+
+  function wireEditor(){
+    var host=document.getElementById('editor');
+    if(!host) return;
+    var prev=document.getElementById('edprev'), next=document.getElementById('ednext');
+    if(prev) prev.addEventListener('click',function(){
+      ed.page=ed.pageList[Math.max(0,ed.pageList.indexOf(ed.page)-1)]; drawEditor(); });
+    if(next) next.addEventListener('click',function(){
+      ed.page=ed.pageList[Math.min(ed.pageList.length-1,ed.pageList.indexOf(ed.page)+1)];
+      drawEditor(); });
+
+    host.querySelectorAll('select.kind').forEach(function(sel){
+      sel.addEventListener('change',function(){
+        var key=sel.getAttribute('data-id');
+        // Choosing "not read" again is how an added element is taken back out.
+        if(sel.value==='Artifact') delete ed.tags_edit[key]; else ed.tags_edit[key]=sel.value;
+        drawEditor();
+        var again=document.getElementById('k-'+sel.getAttribute('data-id'));
+        if(again) again.focus();
+      });
+    });
+    host.querySelectorAll('textarea.alt').forEach(function(t){
+      t.addEventListener('input',function(){
+        ed.alts[t.getAttribute('data-id')]=t.value;
+        var apply=document.getElementById('edapply'); if(apply) apply.disabled=false;
+      });
+    });
+    host.querySelectorAll('[data-del]').forEach(function(b){
+      b.addEventListener('click',function(){
+        var key=b.getAttribute('data-del');
+        if(ed.removed[key]) delete ed.removed[key]; else ed.removed[key]=true;
+        drawEditor();
+      });
+    });
+    // Focusing a row lights up its box on the page, so tabbing through the list walks the page.
+    host.querySelectorAll('.elrow').forEach(function(row){
+      row.addEventListener('focusin',function(){
+        host.querySelectorAll('.ob').forEach(function(b){ b.classList.remove('on'); });
+        var box=host.querySelector('[data-box="'+row.getAttribute('data-row')+'"]');
+        if(box) box.classList.add('on');
+      });
+    });
+
+    var apply=document.getElementById('edapply');
+    if(apply) apply.addEventListener('click',function(){
+      var removed=Object.keys(ed.removed).filter(function(k){ return ed.removed[k]; });
+      renderWorking(ed.name, Date.now()); say('Applying your changes…');
+      fetch('/jobs/'+ed.id+'/edits',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({tags:ed.tags_edit, removed:removed, alts:ed.alts})})
+        .then(function(r){return r.json();}).then(function(j){
+          if(j.error){ showError(j.error); return; }
+          watch(ed.id, ed.name, Date.now());
+        }).catch(function(){ showError('Could not apply your changes.'); });
     });
   }
 

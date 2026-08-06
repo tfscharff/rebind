@@ -27,6 +27,50 @@ def test_ocr_smoke_endpoint_recognizes_text():
     assert "REBIND" in (body["recovered"] or "").upper()
 
 
+def _run(client, job_id):
+    for _ in range(200):
+        status = client.get(f"/jobs/{job_id}").json()
+        if status["status"] in ("done", "error"):
+            return status
+        time.sleep(0.5)
+    raise AssertionError("job never finished")
+
+
+def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
+    # The editor's whole job: show what Rebind decided, and let a person change it. An element id
+    # is keyed to the source line it starts at, so a correction still refers to the same element
+    # after an earlier one has been retagged or removed.
+    source = born_digital_pdf(
+        "<h1>Title</h1><p>First paragraph of the document.</p>"
+        "<p>Second paragraph here.</p><p>Third one.</p>", tmp_path / "in.pdf")
+    client = TestClient(create_app())
+    job_id = client.post("/convert?filename=in.pdf", content=source.read_bytes()).json()["job_id"]
+    assert _run(client, job_id)["status"] == "done"
+
+    body = client.get(f"/jobs/{job_id}/elements").json()
+    kinds = [(e["id"], e["kind"], e["text"]) for e in body["elements"]]
+    assert [k for _i, k, _t in kinds] == ["H1", "P", "P", "P"], kinds
+    assert body["pages"]["1"].startswith("data:image/png;base64,"), "the page picture is missing"
+    assert "H2" in body["tags"] and "Table" not in body["tags"], (
+        "only element types Rebind can actually build should be offered")
+    for element in body["elements"]:
+        assert 0 <= element["left"] <= 100 and 0 <= element["top"] <= 100, element
+
+    ids = [i for i, _k, _t in kinds]
+    client.post(f"/jobs/{job_id}/edits", json={"tags": {ids[2]: "H2"}, "removed": [ids[3]]})
+    status = _run(client, job_id)
+    assert status["status"] == "done", status.get("error")
+    assert status["structure_ok"] is True, status["structure_issues"]
+
+    after = {e["id"]: e["kind"] for e in client.get(f"/jobs/{job_id}/elements").json()["elements"]}
+    assert after[ids[0]] == "H1"
+    assert after[ids[1]] == "P"
+    assert after[ids[2]] == "H2", "the retag should have been applied"
+    # A removed element is not read, but it is still offered -- listed as untagged, so the same
+    # control that removed it can put it back.
+    assert after[ids[3]] == "Artifact"
+
+
 def test_the_idle_watchdog_is_off_unless_asked_for():
     # A developer's `rebind serve`, and every test, must never be killed by a heartbeat nobody is
     # sending. Only the installed app (which opens a browser tab) turns this on.

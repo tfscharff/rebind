@@ -52,6 +52,9 @@ class _Job:
     alt_texts: dict = field(default_factory=dict)  # descriptions the user has supplied so far
     # Set only when the user explicitly asks: the one option that changes the document's look.
     darken_contrast: bool = False
+    elements: list = field(default_factory=list)     # every tagged element, for the page editor
+    page_images: dict = field(default_factory=dict)  # page number -> data URI of the page
+    edits: dict = field(default_factory=dict)        # the user's corrections, kept across re-runs
     structure_ok: bool = True
     structure_issues: tuple = ()
     error: str | None = None
@@ -83,14 +86,15 @@ def _run_conversion(job: _Job, source: Path) -> None:
     # script, a relative import has no parent package and raises ImportError (see /render-smoke,
     # which uses the same absolute form for the same reason).
     from rebind.extract import ExtractionError
-    from rebind.remediate import remediate
+    from rebind.remediate import Edits, remediate
     from rebind.ui import build_review
 
     try:
         job.stage = "Making it accessible (scanned pages are read page by page)..."
         stem = Path(job.filename).stem
         result = remediate(source, job.workdir / (stem + ".accessible.pdf"), title=stem,
-                           alt_texts=job.alt_texts, darken_contrast=job.darken_contrast)
+                           alt_texts=job.alt_texts, darken_contrast=job.darken_contrast,
+                           edits=Edits.from_payload(job.edits))
         job.pdf_path = result.pdf_path
         job.figures = list(result.figures)
         job.structure_ok = result.structure_ok
@@ -101,6 +105,8 @@ def _run_conversion(job: _Job, source: Path) -> None:
         )
         job.reading_order = result.reading_order
         job.contrast = result.contrast
+        job.elements = list(result.elements)
+        job.page_images = result.page_images
         job.status = "done"
     except ExtractionError as exc:
         job.status = "error"
@@ -183,6 +189,43 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         job.alt_texts.update(alts)
         job.status = "running"
         job.stage = "Applying your descriptions..."
+        job.started = time.monotonic()
+        threading.Thread(target=_run_conversion, args=(job, job.source_path), daemon=True).start()
+        return JSONResponse({"job_id": job.id})
+
+    async def job_elements(request: Request) -> JSONResponse:
+        """Every tagged element with its page picture -- what the page editor draws and edits.
+
+        Kept off the job-status payload deliberately: the page images make this large, and the
+        status endpoint is polled every second while a conversion runs.
+        """
+        job = jobs.get(request.path_params["job_id"])
+        if job is None:
+            return JSONResponse({"error": "No such job."}, status_code=404)
+        from rebind.remediate import EDITABLE_TAGS
+
+        return JSONResponse({
+            "elements": job.elements, "pages": job.page_images,
+            "tags": list(EDITABLE_TAGS), "edits": job.edits,
+        })
+
+    async def job_edits(request: Request) -> JSONResponse:
+        """Accept the user's corrections and rebuild the document with them applied.
+
+        Edits replace rather than merge, so the editor's state is the whole truth: un-deleting an
+        element or reverting a tag is just sending the corrected set again.
+        """
+        job = jobs.get(request.path_params["job_id"])
+        if job is None or job.source_path is None:
+            return JSONResponse({"error": "No such job."}, status_code=404)
+        payload = await request.json()
+        job.edits = {
+            "tags": payload.get("tags") or {},
+            "removed": payload.get("removed") or [],
+            "alts": payload.get("alts") or {},
+        }
+        job.status = "running"
+        job.stage = "Applying your changes to the tags..."
         job.started = time.monotonic()
         threading.Thread(target=_run_conversion, args=(job, job.source_path), daemon=True).start()
         return JSONResponse({"job_id": job.id})
@@ -271,6 +314,8 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         Route("/jobs/{job_id}", job_status),
         Route("/jobs/{job_id}/describe", job_describe, methods=["POST"]),
         Route("/jobs/{job_id}/contrast", job_contrast, methods=["POST"]),
+        Route("/jobs/{job_id}/elements", job_elements),
+        Route("/jobs/{job_id}/edits", job_edits, methods=["POST"]),
         Route("/jobs/{job_id}/pdf", job_pdf),
         Route("/health", health),
         Route("/heartbeat", heartbeat, methods=["GET", "POST"]),

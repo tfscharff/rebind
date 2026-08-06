@@ -146,6 +146,10 @@ MAX_INTERNAL_TABLE_GAP = 2
 # numbers laid over it, small enough that a dozen of them stay a page the browser renders at once.
 REVIEW_THUMB_DPI = 80
 REVIEW_THUMB_PX = 420
+# The page editor shows a bigger picture -- elements are selected on it and their text read from
+# it -- so it renders larger than the review thumbnail, once per page.
+EDITOR_PAGE_DPI = 110
+EDITOR_PAGE_PX = 900
 
 
 @dataclass
@@ -169,6 +173,11 @@ class RemediationResult:
     # `contrast` is a measurement of the rendered page, not a claim about it.
     reading_order: dict = field(default_factory=dict)
     contrast: dict = field(default_factory=dict)
+    # Every tagged element, in reading order, for the app's page editor: {id, page, kind, text,
+    # left/top/width/height as percentages of the page}. A figure additionally carries "alt".
+    elements: tuple[dict, ...] = ()
+    # A rendered thumbnail per page (data URI), so the editor can lay elements over the page.
+    page_images: dict = field(default_factory=dict)
 
 
 def _page_figures(src_page) -> list[tuple[str, tuple[float, float, float, float]]]:
@@ -887,25 +896,95 @@ def _contains(parent, target) -> bool:
     return False
 
 
-def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], page_roles: list[str],
-                    document_elem: pikepdf.Object, page_obj: pikepdf.Object):
-    """Build the structure elements for one page from its lines, grouping list and table runs.
+@dataclass
+class Edits:
+    """A person's corrections to what Rebind decided, applied on the next run.
 
-    Returns (top-level elements to add under the document, owners) where `owners[mcid]` is the leaf
-    element that directly holds that MCID -- what the page's ParentTree entry indexes.
+    Everything is keyed by element id, and an element id is derived from the source line it starts
+    at -- never from its position in the list -- so removing or retagging one element cannot
+    silently shift what every later correction refers to.
+    """
+
+    tags: dict[str, str] = field(default_factory=dict)      # element id -> structure type
+    removed: set[str] = field(default_factory=set)          # element ids to drop from the tree
+    alts: dict[str, str] = field(default_factory=dict)      # figure id -> alt text
+
+    @classmethod
+    def from_payload(cls, payload: dict | None) -> Edits:
+        payload = payload or {}
+        allowed = set(EDITABLE_TAGS)
+        return cls(
+            tags={str(k): str(v) for k, v in (payload.get("tags") or {}).items() if v in allowed},
+            removed={str(v) for v in (payload.get("removed") or [])},
+            alts={str(k): str(v).strip() for k, v in (payload.get("alts") or {}).items()
+                  if str(v).strip()},
+        )
+
+
+# What a person may retag an element as. Every one of these is legal as a direct child of the
+# document element in the PDF 2.0 Standard Structure Namespace, which is where Rebind puts a page's
+# top-level elements -- ISO 32005 Table 5 is strict about this, and veraPDF enforces it: offering
+# /Caption and /Quote here (tried, and caught by validation) produced a document that failed
+# "<Document> shall not contain <Caption>", because a caption belongs inside the table or figure it
+# captions and a quote is inline content inside a paragraph. Types whose internals Rebind cannot
+# build from a retag are also absent: relabelling a paragraph "Table" would assert a grid of rows
+# and cells that does not exist.
+EDITABLE_TAGS = ("H1", "H2", "H3", "H4", "H5", "H6", "P")
+
+
+def _element_records(src_page, plan: list[dict], lines: list[TextLine],
+                     mcid_of: list[int | None]) -> list[dict]:
+    """One record per element for the app's editor: what it is, where it is, what it says."""
+    out = []
+    for entry in plan:
+        first, last = entry["first"], entry["last"]
+        if mcid_of[first] is None:
+            continue
+        members = lines[first:last + 1]
+        box = (min(ln.bbox[0] for ln in members), min(ln.bbox[1] for ln in members),
+               max(ln.bbox[2] for ln in members), max(ln.bbox[3] for ln in members))
+        out.append({
+            "id": entry["id"],
+            "page": src_page.number,
+            "kind": entry["kind"],
+            "text": " ".join(ln.text.strip() for ln in members).strip()[:300],
+            "left": round(100 * box[0] / src_page.width, 2),
+            "top": round(100 * (src_page.height - box[3]) / src_page.height, 2),
+            "width": round(100 * (box[2] - box[0]) / src_page.width, 2),
+            "height": round(100 * (box[3] - box[1]) / src_page.height, 2),
+            "editable": True,
+        })
+    return out
+
+
+def _untagged_record(src_page, element_id: str, line: TextLine) -> dict:
+    """A line Rebind left out of the structure tree -- page furniture, or text inside a figure --
+    offered to the editor so it can be given a tag and read after all."""
+    x0, y0, x1, y1 = line.bbox
+    return {
+        "id": element_id, "page": src_page.number, "kind": "Artifact",
+        "text": line.text.strip()[:300],
+        "left": round(100 * x0 / src_page.width, 2),
+        "top": round(100 * (src_page.height - y1) / src_page.height, 2),
+        "width": round(100 * (x1 - x0) / src_page.width, 2),
+        "height": round(100 * (y1 - y0) / src_page.height, 2),
+        "editable": True,
+    }
+
+
+def plan_page(lines: list[TextLine], page_roles: list[str]) -> list[dict]:
+    """Group a page's content lines into the elements the structure tree will hold.
+
+    This is the whole of Rebind's per-page structural judgement, expressed as plain data before any
+    PDF object exists: `[{"kind": "P"|"H1".."H6"|"L"|"Table", "first": i, "last": j}]`, over
+    inclusive indices into `lines`. Separating it out is what lets the app show a page's elements,
+    let a person correct them, and rebuild from the corrected plan -- the alternative, editing a
+    structure tree after the fact, cannot change which lines belong together.
     """
     n = len(lines)
     table_line_ids = detect_table_lines(lines)
     is_table = [id(line) in table_line_ids for line in lines]
-    owners: list[pikepdf.Object | None] = [None] * n
-    tops: list[pikepdf.Object] = []
-
-    def leaf(mcid: int, structure_type, parent, extra: dict | None = None) -> pikepdf.Object:
-        elem = pdf.make_indirect(Dictionary(
-            Type=Name.StructElem, S=structure_type, P=parent, Pg=page_obj, K=mcid, **(extra or {})))
-        owners[mcid] = elem
-        return elem
-
+    plan: list[dict] = []
     i = 0
     while i < n:
         if is_table[i]:
@@ -918,9 +997,7 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], page_roles: list[st
                 if is_table[j]:
                     last = j
                 j += 1
-            table = _tagged_table(pdf, [(m, lines[m]) for m in range(i, last + 1)],
-                                  document_elem, page_obj, leaf)
-            tops.append(table)
+            plan.append({"kind": "Table", "first": i, "last": last})
             i = last + 1
             continue
 
@@ -929,22 +1006,61 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], page_roles: list[st
             while j < n and not is_table[j] and _is_list_item(lines[j].text):
                 j += 1
             if j - i >= MIN_LIST_ITEMS:
-                lst = pdf.make_indirect(Dictionary(
-                    Type=Name.StructElem, S=Name.L, P=document_elem, K=Array([])))
-                lis = []
-                for mcid in range(i, j):
-                    li = pdf.make_indirect(Dictionary(
-                        Type=Name.StructElem, S=Name.LI, P=lst, K=Array([])))
-                    li.K = Array([leaf(mcid, Name.LBody, li)])
-                    lis.append(li)
-                lst.K = Array(lis)
-                tops.append(lst)
+                plan.append({"kind": "L", "first": i, "last": j - 1})
                 i = j
                 continue
 
-        tops.append(leaf(i, Name("/" + page_roles[i]), document_elem))
+        plan.append({"kind": page_roles[i], "first": i, "last": i})
         i += 1
+    return plan
 
+
+def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
+                    mcid_of: list[int | None],
+                    document_elem: pikepdf.Object, page_obj: pikepdf.Object):
+    """Build one page's structure elements from an (already decided, possibly edited) plan.
+
+    Returns (top-level elements in reading order, owners) where `owners[mcid]` is the leaf element
+    that directly holds that MCID -- what the page's ParentTree entry indexes.
+    """
+    owners: dict[int, pikepdf.Object] = {}
+    tops: list[pikepdf.Object] = []
+
+    def leaf(index: int, structure_type, parent, extra: dict | None = None) -> pikepdf.Object:
+        mcid = mcid_of[index]
+        elem = pdf.make_indirect(Dictionary(
+            Type=Name.StructElem, S=structure_type, P=parent, Pg=page_obj, K=mcid, **(extra or {})))
+        owners[mcid] = elem
+        return elem
+
+    for entry in plan:
+        first, last, kind = entry["first"], entry["last"], entry["kind"]
+        if any(mcid_of[i] is None for i in range(first, last + 1)):
+            continue        # every line of this element was removed by an edit
+        if kind == "Table":
+            tops.append(_tagged_table(pdf, [(i, lines[i]) for i in range(first, last + 1)],
+                                      document_elem, page_obj, leaf))
+        elif kind == "L":
+            lst = pdf.make_indirect(Dictionary(
+                Type=Name.StructElem, S=Name.L, P=document_elem, K=Array([])))
+            items = []
+            for i in range(first, last + 1):
+                li = pdf.make_indirect(Dictionary(
+                    Type=Name.StructElem, S=Name.LI, P=lst, K=Array([])))
+                li.K = Array([leaf(i, Name.LBody, li)])
+                items.append(li)
+            lst.K = Array(items)
+            tops.append(lst)
+        elif first == last:
+            tops.append(leaf(first, Name("/" + kind), document_elem))
+        else:
+            # A multi-line element the user merged by hand: one element holding every line's MCID.
+            elem = pdf.make_indirect(Dictionary(
+                Type=Name.StructElem, S=Name("/" + kind), P=document_elem, Pg=page_obj,
+                K=Array([mcid_of[i] for i in range(first, last + 1)])))
+            for i in range(first, last + 1):
+                owners[mcid_of[i]] = elem
+            tops.append(elem)
     return tops, owners
 
 
@@ -1006,7 +1122,7 @@ def _rebuild_page(pdf: pikepdf.Pdf, page: pikepdf.Page, page_image, overlay: byt
 
 def remediate(source: Path, target: Path, *, title: str | None = None, lang: str = "en",
               dpi: int = 300, alt_texts: dict[str, str] | None = None,
-              darken_contrast: bool = False) -> RemediationResult:
+              darken_contrast: bool = False, edits: Edits | None = None) -> RemediationResult:
     """Write `target`: the source made accessible, looking exactly like the original.
 
     The original pages are kept verbatim (vector text stays crisp, a scan stays a scan) and marked
@@ -1020,7 +1136,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     app only offers it once it has measured a real failure to offer it about.
     """
     source, target = Path(source), Path(target)
-    alt_texts = alt_texts or {}
+    edits = edits or Edits()
+    alt_texts = {**edits.alts, **(alt_texts or {})}
     source_pages = list(extract_pages(source))
     profile = build_profile(source_pages)
 
@@ -1087,6 +1204,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     font = pdf.make_indirect(Dictionary(
         Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
     undescribed_figures: list[dict] = []
+    page_elements: list[dict] = []
+    page_images: dict[int, str] = {}
     figure_boxes: dict[int, tuple] = {}
     heading_entries: list[tuple[int, pikepdf.Object, str]] = []   # (level, struct_elem, title)
 
@@ -1140,29 +1259,68 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         for k, (_fid, fbox) in enumerate(described):
             for line in _figure_text(lines, fbox):
                 owner_figure[id(line)] = k
+        # An id for every line on the page, whether or not it ends up tagged. Giving a tag to a line
+        # Rebind set aside is how an element is *added*: the exact inverse of removing one, and the
+        # answer to "this running head really is a heading" or "that label inside the figure needs
+        # reading". Anything with a tag override is content, whatever it would otherwise have been.
+        line_ids = [f"p{src_page.number}n{index}" for index in range(len(lines))]
+        promoted = {index for index, key in enumerate(line_ids) if key in edits.tags}
         is_artifact = [
-            id(ln) not in owner_figure
+            index not in promoted
+            and id(ln) not in owner_figure
             and profile.role_of(ln, page_height=src_page.height) == "artifact"
-            for ln in lines
+            for index, ln in enumerate(lines)
         ]
 
         content_lines: list[TextLine] = []
         content_roles: list[str] = []
-        mcids: list[int | None] = []
-        for line, role, artifact in zip(lines, page_roles, is_artifact):
-            if artifact or id(line) in owner_figure:
-                mcids.append(None)          # drawn as an artifact, or inside its figure below
+        content_source: list[int] = []      # content index -> index into `lines`
+        for index, (line, role, artifact) in enumerate(zip(lines, page_roles, is_artifact)):
+            if artifact or (id(line) in owner_figure and index not in promoted):
                 continue
-            mcids.append(len(content_lines))
             content_lines.append(line)
             content_roles.append(role)
+            content_source.append(index)
+
+        # The page's structural judgement as data, then the user's corrections on top of it. Ids
+        # are keyed to the *source* line index, not to a position in the element list, so they
+        # survive a re-run in which earlier elements were retagged, merged or removed.
+        plan = plan_page(content_lines, content_roles)
+        for entry in plan:
+            entry["id"] = f"p{src_page.number}n{content_source[entry['first']]}"
+            entry["kind"] = edits.tags.get(entry["id"], entry["kind"])
+        plan = [entry for entry in plan if entry["id"] not in edits.removed]
+
+        kept = {i for entry in plan for i in range(entry["first"], entry["last"] + 1)}
+        mcid_of: list[int | None] = []
+        mcids: list[int | None] = [None] * len(lines)
+        next_mcid = 0
+        for index, line in enumerate(content_lines):
+            if index not in kept:
+                mcid_of.append(None)        # removed by an edit: drawn as an artifact instead
+                continue
+            mcid_of.append(next_mcid)
+            mcids[content_source[index]] = next_mcid
+            next_mcid += 1
+        records = _element_records(src_page, plan, content_lines, mcid_of)
+        # Lines Rebind set aside are listed too, marked as untagged, so the editor can offer them.
+        # They sit at the position they occupy on the page, so the list stays the page's order.
+        for index, line in enumerate(lines):
+            if line_ids[index] in {entry["id"] for entry in plan} or not line.text.strip():
+                continue
+            if index in {content_source[e] for e in range(len(content_source))
+                         if mcid_of[e] is not None}:
+                continue
+            records.append(_untagged_record(src_page, line_ids[index], line))
+        records.sort(key=lambda record: (record["top"], record["left"]))
+        page_elements.extend(records)
 
         # Draw each described figure (a crop of the rendered region) inside a tagged /Figure,
         # together with any text that belongs to it, all under the figure's single MCID.
         figure_stream = b""
         extra_xobjects: dict = {}
         figure_specs: list[tuple] = []   # (mcid, alt, bbox, anchor line index)
-        mcid = len(content_lines)
+        mcid = next_mcid
         for k, (fid, bbox) in enumerate(described):
             extra_xobjects[f"Fig{k}"] = _figure_xobject(
                 pdf, page_image, bbox, src_page.width, src_page.height)
@@ -1193,11 +1351,23 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         page.obj.StructParents = struct_parent
         page.obj.Tabs = Name.S
 
-        tops, owners = _page_structure(pdf, content_lines, content_roles, document_elem, page.obj)
-        for index, role in enumerate(content_roles):
-            if role.startswith("H") and content_lines[index].text.strip():
-                heading_entries.append(
-                    (int(role[1:]), owners[index], content_lines[index].text.strip()))
+        tops, owner_of_mcid = _page_structure(pdf, content_lines, plan, mcid_of,
+                                              document_elem, page.obj)
+        # The parent tree is indexed BY marked-content id, so every slot must hold the element that
+        # owns that id. Appending here instead of assigning (as this briefly did) shifts the figure
+        # entries past their own ids and leaves nulls behind -- content that names a structure
+        # element the tree cannot resolve, which reads as untagged content and fails clause 8.2.2.
+        owners: list = [None] * mcid
+        for key, elem in owner_of_mcid.items():
+            owners[key] = elem
+        assert all(o is not None for o in owners[:next_mcid]), "unowned marked content"
+        for entry in plan:
+            kind, first = entry["kind"], entry["first"]
+            if kind.startswith("H") and kind[1:].isdigit() and content_lines[first].text.strip():
+                owner = owner_of_mcid.get(mcid_of[first])
+                if owner is not None:
+                    heading_entries.append(
+                        (int(kind[1:]), owner, content_lines[first].text.strip()))
         # A figure goes into the reading order where it actually sits, not after everything else.
         # `tops` holds the page's top-level elements in reading order; each figure is spliced in at
         # the element that owns the first content line below it. Appending them all at the end (as
@@ -1209,7 +1379,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                 Type=Name.StructElem, S=Name.Figure, P=document_elem, Pg=page.obj, K=fmcid,
                 Alt=String(alt),
                 A=Dictionary(O=Name.Layout, BBox=Array([round(v, 2) for v in bbox]))))
-            owners.append(figure_elem)
+            owners[fmcid] = figure_elem
             placements.append((_top_index_for(tops, owners, anchor), figure_elem))
         for position, figure_elem in sorted(placements, key=lambda p: -p[0]):
             tops.insert(position, figure_elem)
@@ -1240,6 +1410,30 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             next_parent_key += 1
 
         figure_boxes[src_page.number] = tuple(bbox for _fid, bbox in figures)
+        # Figures join the element list at the position they are read, so the editor's order is
+        # the document's order. Their alt text is editable in place, which is the one correction
+        # only a person can make.
+        for fmcid, alt, bbox, _anchor in figure_specs:
+            position = next((i for i, elem in enumerate(page_elements)
+                             if elem["page"] == src_page.number
+                             and elem["top"] > 100 * (src_page.height - bbox[3]) / src_page.height),
+                            len(page_elements))
+            page_elements.insert(position, {
+                "id": next(fid for fid, fbox in described if fbox == bbox),
+                "page": src_page.number, "kind": "Figure", "text": "", "alt": alt,
+                "left": round(100 * bbox[0] / src_page.width, 2),
+                "top": round(100 * (src_page.height - bbox[3]) / src_page.height, 2),
+                "width": round(100 * (bbox[2] - bbox[0]) / src_page.width, 2),
+                "height": round(100 * (bbox[3] - bbox[1]) / src_page.height, 2),
+                "editable": True,
+            })
+        # The editor lays elements over a picture of the page, so every page needs one -- reusing
+        # the render already made for a figure crop or a rebuild where there is one.
+        editor_image = page_image if page_image is not None else render_page_to_image(
+            render_source, src_page.number, dpi=EDITOR_PAGE_DPI)
+        page_images[src_page.number] = _crop_data_uri(
+            editor_image, (0.0, 0.0, src_page.width, src_page.height),
+            src_page.width, src_page.height, max_side=EDITOR_PAGE_PX)
         for fid, bbox in undescribed:
             undescribed_figures.append({
                 "id": fid, "page": src_page.number,
@@ -1259,16 +1453,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     # the reading order is the one just built above.
     orders = [review.page_order(src_page, layout, figure_boxes.get(src_page.number, ()))
               for src_page, layout in layouts]
-    # Only the flagged pages are rendered for their thumbnail -- on a 300-page catalogue the whole
-    # point is that the review is a handful of pages, and so is the work of preparing it.
-    thumbs = {}
-    for src_page, _layout in layouts:
-        order = next(o for o in orders if o.page == src_page.number)
-        if order.needs_review:
-            image = render_page_to_image(render_source, src_page.number, dpi=REVIEW_THUMB_DPI)
-            thumbs[src_page.number] = _crop_data_uri(
-                image, (0.0, 0.0, src_page.width, src_page.height),
-                src_page.width, src_page.height, max_side=REVIEW_THUMB_PX)
+    # The review reuses the editor's page pictures rather than rendering the same pages again.
+    thumbs = {order.page: page_images.get(order.page, "")
+              for order in orders if order.needs_review}
     # After recolouring, the pages extracted at the top of this function still carry the *old*
     # declared ink colours, and the ink is what `contrast` trusts the declaration for. Re-read them
     # from the corrected document so the report describes what was actually produced.
@@ -1284,6 +1471,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         structure_ok=self_check.ok, structure_issues=self_check.issues,
         reading_order=review.summarize(orders, thumbs),
         contrast=contrast.summarize(measured, darkened=recoloured),
+        elements=tuple(page_elements), page_images=page_images,
     )
 
 
