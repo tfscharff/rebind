@@ -183,12 +183,18 @@ def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI,
     failures: list[LineContrast] = []
     lowest: LineContrast | None = None
     for page in pages:
-        if not page.lines:
+        # Only text whose colour the page itself declares is measurable. Text recovered by OCR
+        # from a scan declares nothing -- it *is* the picture, and sampling it measures the
+        # photocopier rather than any colour decision the document made, exactly as for text
+        # inside a figure. It also cannot be corrected: repainting it would mean altering the scan.
+        # Rendering the page at all is skipped when there is nothing on it to measure.
+        measurable = [line for line in page.lines if line.color is not None and line.text.strip()]
+        if not measurable:
             continue
         page_image = render_page_to_image(source, page.number, dpi=dpi)
         in_figures = tuple(figures.get(page.number, ()))
-        for line in page.lines:
-            if not line.text.strip() or _inside(line.bbox, in_figures):
+        for line in measurable:
+            if _inside(line.bbox, in_figures):
                 continue
             sampled = _sample_line(page_image, line, page)
             if sampled is None:
@@ -197,9 +203,8 @@ def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI,
             # sampling a thin anti-aliased glyph is not. The paper is always sampled, because what
             # is *behind* the text (a filled box, a shaded row, a photograph) is a fact about the
             # rendered page that no colour operator states.
-            ink, paper = sampled
-            if line.color is not None:
-                ink = line.color
+            _sampled_ink, paper = sampled
+            ink = line.color
             result = LineContrast(
                 page=page.number, text=line.text.strip()[:80], bbox=line.bbox,
                 ratio=round(contrast_ratio(ink, paper), 2), ink=ink, paper=paper,

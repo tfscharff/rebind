@@ -71,7 +71,7 @@ def test_contrast_passes_only_on_a_measurement_of_the_corrected_document(remedia
         "measured": 40, "ok": True, "darkened": 3, "failures": [],
         "lowest": {"ratio": 4.8}}))["Colour contrast"]
     assert passing["status"] == PASS
-    assert "3 text colours were darkened" in passing["detail"]
+    assert "3 text colours were corrected" in passing["detail"]
 
     # What darkening cannot fix -- text on imagery, where no single colour is behind it -- is
     # still reported, with the pages to look at.

@@ -229,19 +229,21 @@ def _document_checks(pdf: pikepdf.Pdf, tree: _Tree, *, page_count: int,
 
 
 def _contrast_check(contrast: dict) -> Check:
-    """Contrast is measured, and anything failing has already been corrected, so this is one of
-    the two "manual" checks that Rebind can genuinely tick.
+    """Contrast is measured and corrected during remediation, so this check is settled, not asked.
 
-    It is still measured rather than assumed: the verdict is a re-measurement of the corrected
-    document. What cannot be corrected -- text sitting on imagery, where no single colour describes
-    what is behind it -- is reported with where to find it, never quietly counted as fixed.
+    A person cannot compute a luminance ratio by looking, so "needs manual check" is a question
+    with no answer available to the reader -- the whole reason it is done here instead. The verdict
+    is still a re-measurement of the corrected document rather than a claim that the correction
+    worked; if anything is left failing that is Rebind's problem to report, not the reader's to
+    fix, so it is stated plainly and asks nothing of them.
     """
     if not contrast.get("measured"):
         return Check(DOCUMENT, "Colour contrast", NOT_APPLICABLE,
-                     "There is no text to measure.")
-    darkened = contrast.get("darkened") or 0
-    fixed = (f" {darkened} text colour{'s were' if darkened != 1 else ' was'} darkened to get "
-             "there, keeping each one's hue." if darkened else "")
+                     "The document declares no text colours to measure — a scan's text is part of "
+                     "its picture, and repainting it would mean altering the scan.")
+    corrected = contrast.get("darkened") or 0
+    fixed = (f" {corrected} text colour{'s were' if corrected != 1 else ' was'} corrected to get "
+             "there, each keeping its hue." if corrected else "")
     if contrast.get("ok"):
         lowest = (contrast.get("lowest") or {}).get("ratio")
         return Check(DOCUMENT, "Colour contrast", PASS,
@@ -254,11 +256,11 @@ def _contrast_check(contrast: dict) -> Check:
         if failure.get("page") and failure["page"] not in pages:
             pages.append(failure["page"])
     return Check(DOCUMENT, "Colour contrast", NEEDS_YOU,
-                 f"{len(failures)} of {contrast['measured']} lines still fall below WCAG AA after "
+                 f"{len(failures)} of {contrast['measured']} lines are still below WCAG AA after "
                  "correction." + fixed,
-                 need="These sit on imagery or a pattern, so no single colour describes what is "
-                      "behind them and darkening the text cannot be shown to fix it. They need a "
-                      "human eye.",
+                 need="Rebind could not correct these — that is a limitation here, not something "
+                      "for you to resolve by eye. The pages are listed so you can see what they "
+                      "are.",
                  action="goto", locations=tuple({"page": p} for p in pages))
 
 

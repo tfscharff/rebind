@@ -82,25 +82,31 @@ the thing being checked). Nothing is asserted; each verdict is read off the prod
 
 **Nothing is reported without a way to act on it.** Naming a fault and leaving the remedy to the
 reader is a complaint, not a report, so every open item carries either a fix Rebind can perform
-(darken the text, set the title or language, remove the scripts, describe the images) or the place
-in the document to go and correct it by hand — one click, and the middle column turns to that page.
-There is a test asserting this holds for every check.
+(set the title or language, remove the scripts, describe the images) or the place in the document
+to go and correct it by hand — one click, and the middle column turns to that page. There is a test
+asserting this holds for every check.
 
 ## Colour contrast, and the one check that stays with you
 
 Adobe reports **Logical Reading Order** and **Colour contrast** as *needs manual check* on every
-document, always. Rebind settles one of them and hands you a way to finish the other.
+document, always. Rebind settles one of them outright and makes the other finishable.
 
-- **Colour contrast** is measured against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1 for large text) and
-  anything failing is corrected as part of remediation. The ink comes from the page's own
-  declaration, which is exact; the paper is sampled from the rendered page, because what sits
-  *behind* text — a filled box, a shaded row, a photograph — is not stated anywhere. Failing text
-  is darkened just enough to pass, keeping its hue, and only colours used *exclusively* by text are
-  touched, never one the artwork also uses. This is the one thing Rebind changes about how a
-  document looks, and it does it because an accessible document is the job. The check is then ticked
-  by **re-measuring the corrected document** — never by assuming the correction worked. What
-  darkening cannot honestly fix (text over imagery, where no single colour is behind it) is
-  reported with the pages to look at.
+- **Colour contrast** is not something a person can check. Nobody can look at two colours and
+  compute a luminance ratio, so "please verify the colour contrast" is a request with no answer
+  available to the reader. Rebind measures it against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1 for large
+  text) and corrects whatever fails, without asking. The ink comes from the page's own declaration,
+  which is exact; the paper is sampled from the rendered page, because what sits *behind* text — a
+  filled box, a shaded row, a dark banner — is not stated anywhere. Each failing colour is then
+  moved *away from the paper actually behind it*: text on white is darkened, text on a dark panel
+  is lightened, and both keep their hue. Every change is made inside a text object and undone at
+  its end, so a colour shared between a heading and the rule beneath it corrects the heading and
+  leaves the rule exactly as it was. The check is ticked by **re-measuring the corrected
+  document**, never by assuming the correction worked.
+
+  Text that declares no colour is not measured, for the same reason text inside a figure is not:
+  a scan's words *are* the picture. Sampling them measures the photocopier rather than a decision
+  the document made, and repainting them would mean altering the scan.
+
 - **Reading order** cannot be settled by any measurement, so it stays with you — but as something
   finishable rather than a permanent asterisk. Every element is a tab stop, and Tab runs off the
   end of one page onto the next, so checking a document is one unbroken walk. The report counts the
@@ -126,12 +132,17 @@ intended, because a green tick is a claim. A rule the document has nothing to te
 tables) is marked *not applicable* rather than passed. Anything that did not pass is a button:
 click it and the middle column turns to the page the problem is on.
 
-**Middle — the document.** Each element Rebind tagged is drawn over the page and is a tab stop, in
-reading order, so tabbing through the page is meeting it as a screen reader will. Tab past the last
-element and the next page opens, so a whole document is one unbroken walk. The element's type
-appears in big letters above the page with an explanation of what that type *means*, so
-`BlockQuote` is not something you have to already know. `Enter` opens a floating list of every
-type; one keystroke sets it.
+**Middle — the document**, sized to the window so a whole page is always visible and nothing
+scrolls. The keys are listed above it; the page fills the space; the element chooser sits beneath.
+Each element Rebind tagged is drawn over the page and is a tab stop, in reading order, so tabbing
+through the page is meeting it as a screen reader will. Tab past the last element and the next page
+opens, so a whole document is one unbroken walk.
+
+Land on an element and the chooser names it in large type — with its nearest **HTML equivalent**
+beside it (`Block quote <blockquote>`), which is the part most people recognise on sight — and says
+what that type means. Pressing its key sets it and moves you straight to the next element, so
+correcting a page is one stream of keystrokes with no Tab in between. `Enter` is only for when you
+cannot remember which key you want: it opens a floating list of every type.
 
 | key | | key | | key | |
 |---|---|---|---|---|---|
@@ -170,7 +181,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.17.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.18.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,

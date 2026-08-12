@@ -118,14 +118,21 @@ h2{font-family:var(--serif);font-size:1.15rem;margin:0 0 .3rem}
 .sub{color:var(--muted);font-size:.88rem;margin:0 0 .8rem}
 
 /* ---- The workspace: report | document | what needs you --------------------------------------
-   The document is the point, so the middle column is twice either side of it. */
-.workspace{display:grid;grid-template-columns:minmax(14rem,1fr) minmax(0,2.2fr) minmax(15rem,1fr);
-  gap:1.1rem;align-items:start}
-@media (max-width:80rem){ .workspace{grid-template-columns:minmax(0,1.6fr) minmax(14rem,1fr)}
-  .col-report{grid-column:1 / -1} }
-@media (max-width:56rem){ .workspace{grid-template-columns:minmax(0,1fr)}
-  .col-report,.col-todo{grid-column:auto} }
-.col-report,.col-todo{position:sticky;top:.8rem;max-height:calc(100vh - 2rem);overflow-y:auto}
+   The document is the point, so the middle column is twice either side of it. The whole thing is
+   sized to the window: the page never scrolls, each column scrolls inside itself if it must, and
+   every column starts at the same line so the three read as one surface. */
+body.wide{height:100vh;overflow:hidden;display:flex;flex-direction:column}
+body.wide header.site{flex:none;padding:.7rem 0}
+body.wide main{flex:1;min-height:0;padding:.7rem 0;display:flex}
+body.wide .wrap{flex:1;min-height:0;display:flex}
+body.wide #work{flex:1;min-height:0;display:flex}
+body.wide .panel{margin-top:0}
+.workspace{flex:1;min-height:0;display:grid;
+  grid-template-columns:minmax(13rem,1fr) minmax(0,2.2fr) minmax(14rem,1fr);gap:1rem}
+@media (max-width:80rem){ .workspace{grid-template-columns:minmax(0,1.6fr) minmax(13rem,1fr)}
+  .col-report{display:none} }
+.col-report,.col-todo,.col-stage{min-height:0;height:100%;display:flex;flex-direction:column}
+.col-report>.panel,.col-todo>.panel{flex:1;min-height:0;overflow-y:auto}
 
 /* ---- Left: the checklist, ticked off one at a time ---- */
 .report .score{font-family:var(--mono);font-size:.78rem;color:var(--muted);margin:0 0 .7rem}
@@ -155,22 +162,34 @@ li.check button.where:focus-visible{outline:2px solid var(--stamp);outline-offse
 li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:none;font-weight:400}
 
 /* ---- Middle: the document ---- */
-.typebar{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);
-  padding:.7rem .9rem;min-height:5.2rem;display:flex;flex-direction:column;justify-content:center}
-.typebar .what{font-family:var(--serif);font-size:2rem;line-height:1.1;margin:0;
-  letter-spacing:-.02em}
-.typebar .what.idle{font-size:1.15rem;color:var(--muted)}
-.typebar .why{margin:.25rem 0 0;color:var(--muted);font-size:.88rem}
-.typebar .hint{margin:.3rem 0 0;font-size:.78rem;color:var(--muted);font-family:var(--mono)}
-.typebar .altbox{margin:.45rem 0 0;display:flex;gap:.5rem;align-items:flex-start}
-.typebar .altbox textarea{flex:1;font:inherit;font-size:.88rem;padding:.35rem .5rem;
+.col-stage{gap:.55rem}
+/* The keys, at the top, where they are read before the first Tab rather than hunted for after. */
+.stagetop{flex:none;border:1px solid var(--line);border-radius:8px;background:var(--panel);
+  padding:.4rem .7rem;font-size:.78rem;color:var(--muted);display:flex;flex-wrap:wrap;
+  gap:.2rem .9rem;align-items:baseline}
+.stagetop b{color:var(--ink);font-weight:600}
+/* The page fills whatever height is left, and its width follows from that -- so the whole page is
+   always visible, whatever shape it is, without the window ever scrolling. */
+.sheetwrap{flex:1;min-height:0;display:flex;justify-content:center;align-items:stretch}
+.sheet{position:relative;height:100%;border:1px solid var(--line);border-radius:6px;
+  overflow:hidden;background:#fff}
+.sheet img{display:block;height:100%;width:auto}
+/* The chooser sits under the page: the element's name in large type, what it is, and its nearest
+   HTML equivalent, which is the part most people recognise on sight. */
+.typebar{flex:none;border:1px solid var(--line);border-radius:var(--radius);
+  background:var(--panel);padding:.55rem .9rem;min-height:5rem;display:flex;
+  flex-direction:column;justify-content:center}
+.typebar .what{font-family:var(--serif);font-size:1.9rem;line-height:1.1;margin:0;
+  letter-spacing:-.02em;display:flex;align-items:baseline;gap:.55rem;flex-wrap:wrap}
+.typebar .what .tag{font-family:var(--mono);font-size:.9rem;color:var(--stamp);
+  letter-spacing:0;font-weight:600}
+.typebar .what.idle{font-size:1.05rem;color:var(--muted);font-family:var(--sans)}
+.typebar .why{margin:.2rem 0 0;color:var(--muted);font-size:.85rem}
+.typebar .hint{margin:.25rem 0 0;font-size:.75rem;color:var(--muted);font-family:var(--mono)}
+.typebar .altbox{margin:.35rem 0 0;display:flex;gap:.5rem;align-items:flex-start}
+.typebar .altbox textarea{flex:1;font:inherit;font-size:.86rem;padding:.3rem .5rem;
   border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ink);
-  resize:vertical}
-/* The numbered overlay: boxes are positioned in percentages of the page, so the sheet just has to
-   be a positioning context of the same aspect ratio as the page picture inside it. */
-.sheet{position:relative;display:block;border:1px solid var(--line);border-radius:6px;
-  overflow:hidden;background:#fff;margin:.8rem 0}
-.sheet img{display:block;width:100%;height:auto}
+  resize:none}
 .ob{position:absolute;border:1.5px solid var(--stamp);border-radius:2px;
   background:color-mix(in srgb,var(--stamp) 7%,transparent);cursor:pointer}
 .ob i{position:absolute;left:-1.5px;top:-1.5px;font-style:normal;font-family:var(--mono);
@@ -182,7 +201,7 @@ li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:non
 .ob.gone i{background:var(--muted)}
 .ob:focus{outline:none;border-width:3px;background:color-mix(in srgb,var(--stamp) 18%,transparent);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--stamp) 45%,transparent)}
-.pager{display:flex;gap:.5rem;align-items:center;justify-content:center}
+.pager{flex:none;display:flex;gap:.5rem;align-items:center;justify-content:center}
 .pager .pageno{font-family:var(--mono);font-size:.8rem;color:var(--muted)}
 
 /* ---- Right: what is not ticked, and what would tick it ---- */
@@ -672,12 +691,18 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     if(!host) return;
     var items=elementsOnPage();
     var pos=ed.pageList.indexOf(ed.page);
-    // The type banner sits above the page, so the element's name is in the same glance as the
-    // element itself. It is a live region: a screen reader hears the type on arrival too.
-    var h='<div class="typebar" id="typebar" role="status" aria-live="polite">'+idleBanner()+'</div>'+
-      '<div class="sheet" id="sheet">'+
+    // The chooser sits *below* the page: the page is what you are looking at, and the name of the
+    // thing you just landed on belongs under it, not pushing it down the screen. It is a live
+    // region, so a screen reader hears the type on arrival too.
+    var h='<div class="stagetop">'+
+      '<span><b>Tab</b> next element</span><span><b>Shift + Tab</b> previous</span>'+
+      '<span><b>a key</b> sets the type</span><span><b>Enter</b> all the types</span>'+
+      '<span><b>[</b> <b>]</b> turn the page</span></span>'+
+      '</div>'+
+      '<div class="sheetwrap"><div class="sheet" id="sheet">'+
       (ed.pages[ed.page]? '<img src="'+ed.pages[ed.page]+'" alt="Page '+ed.page+'">':'')+
-      items.map(function(e,i){ return boxHtml(e,i); }).join('')+'</div>'+
+      items.map(function(e,i){ return boxHtml(e,i); }).join('')+'</div></div>'+
+      '<div class="typebar" id="typebar" role="status" aria-live="polite">'+idleBanner()+'</div>'+
       '<div class="pager">'+
       '<button type="button" class="btn ghost small" id="edprev"'+(pos<=0?' disabled':'')+
       '>‹ Previous</button>'+
@@ -690,9 +715,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
 
   function idleBanner(){
     return '<p class="what idle">Tab into the page to walk its elements</p>'+
-      '<p class="why">Every block Rebind tagged is a stop. The order you tab through them is the '+
-      'order a screen reader reads them in.</p>'+
-      '<p class="hint">Enter changes what an element is · [ ] turn the page</p>';
+      '<p class="why">Every block Rebind tagged is a stop, and the order you meet them in is the '+
+      'order a screen reader reads them in. Tab past the last one and the next page opens.</p>';
   }
 
   function boxHtml(e,i){
@@ -714,15 +738,14 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     if(!bar) return;
     var k=kindOf(e), key=keyFor(k);
     var alt=ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'');
-    var h='<p class="what">'+esc(key? key.label : k)+'</p>'+
+    var h='<p class="what">'+esc(key? key.label : k)+
+      (key&&key.html? '<span class="tag">'+esc(key.html)+'</span>' : '')+'</p>'+
       '<p class="why">'+esc(key&&key.what? key.what : 'A structure element.')+'</p>';
     if(k==='Figure'){
       h+='<div class="altbox"><textarea id="altnow" rows="2" data-id="'+esc(e.id)+'" '+
         'aria-label="Description of this figure" placeholder="What does this picture show?">'+
         esc(alt)+'</textarea></div>'+
-        '<p class="hint">Space to type a description · Enter to change the type</p>';
-    } else {
-      h+='<p class="hint">Enter to change what this is · [ ] turn the page</p>';
+        '<p class="hint">Space to type a description</p>';
     }
     bar.innerHTML=h;
     var box=document.getElementById('altnow');
@@ -794,7 +817,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         if(key==='ArrowDown'||key==='ArrowUp'){
           var to=boxes[index+(key==='ArrowDown'?1:-1)];
           if(to){ ev.preventDefault(); to.focus(); }
+          return;
         }
+        // The key sets the type straight away. Enter is only for when you cannot remember which
+        // key you want; knowing it should never cost you a menu.
+        var hit=null;
+        ed.keys.forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });
+        if(hit){ ev.preventDefault(); setKind(e.id, hit); }
       });
     });
     if(ed.focused){
@@ -846,22 +875,32 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     ed.palette=false;
   }
 
-  // Setting a type redraws the page and puts focus back on the same element, so a run of
-  // corrections is one uninterrupted pass: Tab, Enter, key, Tab, Enter, key.
+  // Setting a type moves on to the next element by itself. Correcting a page is then a single
+  // stream of keystrokes with no Tab between them -- and where the type was already right, Tab
+  // steps past it. Running off the end of the page carries on to the next one, as Tab does.
   function setKind(elementId, tag){
+    var items=elementsOnPage();
+    var at=-1;
+    items.forEach(function(e,i){ if(e.id===elementId) at=i; });
     // "Not read" is a type like any other as far as the editor is concerned -- it has to show as
     // the element's type, or pressing x looks like it did nothing. It reaches the server as a
     // removal rather than as a tag (there is no /Artifact structure element; content that should
     // not be read is drawn as an artifact instead), which stripArtifacts() below takes care of.
     ed.tags_edit[elementId]=tag;
     if(tag==='Artifact') ed.removed[elementId]=true; else delete ed.removed[elementId];
-    ed.focused=elementId;
+    ed.focused=null;
     drawStage();
     // Deliberately NOT redrawing the right column: it holds description boxes the user may be
     // half way through typing into, and rebuilding it would throw that text away.
     var apply=document.getElementById('edapply');
     if(apply) apply.disabled=false;
     say(tagLabel(tag)+' set.');
+    var boxes=document.querySelectorAll('.ob');
+    if(at>=0 && at+1<boxes.length){ boxes[at+1].focus(); return; }
+    // A figure just made needs its description before anything else, so stay on it rather than
+    // walking past the one thing that still needs a person.
+    if(tag==='Figure' && boxes[at]){ boxes[at].focus(); return; }
+    if(!turnPage(1) && boxes[at]) boxes[at].focus();
   }
 
   function showError(msg){

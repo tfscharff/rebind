@@ -75,9 +75,12 @@ def test_the_declared_ink_is_used_not_a_sample_of_the_glyphs(tmp_path: Path):
     assert report.lowest.ratio == 21.0, "black on white is 21:1, not whatever the pixels blended to"
 
 
-def test_an_ocr_page_with_no_declared_colour_still_measures(tmp_path: Path):
-    # An OCR'd line has no declared colour to read, so the sample is all there is. It must still
-    # produce a measurement rather than silently dropping the line.
+def test_text_recovered_by_ocr_is_not_measured(tmp_path: Path):
+    # An OCR'd line declares no colour, because it *is* the picture: sampling it measures the
+    # photocopier rather than any colour decision the document made, exactly as for text inside a
+    # figure. It also cannot be corrected -- repainting it would mean altering the scan -- and
+    # contrast is a check Rebind settles rather than hands back, so measuring what it could only
+    # report and never fix would be reporting for its own sake.
     from rebind.extract import Page
 
     source = born_digital_pdf("<p>Ordinary black body text on white.</p>", tmp_path / "in.pdf")
@@ -92,7 +95,7 @@ def test_an_ocr_page_with_no_declared_colour_still_measures(tmp_path: Path):
         for p in pages
     ]
     report = measure(source, stripped)
-    assert report.measured > 0
+    assert report.measured == 0
     assert report.ok
 
 

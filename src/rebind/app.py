@@ -220,8 +220,8 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         return JSONResponse({
             "elements": job.elements, "pages": job.page_images,
             "tags": list(EDITABLE_TAGS), "edits": job.edits,
-            "keys": [{"key": key, "tag": tag, "label": label, "what": what}
-                     for key, tag, label, what in TAG_KEYS],
+            "keys": [{"key": key, "tag": tag, "label": label, "what": what, "html": html}
+                     for key, tag, label, what, html in TAG_KEYS],
         })
 
     async def job_edits(request: Request) -> JSONResponse:

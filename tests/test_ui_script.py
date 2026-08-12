@@ -66,9 +66,19 @@ def test_the_workspace_is_report_document_todo():
     page = index_html()
     for marker in ('id="report"', 'id="stage"', 'id="todo"', 'class="workspace"'):
         assert marker in page, marker
-    assert ".workspace{display:grid" in page
+    assert "display:grid" in page
     # The document column is the wide one -- that is the whole point of the layout.
     assert "minmax(0,2.2fr)" in page
+
+
+def test_the_workspace_fits_the_window_and_the_columns_start_level():
+    # No page scroll: the window is the frame, each column scrolls inside itself, and the page
+    # picture is sized by the height left over so a whole page is always visible.
+    page = index_html()
+    assert "body.wide{height:100vh;overflow:hidden" in page
+    assert ".col-report,.col-todo,.col-stage{min-height:0;height:100%" in page
+    assert "body.wide .panel{margin-top:0}" in page, "columns must start on the same line"
+    assert ".sheet img{display:block;height:100%;width:auto}" in page
 
 
 def test_every_element_on_the_page_is_a_tab_stop():
@@ -109,6 +119,24 @@ def test_reading_order_is_a_walk_the_person_completes():
     assert "function allPagesWalked(" in script and "function noteWalked(" in script
     assert "noteWalked(ed.page)" in script
     assert "c.key==='logical-reading-order'" in script
+
+
+def test_a_hotkey_sets_the_type_without_opening_anything():
+    # Enter is for when you cannot remember the key. Knowing it must never cost you a menu, and
+    # setting a type must move you on without a Tab, so a page is one stream of keystrokes.
+    script = _script()
+    assert "ed.keys.forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });" in script
+    assert "if(hit){ ev.preventDefault(); setKind(e.id, hit); }" in script
+    assert "if(at>=0 && at+1<boxes.length){ boxes[at+1].focus(); return; }" in script
+
+
+def test_the_element_chooser_sits_below_the_page_and_names_its_html_tag():
+    page = index_html()
+    script = _script()
+    # The order in the middle column: keys, page, chooser, pager.
+    assert script.index('class="sheetwrap"') < script.index('class="typebar"')
+    assert '<span class="tag">' in script and "key.html" in script
+    assert ".typebar .what .tag{font-family:var(--mono)" in page
 
 
 def test_enter_opens_the_hotkey_palette_and_escape_leaves_it_alone():
