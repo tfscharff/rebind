@@ -767,19 +767,24 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
         row_count += 1
         tr = pdf.make_indirect(Dictionary(
             Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
-        by_column: dict[int, tuple[int, TextLine]] = {}
+        # Several of a row's cells can snap to one column -- their left edges sit within the
+        # tolerance of each other, which a noisy OCR'd grid produces constantly. They share the
+        # cell rather than the later ones being dropped: dropping one would leave its marked
+        # content on the page owned by nothing, which is untagged content, not a tidier table.
+        by_column: dict[int, list[tuple[int, TextLine]]] = {}
         for mcid, line in row:
-            by_column.setdefault(column_of(line), (mcid, line))
+            by_column.setdefault(column_of(line), []).append((mcid, line))
         is_header = row_index == 0
         cell_type = Name.TH if is_header else Name.TD
         row_cells: list[pikepdf.Object] = []
         for c in range(len(columns)):
             if c in by_column:
-                mcid, line = by_column[c]
+                members = by_column[c]
                 extra = {"A": Dictionary(O=Name.Table, Scope=Name.Column)} if is_header else None
-                row_cells.append(leaf(mcid, cell_type, tr, extra))
+                row_cells.append(leaf([mcid for mcid, _line in members], cell_type, tr, extra))
                 if is_header:
-                    header_texts.append(line.text.strip())
+                    header_texts.append(
+                        " ".join(line.text.strip() for _mcid, line in members).strip())
             else:
                 # An empty cell keeps the grid regular; it holds no content, so no marked content.
                 row_cells.append(pdf.make_indirect(Dictionary(
@@ -1065,11 +1070,17 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
     owners: dict[int, pikepdf.Object] = {}
     tops: list[pikepdf.Object] = []
 
-    def leaf(index: int, structure_type, parent, extra: dict | None = None) -> pikepdf.Object:
-        mcid = mcid_of[index]
+    def leaf(index: int | list[int], structure_type, parent,
+             extra: dict | None = None) -> pikepdf.Object:
+        """One element holding the marked content of one line -- or of several, when more than one
+        line lands in the same cell. Every id passed in is owned; dropping one would leave content
+        drawn on the page that no element claims (clause 8.2.2)."""
+        mcids = [mcid_of[i] for i in ([index] if isinstance(index, int) else index)]
         elem = pdf.make_indirect(Dictionary(
-            Type=Name.StructElem, S=structure_type, P=parent, Pg=page_obj, K=mcid, **(extra or {})))
-        owners[mcid] = elem
+            Type=Name.StructElem, S=structure_type, P=parent, Pg=page_obj,
+            K=Array(mcids) if len(mcids) > 1 else mcids[0], **(extra or {})))
+        for mcid in mcids:
+            owners[mcid] = elem
         return elem
 
     def spanning(kind: str, parent, indices: list[int]) -> pikepdf.Object:
@@ -1169,6 +1180,81 @@ def _has_marked_content(page: pikepdf.Page) -> bool:
     except (pikepdf.PdfError, Exception):  # noqa: BLE001 -- unparseable content -> rebuild clean
         return True
     return False
+
+
+def _strip_invisible_text(pdf: pikepdf.Pdf, page: pikepdf.Page) -> bool:
+    """Remove a scan's own invisible OCR text layer, leaving every visible mark untouched.
+
+    A scan that has already been through an OCR tool carries the picture plus a layer of text drawn
+    in rendering mode 3 -- invisible, there only to be selectable. Rebind lays its *own* tagged
+    invisible layer over the same page, so the original's is a second, untagged copy of the same
+    words; and Tesseract's stand-in font ("GlyphLessFont") declares a ToUnicode CMap veraPDF
+    rejects, failing clause 8.4.5.8 for a font the document no longer needs. Removing that layer
+    (rather than re-rendering the whole page, which would resample the scan) keeps the page's own
+    pixels exactly as they were -- nothing that marks the page is touched, so it still looks
+    identical -- and takes the unusable font out with it.
+
+    Returns whether anything was removed.
+    """
+    try:
+        instructions = list(pikepdf.parse_content_stream(page))
+    except Exception:  # noqa: BLE001 -- unparseable content is left alone, never half-rewritten
+        return False
+
+    out: list = []
+    block: list = []            # the current BT..ET run, held back until we know if it shows ink
+    in_text = False
+    mode = 0                    # text rendering mode, part of the graphics state (persists past ET)
+    block_mode: int | None = None
+    visible = False
+    removed = False
+    saved: list[int] = []       # `q`/`Q` save and restore the mode along with the rest of the state
+    for ins in instructions:
+        operator = str(getattr(ins, "operator", ""))
+        if operator == "BT":
+            in_text, block, visible, block_mode = True, [ins], False, None
+            continue
+        if not in_text:
+            # Tracking q/Q matters: a mode restored by Q and not re-set is 0, and mistaking that
+            # for a still-invisible state would delete text the page actually shows.
+            if operator == "q":
+                saved.append(mode)
+            elif operator == "Q" and saved:
+                mode = saved.pop()
+            elif operator == "Tr":
+                mode = int(ins.operands[0])
+            out.append(ins)
+            continue
+        block.append(ins)
+        if operator == "Tr":
+            mode = int(ins.operands[0])
+            block_mode = mode
+        elif operator in ("Tj", "TJ", "'", '"') and mode != 3:
+            visible = True
+        elif operator == "ET":
+            in_text = False
+            if visible:
+                out.extend(block)
+            else:
+                removed = True
+                # A rendering mode set inside the dropped run persists past ET, so it has to be
+                # re-stated: dropping it silently would make the *next* run visible or invisible.
+                if block_mode is not None:
+                    out.append(pikepdf.ContentStreamInstruction([block_mode], pikepdf.Operator("Tr")))
+            block = []
+    out.extend(block)           # an unterminated BT run: keep it rather than lose content
+    if not removed:
+        return False
+
+    page.obj.Contents = pdf.make_stream(pikepdf.unparse_content_stream(out))
+    # Fonts nothing draws with any more go too -- leaving one behind would keep failing 8.4.5.8.
+    used = {str(ins.operands[0]) for ins in out
+            if str(getattr(ins, "operator", "")) == "Tf" and ins.operands}
+    fonts = (page.obj.get("/Resources") or Dictionary()).get("/Font")
+    if fonts is not None:
+        for key in [str(k) for k in fonts.keys() if str(k) not in used]:
+            del fonts[key]
+    return True
 
 
 def _add_xobject(pdf: pikepdf.Pdf, page: pikepdf.Page, xobject: pikepdf.Object, name: str) -> None:
@@ -1436,6 +1522,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             _rebuild_page(pdf, page, page_image, overlay, extra_xobjects, font,
                           src_page.width, src_page.height)
         else:
+            # Before the page is wrapped as an artifact: a scan that arrived already OCR'd carries
+            # its own invisible text layer, which Rebind is about to duplicate with a tagged one.
+            _strip_invisible_text(pdf, page)
             page.contents_add(pdf.make_stream(b"/Artifact BMC\n"), prepend=True)
             page.contents_add(pdf.make_stream(b"EMC\n" + overlay), prepend=False)
             _add_font(pdf, page, font, "RebindF")

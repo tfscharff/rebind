@@ -784,6 +784,86 @@ def test_sparse_table_row_is_kept_as_a_row(tmp_path: Path):
     assert "West" in text and "South" in text
 
 
+def test_a_scans_own_invisible_ocr_layer_is_removed_and_visible_marks_are_kept():
+    # A scan that has already been through Tesseract carries the picture plus invisible text
+    # (rendering mode 3) in a stand-in font whose ToUnicode CMap veraPDF rejects -- 46 failed
+    # checks of clause 8.4.5.8 on a real sample, for a font nothing needs once Rebind has laid
+    # down its own tagged invisible layer over the same words. The layer and its font go; every
+    # visible mark stays, so the page still looks exactly as it did.
+    from rebind.remediate import _strip_invisible_text
+
+    pdf = pikepdf.new()
+    page = pdf.add_blank_page(page_size=(200, 200))
+    font = pdf.make_indirect(pikepdf.Dictionary(
+        Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica))
+    page.obj.Resources = pikepdf.Dictionary(Font=pikepdf.Dictionary(Hidden=font, Shown=font))
+    page.obj.Contents = pdf.make_stream(
+        b"0 0 1 rg 10 10 50 50 re f\n"                                   # a visible mark
+        b"BT 3 Tr /Hidden 12 Tf 20 100 Td (scanned words) Tj ET\n"       # the OCR layer
+        b"BT 0 Tr /Shown 12 Tf 20 150 Td (real text) Tj ET\n")           # genuine visible text
+
+    assert _strip_invisible_text(pdf, pikepdf.Page(page.obj)) is True
+
+    body = bytes(page.obj.Contents.read_bytes())
+    assert b"scanned words" not in body, "the invisible OCR layer survived"
+    assert b"real text" in body, "visible text must never be removed"
+    assert b"re" in body and b"0 0 1 rg" in body, "the page's visible marks must be untouched"
+    # The mode the dropped run set persists past its ET, so it has to be re-stated -- without it
+    # the *next* run's rendering mode silently changes.
+    assert b"3 Tr" in body
+    fonts = page.obj.Resources.Font
+    assert "/Shown" in fonts and "/Hidden" not in fonts, "the unusable font must go with its text"
+
+
+def test_invisible_mode_restored_by_Q_does_not_delete_visible_text():
+    # The text rendering mode is part of the graphics state, so `Q` restores it. A stripper that
+    # tracked `Tr` but not `q`/`Q` would still believe the mode was 3 after the restore and delete
+    # text the page genuinely shows -- silently destroying content, the worst failure available.
+    from rebind.remediate import _strip_invisible_text
+
+    pdf = pikepdf.new()
+    page = pdf.add_blank_page(page_size=(200, 200))
+    font = pdf.make_indirect(pikepdf.Dictionary(
+        Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica))
+    page.obj.Resources = pikepdf.Dictionary(Font=pikepdf.Dictionary(F=font))
+    page.obj.Contents = pdf.make_stream(
+        b"q 3 Tr BT /F 12 Tf 20 100 Td (hidden) Tj ET Q\n"     # invisible, mode discarded by Q
+        b"BT /F 12 Tf 20 150 Td (visible) Tj ET\n")            # mode is 0 again here
+
+    _strip_invisible_text(pdf, pikepdf.Page(page.obj))
+
+    body = bytes(page.obj.Contents.read_bytes())
+    assert b"hidden" not in body
+    assert b"visible" in body, "text after a restored graphics state was wrongly deleted"
+
+
+def test_table_cells_sharing_a_column_are_all_owned():
+    # Two cells in one row whose left edges fall within the column tolerance of each other snap to
+    # the SAME column. Keeping only one of them (which is what dict.setdefault did) silently drops
+    # the other's marked content: its MCID is drawn on the page but no structure element claims it,
+    # which is untagged content -- PDF/UA clause 8.2.2 -- and trips remediate's own owner assert
+    # ("unowned marked content"). Real, not hypothetical: a noisy OCR'd page of a scanned grid
+    # produces colliding cells constantly. Both cells must end up owned, in the same /TD.
+    from rebind.extract import TextLine
+    from rebind.remediate import _page_structure
+
+    def cell(text: str, x: float, y: float) -> TextLine:
+        return TextLine(text=text, page=1, bbox=(x, y, x + 4, y + 9), font="F", size=9,
+                        bold=False, italic=False)
+
+    lines = [cell("A", 100, 700), cell("B", 104, 700),      # header row, colliding
+             cell("C", 100, 680), cell("D", 104, 680)]      # data row, colliding
+    plan = [{"kind": "Table", "first": 0, "last": 3, "id": "p1n0", "alt": ""}]
+
+    pdf = pikepdf.new()
+    page = pdf.add_blank_page()
+    document = pdf.make_indirect(pikepdf.Dictionary(
+        Type=pikepdf.Name.StructElem, S=pikepdf.Name.Document))
+    _tops, owners = _page_structure(pdf, lines, plan, [0, 1, 2, 3], document, page.obj)
+
+    assert sorted(owners) == [0, 1, 2, 3], "a cell's marked content was left unowned"
+
+
 def test_tagged_table_is_pdf_ua_compliant(tmp_path: Path, verapdf_exe: Path):
     from rebind.validate import validate_pdf_ua
 
