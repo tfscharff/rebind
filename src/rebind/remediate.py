@@ -1203,6 +1203,49 @@ def _has_marked_content(page: pikepdf.Page) -> bool:
     return False
 
 
+def _text_visibility(page: pikepdf.Page) -> tuple[bool, bool]:
+    """(has any text, has any *visible* text) for one page.
+
+    Rendering mode 3 draws nothing: it is how an OCR tool lays a searchable text layer over a scan.
+    Text drawn that way is not perceivable, so it is not text a reader can be said to see.
+    """
+    try:
+        instructions = list(pikepdf.parse_content_stream(page))
+    except Exception:  # noqa: BLE001 -- an unparseable stream tells us nothing either way
+        return (False, False)
+    has_text = has_visible = False
+    mode = 0
+    saved: list[int] = []
+    for ins in instructions:
+        operator = str(getattr(ins, "operator", ""))
+        if operator == "Tr":
+            mode = int(ins.operands[0])
+        elif operator == "q":
+            saved.append(mode)
+        elif operator == "Q" and saved:
+            mode = saved.pop()
+        elif operator in ("Tj", "TJ", "'", '"'):
+            has_text = True
+            if mode != 3:
+                has_visible = True
+    return (has_text, has_visible)
+
+
+def _invisible_text_pages(source: Path) -> set[int]:
+    """Page numbers whose text is *entirely* invisible -- a scan with an OCR layer over it.
+
+    Such a page's words are not something a reader perceives: what they see is the picture. Their
+    colours are therefore not a colour decision the document made, and measuring the contrast of
+    text drawn in rendering mode 3 produces failures for text that is not on the page at all
+    (939 lines and 49 "failures" on a real Tesseract-processed scan, every one of them invisible).
+    Rebind strips that layer anyway, so the measurement would describe a document that no longer
+    exists by the time it is written.
+    """
+    with pikepdf.open(source) as pdf:
+        return {number for number, page in enumerate(pdf.pages, start=1)
+                if _text_visibility(page) == (True, False)}
+
+
 def _strip_invisible_text(pdf: pikepdf.Pdf, page: pikepdf.Page) -> bool:
     """Remove a scan's own invisible OCR text layer, leaving every visible mark untouched.
 
@@ -1384,8 +1427,10 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     # original, uncorrected colours.
     render_source = source
     recoloured = 0
+    invisible_pages = _invisible_text_pages(source)
     if darken_contrast:
-        corrections = recolor.corrections_for(contrast.measure(source, source_pages))
+        corrections = recolor.corrections_for(
+            contrast.measure(source, source_pages, skip_pages=invisible_pages))
         for page in pdf.pages:
             recoloured += recolor.apply_corrections(pdf, page, corrections)
         if recoloured:
@@ -1680,7 +1725,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     # declared ink colours, and the ink is what `contrast` trusts the declaration for. Re-read them
     # from the corrected document so the report describes what was actually produced.
     measured_pages = list(extract_pages(render_source)) if render_source != source else source_pages
-    measured = contrast.measure(render_source, measured_pages, figures=figure_boxes)
+    measured = contrast.measure(render_source, measured_pages, figures=figure_boxes,
+                                skip_pages=invisible_pages)
     if render_source != source:
         render_source.unlink(missing_ok=True)
 

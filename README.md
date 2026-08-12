@@ -77,8 +77,9 @@ p. 214]` — rather than a guess.
 
 Rebind walks Adobe's Accessibility Checker rule list against its own output and says, for each
 rule, what is true of the document. Four verdicts, and only one of them is a tick: *passes*,
-*needs you* (with what it needs), *needs your eye*, and *not applicable* (the document has none of
-the thing being checked). Nothing is asserted; each verdict is read off the produced PDF.
+*needs you* (with what it needs), *needs your eye* (reading order, and only reading order), and
+*not applicable* (the document has none of the thing being checked). Nothing is asserted; each
+verdict is read off the produced PDF.
 
 **Nothing is reported without a way to act on it.** Naming a fault and leaving the remedy to the
 reader is a complaint, not a report, so every open item carries either a fix Rebind can perform
@@ -89,28 +90,38 @@ asserting this holds for every check.
 ## Colour contrast, and the one check that stays with you
 
 Adobe reports **Logical Reading Order** and **Colour contrast** as *needs manual check* on every
-document, always. Rebind settles one of them outright and makes the other finishable.
+document, always. Rebind takes one off the list entirely and makes the other finishable.
 
-- **Colour contrast** is not something a person can check. Nobody can look at two colours and
-  compute a luminance ratio, so "please verify the colour contrast" is a request with no answer
-  available to the reader. Rebind measures it against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1 for large
-  text) and corrects whatever fails, without asking. The ink comes from the page's own declaration,
-  which is exact; the paper is sampled from the rendered page, because what sits *behind* text — a
-  filled box, a shaded row, a dark banner — is not stated anywhere. Each failing colour is then
-  moved *away from the paper actually behind it*: text on white is darkened, text on a dark panel
-  is lightened, and both keep their hue. Every change is made inside a text object and undone at
-  its end, so a colour shared between a heading and the rule beneath it corrects the heading and
-  leaves the rule exactly as it was. The check is ticked by **re-measuring the corrected
-  document**, never by assuming the correction worked.
+**Colour contrast is not on the checklist at all.** Everything on that list is there because it
+might need a decision from the person reading it, and contrast never can: nobody can look at two
+colours and compute a luminance ratio. Listing it only ever put something already settled among the
+things still to do. It is measured against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1 for large text) and
+corrected during remediation, and the report carries one line saying what was done — a receipt, not
+a task.
 
-  Text that declares no colour is not measured, for the same reason text inside a figure is not:
-  a scan's words *are* the picture. Sampling them measures the photocopier rather than a decision
-  the document made, and repainting them would mean altering the scan.
+The ink comes from the page's own declaration, which is exact; the paper is sampled from the
+rendered page, because what sits *behind* text — a filled box, a shaded row, a dark banner — is not
+stated anywhere. Each failing colour is moved *away from the paper actually behind it*: text on
+white is darkened, text on a dark panel is lightened, and both keep their hue. Every change is made
+inside a text object and undone at its end, so a colour shared between a heading and the rule
+beneath it corrects the heading and leaves the rule exactly as it was. The result is then
+**re-measured**, never assumed.
 
-- **Reading order** cannot be settled by any measurement, so it stays with you — but as something
-  finishable rather than a permanent asterisk. Every element is a tab stop, and Tab runs off the
-  end of one page onto the next, so checking a document is one unbroken walk. The report counts the
-  pages you have walked and ticks the check when you have seen them all.
+Two kinds of text are not measured, because in neither case is a colour being chosen:
+
+- **Text with no declared colour**, for the same reason text inside a figure is skipped — a scan's
+  words *are* the picture, so sampling them measures the photocopier, and repainting them would
+  mean altering the scan.
+- **A page whose text is entirely invisible** — an OCR layer laid over a scan in rendering mode 3.
+  Those words are not on the page as far as a reader is concerned, and Rebind strips that layer
+  anyway. Measuring them reported 939 lines and 49 failures on a real Tesseract-processed scan,
+  every one of them text nobody could see.
+
+**Reading order** cannot be settled by any measurement, so it stays with you — but as something
+finishable rather than a permanent asterisk. Every element is a tab stop, and Tab runs off the end
+of one page onto the next, so checking a document is one unbroken walk. The report counts the pages
+you have walked and ticks the check when you have seen them all. It is the only item on the list
+that asks for your eye.
 
 ## Running it
 
@@ -185,7 +196,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.19.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.20.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,

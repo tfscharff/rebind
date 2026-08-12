@@ -847,6 +847,32 @@ def test_invisible_mode_restored_by_Q_does_not_delete_visible_text():
     assert b"visible" in body, "text after a restored graphics state was wrongly deleted"
 
 
+def test_a_scans_invisible_ocr_layer_is_not_measured_for_contrast():
+    # The measurement read a Tesseract sandwich's invisible text as if it were on the page: 939
+    # lines and 49 "contrast failures" on a real scan, every one of them text drawn in rendering
+    # mode 3 that nobody can see -- and that Rebind strips out before writing the document. A page
+    # whose text is entirely invisible has nothing to measure; what a reader sees is the picture.
+    from rebind.remediate import _text_visibility
+
+    pdf = pikepdf.new()
+    sandwich = pdf.add_blank_page(page_size=(200, 200))
+    ordinary = pdf.add_blank_page(page_size=(200, 200))
+    font = pdf.make_indirect(pikepdf.Dictionary(
+        Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica))
+    for page in (sandwich, ordinary):
+        page.obj.Resources = pikepdf.Dictionary(Font=pikepdf.Dictionary(F=font))
+    sandwich.obj.Contents = pdf.make_stream(
+        b"BT 3 Tr /F 12 Tf 20 100 Td (scanned words) Tj ET\n")
+    ordinary.obj.Contents = pdf.make_stream(
+        b"BT /F 12 Tf 20 100 Td (real text) Tj ET\n")
+
+    assert _text_visibility(pikepdf.Page(sandwich.obj)) == (True, False)
+    assert _text_visibility(pikepdf.Page(ordinary.obj)) == (True, True)
+    # A page with no text at all is neither, so it is never mistaken for a sandwich.
+    blank = pdf.add_blank_page(page_size=(200, 200))
+    assert _text_visibility(pikepdf.Page(blank.obj)) == (False, False)
+
+
 def test_scripts_are_removed_only_when_asked_for():
     # A script is behaviour the author put there. The report offers removing it as a fix, so it
     # happens because someone chose it -- never silently, which is the same rule that governs

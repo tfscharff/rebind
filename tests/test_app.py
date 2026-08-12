@@ -95,11 +95,11 @@ def test_a_finished_job_carries_the_adobe_checklist(tmp_path: Path):
 
     checks = {c["title"]: c for c in status["checklist"]}
     assert checks["Tagged PDF"]["status"] == "pass"
-    # Reading order is the one verdict no measurement can settle, so it stays with the person.
+    # Reading order is the one verdict no measurement can settle, so it stays with the person --
+    # and it is the *only* one that does.
     assert checks["Logical reading order"]["status"] == "manual"
-    # Contrast is measured and corrected, so it can be ticked -- on a document with black text on
-    # white, it passes without anything needing to be changed.
-    assert checks["Colour contrast"]["status"] == "pass"
+    assert [c["title"] for c in status["checklist"] if c["status"] == "manual"] == \
+        ["Logical reading order"]
     assert {c["group"] for c in status["checklist"]} >= {"Document", "Tables", "Headings"}
 
 
@@ -141,7 +141,10 @@ def test_a_finished_job_reports_the_two_manual_check_findings(tmp_path: Path):
     assert contrast["ok"] is True, contrast["failures"]
     assert contrast["darkened"] > 0
     assert contrast["lowest"]["ratio"] >= 4.5
-    assert {c["title"]: c["status"] for c in status["checklist"]}["Colour contrast"] == "pass"
+    # Contrast is not on the checklist at all -- it is never the reader's decision. What was done
+    # about it comes back as a line for the report header instead.
+    assert "Colour contrast" not in {c["title"] for c in status["checklist"]}
+    assert "correcting 1 colour" in status["contrast_note"], status["contrast_note"]
 
 
 def test_a_report_fix_is_applied_and_survives_a_later_rebuild(tmp_path: Path):

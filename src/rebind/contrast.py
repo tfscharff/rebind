@@ -165,7 +165,8 @@ def _inside(bbox: tuple[float, float, float, float],
 
 
 def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI,
-            figures: dict[int, tuple] | None = None) -> ContrastReport:
+            figures: dict[int, tuple] | None = None,
+            skip_pages: frozenset[int] | set[int] = frozenset()) -> ContrastReport:
     """Measure every text line in `pages` against the rendered page behind it.
 
     Text lying inside a figure is skipped. A panel label burnt into a photograph ("A", "petri
@@ -183,6 +184,11 @@ def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI,
     failures: list[LineContrast] = []
     lowest: LineContrast | None = None
     for page in pages:
+        # `skip_pages` carries the pages whose text is entirely invisible -- a scan with an OCR
+        # layer laid over it. Those words are not what a reader perceives (the picture is), and
+        # scoring them invents failures for text that is not visibly on the page at all.
+        if page.number in skip_pages:
+            continue
         # Only text whose colour the page itself declares is measurable. Text recovered by OCR
         # from a scan declares nothing -- it *is* the picture, and sampling it measures the
         # photocopier rather than any colour decision the document made, exactly as for text

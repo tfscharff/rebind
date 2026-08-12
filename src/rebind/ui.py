@@ -135,7 +135,9 @@ body.wide .panel{margin-top:0}
 .col-report>.panel,.col-todo>.panel{flex:1;min-height:0;overflow-y:auto}
 
 /* ---- Left: the checklist, ticked off one at a time ---- */
-.report .score{font-family:var(--mono);font-size:.78rem;color:var(--muted);margin:0 0 .7rem}
+.report .score{font-family:var(--mono);font-size:.78rem;color:var(--muted);margin:0 0 .3rem}
+.report .note{font-size:.78rem;color:var(--muted);margin:0 0 .7rem;
+  border-left:2px solid var(--pass);padding-left:.5rem}
 .group{margin:.9rem 0 0}
 .group h3{font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
   margin:0 0 .25rem;font-weight:600;font-family:var(--sans)}
@@ -403,7 +405,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       byGroup[c.group].push(c);
     });
     var h='<section class="panel report"><h2 id="rep-h">Accessibility report</h2>'+
-      '<p class="score">'+passed+' of '+total+' checks pass</p>';
+      '<p class="score">'+passed+' of '+total+' checks pass</p>'+
+      // Not a check: a receipt for the one thing that is never the reader's to decide.
+      (ed.status.contrast_note? '<p class="note">'+esc(ed.status.contrast_note)+'</p>' : '');
     groups.forEach(function(g){
       h+='<div class="group"><h3>'+esc(g)+'</h3><ul class="checks">';
       byGroup[g].forEach(function(c){ h+=checkRow(c); });

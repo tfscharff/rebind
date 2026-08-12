@@ -224,46 +224,31 @@ def _document_checks(pdf: pikepdf.Pdf, tree: _Tree, *, page_count: int,
                      action="" if has_outline or not headings else "goto",
                      locations=() if has_outline or not headings else ({"page": 1},)))
 
-    out.append(_contrast_check(contrast))
     return out
 
 
-def _contrast_check(contrast: dict) -> Check:
-    """Contrast is measured and corrected during remediation, so this check is settled, not asked.
+def contrast_note(contrast: dict) -> str:
+    """One line saying what was done about colour contrast — not a check, and never a question.
 
-    A person cannot compute a luminance ratio by looking, so "needs manual check" is a question
-    with no answer available to the reader -- the whole reason it is done here instead. The verdict
-    is still a re-measurement of the corrected document rather than a claim that the correction
-    worked; if anything is left failing that is Rebind's problem to report, not the reader's to
-    fix, so it is stated plainly and asks nothing of them.
+    Colour contrast is deliberately absent from the checklist. Every other item on that list is
+    there because it may need a decision from the person reading it; contrast never can. Nobody can
+    look at two colours and compute a luminance ratio, so putting it in a list of things to work
+    through only ever asked for a judgement that cannot be made, and left an item sitting there
+    looking outstanding when it was already settled. It is measured and corrected during
+    remediation (see `recolor`), and this is the receipt.
     """
     if not contrast.get("measured"):
-        # A pass, not "not applicable". Nothing here fails, and nothing is being asked of anyone --
-        # a dash beside it reads as an item still outstanding, which is the opposite of true.
-        return Check(DOCUMENT, "Colour contrast", PASS,
-                     "Nothing in this document sets a text colour that could fail — a scan's words "
-                     "are part of its picture, and there is no colour choice to score.")
+        return ("Colour contrast: nothing here sets a text colour that could fail — a scan's words "
+                "are part of its picture.")
     corrected = contrast.get("darkened") or 0
-    fixed = (f" {corrected} text colour{'s were' if corrected != 1 else ' was'} corrected to get "
-             "there, each keeping its hue." if corrected else "")
+    fixed = (f", correcting {corrected} colour{'s' if corrected != 1 else ''}" if corrected else "")
     if contrast.get("ok"):
-        lowest = (contrast.get("lowest") or {}).get("ratio")
-        return Check(DOCUMENT, "Colour contrast", PASS,
-                     f"All {contrast['measured']} lines of text meet WCAG AA against what is "
-                     "actually behind them" +
-                     (f"; the lowest measured is {lowest}:1." if lowest else ".") + fixed)
+        return (f"Colour contrast: measured and met on all {contrast['measured']} lines{fixed}.")
     failures = contrast.get("failures") or []
-    pages = []
-    for failure in failures:
-        if failure.get("page") and failure["page"] not in pages:
-            pages.append(failure["page"])
-    return Check(DOCUMENT, "Colour contrast", NEEDS_YOU,
-                 f"{len(failures)} of {contrast['measured']} lines are still below WCAG AA after "
-                 "correction." + fixed,
-                 need="Rebind could not correct these — that is a limitation here, not something "
-                      "for you to resolve by eye. The pages are listed so you can see what they "
-                      "are.",
-                 action="goto", locations=tuple({"page": p} for p in pages))
+    # Still stated, still not asked: a line Rebind could not correct is a limitation here, and
+    # saying so plainly is more use than a task nobody can carry out.
+    return (f"Colour contrast: corrected, but {len(failures)} of {contrast['measured']} lines "
+            "are still below WCAG AA — Rebind could not repaint those.")
 
 
 def _page_content_checks(pdf: pikepdf.Pdf, tree: _Tree) -> list[Check]:
