@@ -142,11 +142,14 @@ body.wide .panel{margin-top:0}
 .col-todo{gap:.6rem}
 .col-todo>.panel{flex:none}
 .col-todo>.typebar{flex:1;min-height:8rem;overflow-y:auto}
-.walkbar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:.2rem 0 .35rem}
-.walkfill{height:100%;background:var(--pass);transition:width .2s}
-@media (prefers-reduced-motion:reduce){.walkfill{transition:none}}
-.walknum{margin:0;font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+.walkhead{display:flex;align-items:baseline;justify-content:space-between;gap:.6rem;
+  border-bottom:1px solid var(--line);padding-bottom:.35rem;margin-bottom:.5rem}
+.walkhead h2{margin:0;font-size:1rem}
+.walknum{font-family:var(--mono);font-size:.74rem;color:var(--muted);white-space:nowrap}
 .walknum.done{color:var(--pass);font-weight:700}
+.addrem{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-top:.5rem}
+.addrem .hint{margin:0;flex:1;min-width:9rem}
+.addrem b{font-size:1rem;line-height:1}
 .keys h2{font-size:1rem}
 .keys .sub{margin:0 0 .4rem}
 .keys .sub b{color:var(--ink)}
@@ -558,21 +561,19 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   function drawTodo(){
     var host=document.getElementById('todo');
     if(!host) return;
-    var walked=walkedCount(), total=ed.pageList.length||1;
     var done=allPagesWalked();
-    var h='<section class="panel todo"><h2 id="todo-h">Reading order</h2>'+
-      '<p class="sub">The one thing no measurement can settle. Tab through every page and it is '+
-      'checked off.</p>'+
-      '<div class="walkbar"><div class="walkfill" style="width:'+
-        Math.round(100*walked/total)+'%"></div></div>'+
-      '<p class="walknum'+(done?' done':'')+'" id="roprogress">'+
-      esc(readingOrderProgress())+'</p>'+
+    // Reading order and the element you are standing on are the same act -- you learn the order by
+    // walking it, and the walk is what the element list is for -- so they share one panel.
+    var h='<section class="panel typebar" id="typebar" role="status" aria-live="polite">'+
+      '<div class="walkhead"><h2 id="todo-h">Reading order</h2>'+
+      '<span class="walknum'+(done?' done':'')+'" id="roprogress">'+
+      esc(readingOrderProgress())+'</span></div>'+
+      '<div id="typebody">'+idleBanner()+'</div>'+
       '</section>'+
-      '<section class="panel typebar" id="typebar" role="status" aria-live="polite">'+
-      idleBanner()+'</section>'+
       '<section class="panel keys"><h2>Keys</h2>'+
       '<p class="sub"><b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
-      '<b>[</b> <b>]</b> turn the page · <b>Enter</b> lists every type</p>'+
+      '<b>+</b> add · <b>−</b> remove · <b>[</b> <b>]</b> turn the page · '+
+      '<b>Enter</b> lists every type</p>'+
       '<dl class="keylist">'+ed.allKeys.map(function(k){
         return '<div><dt><kbd>'+esc(k.key)+'</kbd></dt><dd>'+esc(k.label)+'</dd></div>';
       }).join('')+'</dl></section>';
@@ -819,7 +820,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // What the banner says while an element has focus: the type in big letters, what that type
   // means, and -- for a figure -- the description box, editable where it stands.
   function showType(e){
-    var bar=document.getElementById('typebar');
+    // Only the body is replaced: the reading-order header above it is shared with the walk and
+    // must survive every element change.
+    var bar=document.getElementById('typebody');
     if(!bar) return;
     var k=kindOf(e), key=keyFor(k);
     var alt=ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'');
@@ -828,6 +831,17 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var h='<p class="what">'+esc(key? key.label : k)+
       (key&&key.key? '<kbd class="tag">'+esc(key.key)+'</kbd>' : '')+'</p>'+
       '<p class="why">'+esc(key&&key.what? key.what : 'A structure element.')+'</p>';
+    // Adding and removing are the two edits that are not "what is this?", so they get their own
+    // pair of controls rather than hiding among the types. Whichever one does nothing here is
+    // disabled instead of absent, so the pair stays in the same place on every element.
+    var out=(k==='Artifact');
+    h+='<div class="addrem">'+
+      '<button type="button" class="btn ghost small" id="addel"'+(out?'':' disabled')+
+      ' title="Add this to the reading order"><b>+</b> Add</button>'+
+      '<button type="button" class="btn ghost small" id="delel"'+(out?' disabled':'')+
+      ' title="Take this out of the reading order"><b>−</b> Remove</button>'+
+      '<span class="hint">'+(out? 'Not read. + puts it into the reading order.'
+                                : 'In the reading order. − takes it out.')+'</span></div>';
     if(k==='Figure'){
       // A figure is the one thing a machine cannot finish. The box is here the moment you land on
       // one, pre-filled with the best guess Rebind has -- the document's own caption where there
@@ -838,6 +852,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         '<p class="hint">Space jumps here from the page · Esc goes back</p>';
     }
     bar.innerHTML=h;
+    var add=document.getElementById('addel');
+    if(add) add.addEventListener('click', function(){ addElement(e.id); });
+    var del=document.getElementById('delel');
+    if(del) del.addEventListener('click', function(){ setKind(e.id, 'Artifact'); });
     var box=document.getElementById('altnow');
     if(box) box.addEventListener('input',function(){
       ed.alts[box.getAttribute('data-id')]=box.value;
@@ -851,6 +869,19 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // The best opening line Rebind has for a figure nobody has described yet: the caption it found
   // beside the picture, or -- for a figure made out of text -- that text. Never invented, and
   // never written into the document unless it is still there when the edit is saved.
+  // Adding is giving a region Rebind left out a type, and a paragraph is the safe one to give it:
+  // it puts the words into the reading order without claiming they are a heading or a table. The
+  // type can then be changed with a keystroke like any other element's.
+  function addElement(elementId){
+    var known=null;
+    ed.elements.forEach(function(e){ if(e.id===elementId) known=e; });
+    if(!known || kindOf(known)!=='Artifact'){
+      say('That is already in the reading order.');
+      return;
+    }
+    setKind(elementId, 'P');
+  }
+
   function altGuess(e){
     var guess='';
     ed.figures.forEach(function(f){ if(f.id===e.id && f.alt_guess) guess=f.alt_guess; });
@@ -913,6 +944,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
           return;
         }
         if(key==='['||key===']'){ ev.preventDefault(); turnPage(key===']'?1:-1); return; }
+        // The two edits that are not "what is this?", on the obvious pair of keys.
+        if(key==='+'||key==='='){ ev.preventDefault(); addElement(e.id); return; }
+        if(key==='-'||key==='_'){ ev.preventDefault(); setKind(e.id, 'Artifact'); return; }
         if(key==='ArrowDown'||key==='ArrowUp'){
           var to=boxes[index+(key==='ArrowDown'?1:-1)];
           if(to){ ev.preventDefault(); to.focus(); }

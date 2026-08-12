@@ -847,6 +847,38 @@ def test_invisible_mode_restored_by_Q_does_not_delete_visible_text():
     assert b"visible" in body, "text after a restored graphics state was wrongly deleted"
 
 
+def test_a_picture_guessed_from_a_scan_never_swallows_prose():
+    # A figure the *file* declares knows where it is, so ownership of nearby callout labels can
+    # grow outward from it. A picture found in a scan's pixels does not: its box is where the ink
+    # happened to be. Growing from a guess cascaded across the page and pulled 117 paragraphs of a
+    # real scanned book out of the reading order into decorative artifacts -- text hidden from a
+    # screen reader, which is the worst outcome available here.
+    from rebind.extract import TextLine
+    from rebind.remediate import _figure_text, _figure_text_strict
+
+    def line(text: str, box: tuple) -> TextLine:
+        return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False)
+
+    picture = (100.0, 500.0, 400.0, 700.0)
+    inside = line("A", (200.0, 590.0, 210.0, 600.0))
+    just_outside = line("Bonding", (150.0, 704.0, 220.0, 714.0))
+    prose = line("Ordinary body text well below the picture.", (72.0, 300.0, 540.0, 312.0))
+    # A full sentence that happens to fall inside the guessed box is prose, not a callout label.
+    sentence_within = line(
+        "The apparatus was assembled from parts held in the departmental store.",
+        (110.0, 520.0, 390.0, 532.0))
+    lines = [inside, just_outside, prose, sentence_within]
+
+    strict = _figure_text_strict(lines, picture)
+    assert strict == [inside], "a guessed box claims only short labels that sit inside it"
+    assert sentence_within not in strict
+
+    # The declared-figure path still reaches a label sitting just past the ink, as it must.
+    assert just_outside in _figure_text(lines, picture)
+    # Neither path ever reaches the prose.
+    assert prose not in _figure_text(lines, picture)
+
+
 def test_a_paragraph_is_one_element_not_one_per_line(tmp_path: Path):
     # Tagging each line as its own /P is wrong in a way that matters: a screen reader pauses at
     # every element boundary, so a page of prose comes out as a stream of fragments. Lines are

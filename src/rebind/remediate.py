@@ -116,6 +116,12 @@ RULE_MIN_LENGTH_RATIO = 0.5
 # real sample: "Bonding" and "2-10 ml glass syringe" print 3-11pt above the top of the apparatus
 # they label, at the end of their leader lines. Comfortably smaller than the gap to a caption.
 FIGURE_TEXT_TOLERANCE_PT = 12.0
+# Picture-hunting on a scan works from a render of its own; 150 dpi is ample for finding where the
+# ink is and costs a fraction of the 300 dpi the page itself is rebuilt at.
+REGION_SCAN_DPI = 150
+# The longest a callout label runs to ("Ventral", "2-10 ml glass syringe", "3 mm"). Longer than
+# this, inside a guessed figure box, is a sentence -- prose the picture sits around, not part of it.
+FIGURE_LABEL_MAX_WORDS = 6
 
 # OCR heading recovery. A single OCR line's box height is noisy (a body line can crop tall), so no
 # one signal is trusted: a heading must be markedly taller than the page's body text AND set apart
@@ -863,6 +869,71 @@ def _center_in_box(bbox: tuple, box: tuple) -> bool:
     return box[0] <= cx <= box[2] and box[1] <= cy <= box[3]
 
 
+def _is_full_page_scan(src_page) -> bool:
+    """Whether the page is one big picture -- a scanned sheet -- rather than a laid-out page.
+
+    That is the same image `_page_figures` rejects for covering too much of the page to be a figure
+    on it. Here the fact is used the other way round: it is what says the page's illustrations have
+    to be found in the pixels, because the file itself holds only the one raster.
+    """
+    area = src_page.width * src_page.height
+    if area <= 0:
+        return False
+    for image in src_page.images:
+        x0, y0, x1, y1 = image.bbox
+        if (x1 - x0) * (y1 - y0) / area > FIGURE_MAX_COVERAGE:
+            return True
+    return False
+
+
+def _scanned_figures(source: Path, src_page, lines: list[TextLine], dpi: int,
+                     already: list[tuple[str, tuple]]) -> list[tuple[str, tuple]]:
+    """Pictures printed on a scanned page, found from its pixels. Each is (stable id, bbox).
+
+    A region that overlaps something already found (a placed image, a line-art figure) is dropped:
+    the same picture must not be announced twice, and the earlier detections know more about what
+    they are.
+    """
+    from .ocr import render_page_to_image
+    from .regions import find_picture_regions
+
+    try:
+        page_image = render_page_to_image(source, src_page.number, dpi=REGION_SCAN_DPI)
+    except Exception:  # noqa: BLE001 -- a page that will not render simply yields no figures
+        return []
+    found = find_picture_regions(
+        page_image, [line.bbox for line in lines],
+        page_width=src_page.width, page_height=src_page.height)
+    out: list[tuple[str, tuple]] = []
+    for index, region in enumerate(found):
+        if any(_boxes_overlap(region.bbox, bbox) for _fid, bbox in already + out):
+            continue
+        out.append((f"p{src_page.number}r{index}", region.bbox))
+    return out
+
+
+def _boxes_overlap(a: tuple, b: tuple) -> bool:
+    return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
+
+
+def _figure_text_strict(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
+    """A picture's own callout labels, when the picture's box is a guess rather than a declaration.
+
+    Used for a figure found in a scan's pixels. Two things are given up compared with
+    `_figure_text`: ownership never grows outward from the box, and only *labels* are claimed --
+    a few words, the length a callout runs to. Anything longer is a sentence, and a sentence inside
+    the box is prose the picture happens to sit around, not part of it.
+
+    Both restrictions are there for the same reason. Growing from a guessed box cascaded across the
+    page on a real scanned book and pulled 117 paragraphs out of the reading order; claiming every
+    line inside the box still held 238 of them back. Text hidden from a screen reader is the worst
+    outcome available here, so a guessed box gets no benefit of the doubt.
+    """
+    return [line for line in lines
+            if _center_in_box(line.bbox, bbox)
+            and len(line.text.split()) <= FIGURE_LABEL_MAX_WORDS]
+
+
 def _figure_text(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
     """The lines belonging to a figure: its own callout labels, not the prose around it.
 
@@ -1585,6 +1656,20 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         vector = _vector_figures(src_page, list(lines), figures)
         figures += [(fid, bbox) for fid, bbox, _caption in vector]
         anchored = {fid: caption for fid, _bbox, caption in vector}
+        # A scanned page places no images at all -- the whole sheet is one raster, and a diagram
+        # printed on it is a patch of that raster, invisible to `_page_figures`. Every illustration
+        # in a scanned book was therefore missed. They are found from the pixels instead: ink that
+        # is not text (see `regions`).
+        #
+        # "Scanned" cannot mean "Rebind ran OCR on it": a scan that arrived already OCR'd has a
+        # text layer, so nothing is recognized here and that test is false on exactly the documents
+        # this is for. A page is a scan when its words are an invisible layer over a picture, or
+        # when one image covers the whole sheet -- both of which are known by now.
+        scan_regions: set[str] = set()
+        if used_ocr or src_page.number in invisible_pages or _is_full_page_scan(src_page):
+            found = _scanned_figures(render_source, src_page, list(lines), dpi, figures)
+            scan_regions = {fid for fid, _bbox in found}
+            figures += found
         # A figure sitting directly under (or, less commonly, above) a "Fig. N ..." caption needs
         # no manual description at all: the author's own words are more accurate than anything
         # Rebind could invent, and this skips the app's describe step entirely. A thin local match
@@ -1624,9 +1709,13 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         #     the figure is one thing in the reading order rather than a picture plus a scatter of
         #     loose labels ("A", "B", "3 mm") a screen reader would read out as if it were prose;
         #   * everything else -> ordinary content, tagged with its own MCID.
+        def figure_text(fid: str, fbox: tuple) -> list[TextLine]:
+            return (_figure_text_strict(lines, fbox) if fid in scan_regions
+                    else _figure_text(lines, fbox))
+
         owner_figure: dict[int, int] = {}   # id(line) -> index into `described`
-        for k, (_fid, fbox) in enumerate(described):
-            for line in _figure_text(lines, fbox):
+        for k, (fid, fbox) in enumerate(described):
+            for line in figure_text(fid, fbox):
                 owner_figure[id(line)] = k
         # A figure with no description yet stays a decorative artifact (tagging it without an /Alt
         # is a conformance failure), but its own callout labels still belong to it. Left loose they
@@ -1634,8 +1723,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # as if they were prose, which is how a picture ends up in the reading order as a scatter
         # of fragments. They are held out here and drawn as artifacts with the picture.
         inside_undescribed: set[int] = set()
-        for _fid, fbox in undescribed:
-            for line in _figure_text(lines, fbox):
+        for fid, fbox in undescribed:
+            for line in figure_text(fid, fbox):
                 if id(line) not in owner_figure:
                     inside_undescribed.add(id(line))
         # An id for every line on the page, whether or not it ends up tagged. Giving a tag to a line

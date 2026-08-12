@@ -66,6 +66,15 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
   A figure's own callout labels ("A", "B", "3 mm") always belong to the figure, described or not.
   Left loose they became elements in their own right, and a picture entered the reading order as a
   scatter of fragments read out as if they were prose.
+
+  **On a scan there are no images to find.** The whole sheet is one raster, and an illustration
+  printed on it is a patch of that raster — not an object in the file — so every picture in a
+  scanned book was invisible. They are found from the pixels instead, the way a reader finds them:
+  OCR says where the words are, those are masked out, and what is left is closed up into blobs.
+  A blob becomes a figure only if it is large (≥1.5% of the page), solid enough to be a picture
+  rather than a stray mark, not mostly overlapping text, and not the scan's own dark border. A
+  missed figure is one the user marks by hand; an invented one is a picture that does not exist
+  being announced to a screen reader, so the thresholds lean toward missing.
 - **Links** — a working external link (URI) is tagged into the structure tree with an object
   reference back to its annotation. Two kinds are removed rather than carried through: an internal
   link using a legacy page/coordinate destination (PDF/UA-2 requires internal destinations to be
@@ -182,6 +191,10 @@ no caption to draw on, the box starts empty.
 | `e` | Code | `o` | Form field | `n` | No structure |
 | `x` | Not read | `[` `]` | Previous / next page | | |
 
+`+` adds the region you are on to the reading order; `−` takes it out. They are the two edits that
+are not "what is this?", so they have their own pair of buttons in the right column as well as
+their own keys.
+
 `x` is not a type — it is the one action in the list: take this out of the reading order and let it
 be drawn as page furniture instead. It marks the content as an artifact rather than untagging it,
 because untagged content is a conformance failure, not a fix. Page furniture and text inside
@@ -213,7 +226,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.21.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.22.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,

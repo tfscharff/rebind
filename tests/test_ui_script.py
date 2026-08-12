@@ -150,6 +150,26 @@ def test_the_right_column_is_the_walk_the_element_and_the_keys():
     assert 'class="keylist"' in todo, "and so do the keys"
 
 
+def test_adding_and_removing_an_element_are_an_obvious_pair():
+    # Retagging answers "what is this?". Adding and removing do not, so they get their own pair of
+    # controls and the obvious pair of keys rather than hiding among the twenty types.
+    script = _script()
+    assert "key==='+'||key==='='" in script
+    assert "key==='-'||key==='_'" in script
+    assert "function addElement(" in script
+    assert 'id="addel"' in script and 'id="delel"' in script
+
+
+def test_reading_order_and_the_element_share_one_panel():
+    script = _script()
+    todo = script[script.index("function drawTodo("):script.index("function actionFor(")]
+    assert 'class="walkhead"' in todo and 'id="typebody"' in todo
+    # The explanatory paragraph and the progress bar are gone; the count stays, because the check
+    # cannot tick without it.
+    assert "walkbar" not in script
+    assert 'id="roprogress"' in todo
+
+
 def test_nothing_has_to_be_saved_by_hand():
     # No Apply button anywhere: an edit goes to the server on its own and the header says where
     # the rebuild has got to. State that exists only in the tab is state that can be lost.
