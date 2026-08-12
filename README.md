@@ -102,14 +102,12 @@ asserting this holds for every check.
 ## Colour contrast, and the one check that stays with you
 
 Adobe reports **Logical Reading Order** and **Colour contrast** as *needs manual check* on every
-document, always. Rebind takes one off the list entirely and makes the other finishable.
+document, always. Rebind settles one of them and makes the other finishable.
 
-**Colour contrast is not on the checklist at all.** Everything on that list is there because it
-might need a decision from the person reading it, and contrast never can: nobody can look at two
-colours and compute a luminance ratio. Listing it only ever put something already settled among the
-things still to do. It is measured against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1 for large text) and
-corrected during remediation, and the report carries one line saying what was done — a receipt, not
-a task.
+**Colour contrast is on the report, and ticked off.** What it is never is a question: nobody can
+look at two colours and compute a luminance ratio, so asking would be asking for a judgement that
+cannot be made. It is measured against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1 for large text) and
+corrected during remediation; the tick is a receipt, not a task.
 
 The ink comes from the page's own declaration, which is exact; the paper is sampled from the
 rendered page, because what sits *behind* text — a filled box, a shaded row, a dark banner — is not
