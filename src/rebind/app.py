@@ -215,13 +215,23 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         job = jobs.get(request.path_params["job_id"])
         if job is None:
             return JSONResponse({"error": "No such job."}, status_code=404)
-        from rebind.remediate import EDITABLE_TAGS, TAG_KEYS
+        from rebind.remediate import (
+            ARTIFACT_KEY,
+            ARTIFACT_LABEL,
+            ARTIFACT_WHAT,
+            EDITABLE_TAGS,
+            TAG_KEYS,
+        )
 
         return JSONResponse({
             "elements": job.elements, "pages": job.page_images,
             "tags": list(EDITABLE_TAGS), "edits": job.edits,
-            "keys": [{"key": key, "tag": tag, "label": label, "what": what, "html": html}
-                     for key, tag, label, what, html in TAG_KEYS],
+            "keys": [{"key": key, "tag": tag, "label": label, "what": what}
+                     for key, tag, label, what in TAG_KEYS],
+            # Sent alongside rather than among them: taking an element out of the reading order is
+            # an action, not one more type to choose between.
+            "artifact": {"key": ARTIFACT_KEY, "tag": "Artifact", "label": ARTIFACT_LABEL,
+                         "what": ARTIFACT_WHAT},
         })
 
     async def job_edits(request: Request) -> JSONResponse:

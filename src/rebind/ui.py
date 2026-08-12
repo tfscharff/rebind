@@ -181,8 +181,8 @@ li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:non
   flex-direction:column;justify-content:center}
 .typebar .what{font-family:var(--serif);font-size:1.9rem;line-height:1.1;margin:0;
   letter-spacing:-.02em;display:flex;align-items:baseline;gap:.55rem;flex-wrap:wrap}
-.typebar .what .tag{font-family:var(--mono);font-size:.9rem;color:var(--stamp);
-  letter-spacing:0;font-weight:600}
+.typebar .what kbd.tag{font-size:.95rem;padding:.1rem .45rem;border-color:var(--stamp);
+  color:var(--stamp);letter-spacing:0;font-weight:700;background:var(--paper)}
 .typebar .what.idle{font-size:1.05rem;color:var(--muted);font-family:var(--sans)}
 .typebar .why{margin:.2rem 0 0;color:var(--muted);font-size:.85rem}
 .typebar .hint{margin:.25rem 0 0;font-size:.75rem;color:var(--muted);font-family:var(--mono)}
@@ -245,6 +245,9 @@ li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:non
   grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.15rem .9rem}
 .palette .keys li{display:flex;gap:.5rem;align-items:baseline;padding:.2rem .3rem;border-radius:5px}
 .palette .keys li.current{background:color-mix(in srgb,var(--stamp) 12%,transparent)}
+/* An action, not a type: set apart from the list of things an element can be. */
+.palette .keys li.action{grid-column:1 / -1;margin-top:.5rem;padding-top:.5rem;
+  border-top:1px solid var(--line)}
 .palette .keys .lab{font-size:.88rem}
 .palette .keys .what{font-size:.76rem;color:var(--muted)}
 kbd{font-family:var(--mono);font-size:.72rem;background:var(--paper);border:1px solid var(--line);
@@ -368,7 +371,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // ---- State ---------------------------------------------------------------------------------
   var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
           tags_edit:{},removed:{},alts:{},focused:null,figures:[],checks:[],status:null,
-          palette:false,walked:{}};
+          palette:false,walked:{},artifact:null,allKeys:[]};
 
   function done(id, name, s){
     if(elapsedTimer) clearInterval(elapsedTimer);
@@ -659,6 +662,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     fetch('/jobs/'+id+'/elements').then(function(r){return r.json();}).then(function(d){
       if(d.error){ host.innerHTML=''; return; }
       ed.elements=d.elements||[]; ed.pages=d.pages||{}; ed.tags=d.tags||[]; ed.keys=d.keys||[];
+      // "Not read" is an action, not a type, so it arrives separately -- but it answers to a key
+      // exactly like the types do, so the editor holds them in one list for lookup.
+      ed.artifact=d.artifact||null;
+      ed.allKeys=ed.artifact? ed.keys.concat([ed.artifact]) : ed.keys;
       ed.tags_edit=(d.edits&&d.edits.tags)||{};
       ed.removed={}; ((d.edits&&d.edits.removed)||[]).forEach(function(k){ ed.removed[k]=true; });
       ed.alts=(d.edits&&d.edits.alts)||{};
@@ -677,13 +684,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
 
   function keyFor(tag){
     var found=null;
-    ed.keys.forEach(function(k){ if(k.tag===tag) found=k; });
+    ed.allKeys.forEach(function(k){ if(k.tag===tag) found=k; });
     return found;
   }
 
   function tagLabel(t){
     var k=keyFor(t);
-    return k? k.label : t;
+    return k? k.label : (t==='Artifact'? 'Not read' : t);
   }
 
   function drawStage(){
@@ -738,8 +745,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     if(!bar) return;
     var k=kindOf(e), key=keyFor(k);
     var alt=ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'');
+    // The key beside the name, so the way to change it is learned by meeting it rather than by
+    // reading a legend: every element you land on tells you which press would have set it.
     var h='<p class="what">'+esc(key? key.label : k)+
-      (key&&key.html? '<span class="tag">'+esc(key.html)+'</span>' : '')+'</p>'+
+      (key&&key.key? '<kbd class="tag">'+esc(key.key)+'</kbd>' : '')+'</p>'+
       '<p class="why">'+esc(key&&key.what? key.what : 'A structure element.')+'</p>';
     if(k==='Figure'){
       h+='<div class="altbox"><textarea id="altnow" rows="2" data-id="'+esc(e.id)+'" '+
@@ -822,7 +831,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         // The key sets the type straight away. Enter is only for when you cannot remember which
         // key you want; knowing it should never cost you a menu.
         var hit=null;
-        ed.keys.forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });
+        ed.allKeys.forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });
         if(hit){ ev.preventDefault(); setKind(e.id, hit); }
       });
     });
@@ -847,8 +856,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     host.setAttribute('aria-label','Change what this element is');
     host.innerHTML='<div class="card"><h2>What is this?</h2>'+
       '<p class="sub">Press a key. Esc leaves it as it is.</p><ul class="keys">'+
-      ed.keys.map(function(k){
-        return '<li'+(k.tag===current?' class="current"':'')+'><kbd>'+esc(k.key)+'</kbd>'+
+      ed.allKeys.map(function(k){
+        return '<li'+(k.tag===current?' class="current"':'')+
+          (k.tag==='Artifact'?' class="action"':'')+'><kbd>'+esc(k.key)+'</kbd>'+
           '<span><span class="lab">'+esc(k.label)+'</span><br>'+
           '<span class="what">'+esc(k.what||'')+'</span></span></li>';
       }).join('')+'</ul></div>';
@@ -861,7 +871,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       if(ev.key==='Escape'){ ev.preventDefault(); closePalette(); focusBox(elementId); return; }
       var pressed=(ev.key||'').toLowerCase();
       var hit=null;
-      ed.keys.forEach(function(k){ if(k.key===pressed) hit=k.tag; });
+      ed.allKeys.forEach(function(k){ if(k.key===pressed) hit=k.tag; });
       if(hit){ ev.preventDefault(); closePalette(); setKind(elementId, hit); }
     });
     host.addEventListener('click',function(ev){

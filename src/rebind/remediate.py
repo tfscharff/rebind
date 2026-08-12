@@ -945,52 +945,54 @@ class Edits:
 # to without guessing. So it is not offered: a table of contents that names the wrong targets is
 # worse than one tagged as ordinary paragraphs.
 CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "Formula", "Form")
-GROUPING_TAGS = ("Sect", "Div", "Part", "Art", "Index", "NonStruct")
+# /Part is not offered: it is a container with no behaviour of its own that /Sect and /Div do not
+# already have, so it was one more thing to choose between for no gain to a reader.
+GROUPING_TAGS = ("Sect", "Div", "Art", "Index", "NonStruct")
 SPECIAL_TAGS = ("Figure", "Table", "L", "Caption")
 EDITABLE_TAGS = CONTENT_TAGS + GROUPING_TAGS + SPECIAL_TAGS
 
 # One keystroke per type, so retagging is Tab-and-press rather than Tab-and-open-a-menu. Chosen for
 # the first letter of the thing wherever it is free, and the digits for heading levels. Defined
 # here rather than in the page's script so the keys, the labels and the tags cannot drift apart.
-# The third column is what the editor shows in big letters when an element has focus; the fourth
-# says what the type *means* -- a librarian retagging a page should not have to already know what a
-# PDF structure type does, and "BlockQuote" is not self-explanatory to anyone who doesn't. The
-# fifth is the HTML element that does the same job, shown beside the name: almost everyone who
-# touches this has met HTML, and "Block quote <blockquote>" lands instantly where the PDF name
-# alone does not. It is the nearest equivalent, not a conversion -- /Part and /Sect both map onto
-# <section>, and /Artifact is not an element at all.
+# The third column is what the editor shows in big letters when an element has focus, with its key
+# beside it; the fourth says what the type *means* -- a librarian retagging a page should not have
+# to already know what a PDF structure type does, and "BlockQuote" is not self-explanatory to
+# anyone who doesn't.
+#
+# /Artifact is not here either. It is not a structure type -- it is the absence of one -- and
+# offering it alongside real types put a non-answer in the list of answers.
 TAG_KEYS = (
-    ("p", "P", "Paragraph", "Ordinary body text. The default, and right for most things.", "<p>"),
-    ("1", "H1", "Heading 1", "The document's top-level heading — usually its title.", "<h1>"),
-    ("2", "H2", "Heading 2", "A major section heading beneath a Heading 1.", "<h2>"),
-    ("3", "H3", "Heading 3", "A subsection heading beneath a Heading 2.", "<h3>"),
-    ("4", "H4", "Heading 4", "A fourth-level heading.", "<h4>"),
-    ("5", "H5", "Heading 5", "A fifth-level heading.", "<h5>"),
-    ("6", "H6", "Heading 6", "A sixth-level heading — the deepest there is.", "<h6>"),
-    ("q", "BlockQuote", "Block quote", "An extended quotation set apart from the body text.",
-     "<blockquote>"),
+    ("p", "P", "Paragraph", "Ordinary body text. The default, and right for most things."),
+    ("1", "H1", "Heading 1", "The document's top-level heading — usually its title."),
+    ("2", "H2", "Heading 2", "A major section heading beneath a Heading 1."),
+    ("3", "H3", "Heading 3", "A subsection heading beneath a Heading 2."),
+    ("4", "H4", "Heading 4", "A fourth-level heading."),
+    ("5", "H5", "Heading 5", "A fifth-level heading."),
+    ("6", "H6", "Heading 6", "A sixth-level heading — the deepest there is."),
+    ("q", "BlockQuote", "Block quote", "An extended quotation set apart from the body text."),
     ("c", "Caption", "Caption", "The text that describes a figure or table. Rebind puts it inside "
-                                "the figure or table it belongs to.", "<figcaption>"),
+                                "the figure or table it belongs to."),
     ("f", "Figure", "Figure", "A picture, chart or diagram. Needs a description, so a screen "
-                              "reader has something to say about it.", "<figure>"),
-    ("t", "Table", "Table", "A grid of data. Rebind builds the rows, cells and column headers.",
-     "<table>"),
-    ("l", "L", "List", "A bulleted or numbered list.", "<ul>"),
-    ("s", "Sect", "Section", "A container grouping related content together.", "<section>"),
-    ("d", "Div", "Division", "A generic container, when nothing more specific fits.", "<div>"),
-    ("a", "Art", "Article", "A self-contained piece of writing within the document.", "<article>"),
-    ("r", "Part", "Part", "A major division of a long document.", "<section>"),
-    ("i", "Index", "Index", "An index of terms and where they appear.", "<nav>"),
-    ("n", "NonStruct", "No structure", "Content that carries no structural meaning of its own.",
-     "<span>"),
-    ("m", "Formula", "Formula (maths)", "A mathematical or chemical expression.", "<math>"),
-    ("e", "Code", "Code", "Program code or other text where the exact characters matter.",
-     "<code>"),
-    ("o", "Form", "Form field", "An interactive field a reader fills in.", "<form>"),
-    ("x", "Artifact", "Not read (page furniture)",
-     "A running head, footer or page number — on the page, but skipped by a screen reader. "
-     "Give it a type to have it read after all.", "aria-hidden"),
+                              "reader has something to say about it."),
+    ("t", "Table", "Table", "A grid of data. Rebind builds the rows, cells and column headers."),
+    ("l", "L", "List", "A bulleted or numbered list."),
+    ("s", "Sect", "Section", "A container grouping related content together."),
+    ("d", "Div", "Division", "A generic container, when nothing more specific fits."),
+    ("a", "Art", "Article", "A self-contained piece of writing within the document."),
+    ("i", "Index", "Index", "An index of terms and where they appear."),
+    ("n", "NonStruct", "No structure", "Content that carries no structural meaning of its own."),
+    ("m", "Formula", "Formula (maths)", "A mathematical or chemical expression."),
+    ("e", "Code", "Code", "Program code or other text where the exact characters matter."),
+    ("o", "Form", "Form field", "An interactive field a reader fills in."),
 )
+
+# Not a type, so not in TAG_KEYS -- an action, on its own key: take this out of the reading order
+# and let it be drawn as page furniture instead. Page furniture Rebind already identified is an
+# artifact without anyone pressing anything; this is for the one it got wrong.
+ARTIFACT_KEY = "x"
+ARTIFACT_LABEL = "Not read"
+ARTIFACT_WHAT = ("Page furniture — on the page, but skipped by a screen reader. Give it a type to "
+                 "have it read after all.")
 
 
 def _element_records(src_page, plan: list[dict], lines: list[TextLine],

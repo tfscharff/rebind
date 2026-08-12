@@ -55,11 +55,16 @@ def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
         assert expected in body["tags"], body["tags"]
     keys = {entry["key"] for entry in body["keys"]}
     assert len(keys) == len(body["keys"]), "every hotkey must be unique"
-    assert {"p", "1", "q", "c", "f", "t", "x"} <= keys, sorted(keys)
+    assert {"p", "1", "q", "c", "f", "t"} <= keys, sorted(keys)
     # Every key carries an explanation: the editor shows what a type *means* when it has focus,
     # because "BlockQuote" tells a librarian nothing on its own.
     for entry in body["keys"]:
         assert entry["what"], f"{entry['tag']} has no explanation"
+    # Taking an element out of the reading order is an action, not one more type to choose
+    # between, so it arrives beside the types rather than among them -- with its own key.
+    assert body["artifact"]["tag"] == "Artifact"
+    assert body["artifact"]["key"] not in keys
+    assert "Artifact" not in {entry["tag"] for entry in body["keys"]}
     for element in body["elements"]:
         assert 0 <= element["left"] <= 100 and 0 <= element["top"] <= 100, element
 

@@ -238,9 +238,11 @@ def _contrast_check(contrast: dict) -> Check:
     fix, so it is stated plainly and asks nothing of them.
     """
     if not contrast.get("measured"):
-        return Check(DOCUMENT, "Colour contrast", NOT_APPLICABLE,
-                     "The document declares no text colours to measure — a scan's text is part of "
-                     "its picture, and repainting it would mean altering the scan.")
+        # A pass, not "not applicable". Nothing here fails, and nothing is being asked of anyone --
+        # a dash beside it reads as an item still outstanding, which is the opposite of true.
+        return Check(DOCUMENT, "Colour contrast", PASS,
+                     "Nothing in this document sets a text colour that could fail — a scan's words "
+                     "are part of its picture, and there is no colour choice to score.")
     corrected = contrast.get("darkened") or 0
     fixed = (f" {corrected} text colour{'s were' if corrected != 1 else ' was'} corrected to get "
              "there, each keeping its hue." if corrected else "")

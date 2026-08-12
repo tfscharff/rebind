@@ -138,9 +138,9 @@ Each element Rebind tagged is drawn over the page and is a tab stop, in reading 
 through the page is meeting it as a screen reader will. Tab past the last element and the next page
 opens, so a whole document is one unbroken walk.
 
-Land on an element and the chooser names it in large type — with its nearest **HTML equivalent**
-beside it (`Block quote <blockquote>`), which is the part most people recognise on sight — and says
-what that type means. Pressing its key sets it and moves you straight to the next element, so
+Land on an element and the chooser names it in large type, **with the key that sets it** beside the
+name, and says what that type means — so the keys are learned by meeting them rather than by
+reading a legend. Pressing a key sets the type and moves you straight to the next element, so
 correcting a page is one stream of keystrokes with no Tab in between. `Enter` is only for when you
 cannot remember which key you want: it opens a floating list of every type.
 
@@ -149,14 +149,16 @@ cannot remember which key you want: it opens a floating list of every type.
 | `p` | Paragraph | `q` | Block quote | `s` | Section |
 | `1`–`6` | Heading 1–6 | `c` | Caption | `d` | Division |
 | `f` | Figure | `t` | Table | `a` | Article |
-| `l` | List | `m` | Formula | `r` | Part |
-| `e` | Code | `o` | Form field | `i` | Index |
-| `n` | No structure | `x` | Not read | `[` `]` | Previous / next page |
+| `l` | List | `m` | Formula | `i` | Index |
+| `e` | Code | `o` | Form field | `n` | No structure |
+| `x` | Not read | `[` `]` | Previous / next page | | |
 
-Removing an element (`x`) marks its content as an artifact rather than untagging it — untagged
-content is a conformance failure, not a fix. Page furniture and text inside figures are drawn
-hatched as "not read"; giving one a type puts it into the reading order, so nothing is one-way. A
-figure's description is typed in place, above the page (`Space` while it has focus).
+`x` is not a type — it is the one action in the list: take this out of the reading order and let it
+be drawn as page furniture instead. It marks the content as an artifact rather than untagging it,
+because untagged content is a conformance failure, not a fix. Page furniture and text inside
+figures are drawn hatched as "not read"; giving one a type puts it into the reading order, so
+nothing is one-way. A figure's description is typed in place, in the chooser (`Space` while the
+figure has focus).
 
 **Right — what needs you.** Every rule that could not be ticked, each next to the one thing that
 would tick it: the images that need describing, with a thumbnail and a box; the measured contrast
@@ -168,7 +170,9 @@ afterwards, so grouping decisions change too. Every offered type has a test that
 validates the result, because what is legal here is not obvious: `/Caption` and `/Quote` are
 illegal directly under the document, `/Aside` is not a PDF 2.0 name at all, a grouping element may
 not hold content directly (its text is wrapped in a `/P`), a `/Figure` needs an `/Alt`, and a
-`/Caption` has to be nested inside the figure or table it captions.
+`/Caption` has to be nested inside the figure or table it captions. `/Part` is not offered — it is
+a container that does nothing `/Sect` and `/Div` do not already do, so it was one more thing to
+choose between for no gain to a reader.
 
 **Command line.**
 
@@ -181,7 +185,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.18.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.19.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,

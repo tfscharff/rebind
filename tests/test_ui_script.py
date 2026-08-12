@@ -125,18 +125,19 @@ def test_a_hotkey_sets_the_type_without_opening_anything():
     # Enter is for when you cannot remember the key. Knowing it must never cost you a menu, and
     # setting a type must move you on without a Tab, so a page is one stream of keystrokes.
     script = _script()
-    assert "ed.keys.forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });" in script
+    assert "ed.allKeys.forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });" in script
     assert "if(hit){ ev.preventDefault(); setKind(e.id, hit); }" in script
     assert "if(at>=0 && at+1<boxes.length){ boxes[at+1].focus(); return; }" in script
 
 
-def test_the_element_chooser_sits_below_the_page_and_names_its_html_tag():
+def test_the_element_chooser_sits_below_the_page_and_shows_the_key_that_sets_it():
     page = index_html()
     script = _script()
     # The order in the middle column: keys, page, chooser, pager.
     assert script.index('class="sheetwrap"') < script.index('class="typebar"')
-    assert '<span class="tag">' in script and "key.html" in script
-    assert ".typebar .what .tag{font-family:var(--mono)" in page
+    # The key beside the name, so it is learned by meeting it rather than by reading a legend.
+    assert '<kbd class="tag">' in script and "key.key" in script
+    assert ".typebar .what kbd.tag{" in page
 
 
 def test_enter_opens_the_hotkey_palette_and_escape_leaves_it_alone():

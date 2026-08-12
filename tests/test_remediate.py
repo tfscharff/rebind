@@ -368,20 +368,24 @@ def test_every_offered_tag_produces_a_conformant_document(tag: str, tmp_path: Pa
 def test_every_hotkey_names_a_tag_that_exists():
     from rebind.remediate import TAG_KEYS
 
-    keys = [key for key, _tag, _label, _what, _html in TAG_KEYS]
+    from rebind.remediate import ARTIFACT_KEY
+
+    keys = [key for key, _tag, _label, _what in TAG_KEYS]
     assert len(keys) == len(set(keys)), "hotkeys must be unique"
-    for key, tag, label, what, html in TAG_KEYS:
+    for key, tag, label, what in TAG_KEYS:
         assert len(key) == 1, f"{tag}: a hotkey should be one keystroke, got {key!r}"
-        assert tag in EDITABLE_TAGS or tag == "Artifact", tag
+        assert tag in EDITABLE_TAGS, tag
         assert label, tag
         # The editor shows this when the element has focus. A tag with no explanation is a tag a
         # librarian has to already understand to use, which defeats the point of the editor.
         assert what and what != label, f"{tag}: needs an explanation of what it means"
-        # And the nearest HTML element, shown beside the name -- the part most people recognise
-        # on sight, where the PDF structure type is jargon.
-        assert html, f"{tag}: needs its HTML equivalent"
-    assert set(EDITABLE_TAGS) <= {tag for _k, tag, _l, _w, _h in TAG_KEYS}, (
+    assert set(EDITABLE_TAGS) == {tag for _k, tag, _l, _w in TAG_KEYS}, (
         "every offered tag needs a key, or it cannot be reached from the keyboard")
+    # "Not read" is an action rather than a type, so it is not among them -- but it still has to
+    # answer to a key of its own, and that key must not collide with a type's.
+    assert ARTIFACT_KEY not in keys
+    # /Artifact is not a structure type and must never be offered as one.
+    assert "Artifact" not in EDITABLE_TAGS
 
 
 def test_a_running_footer_is_an_artifact_not_content(tmp_path: Path):
