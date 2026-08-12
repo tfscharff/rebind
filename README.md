@@ -37,7 +37,13 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
   Born-digital headings come from font size; scanned/OCR headings come from geometry — a line is a
   heading when it is distinctly taller than the body text, set apart by whitespace, and shorter
   than the column width.
-- **Paragraphs** (`/P`).
+- **Paragraphs** (`/P`) — whole paragraphs, not one per line. A screen reader pauses at every
+  element boundary, so a page tagged line by line is read as a stream of fragments. Lines are
+  joined unless the typesetting says they are not the same paragraph: the previous line stopping
+  short of the measure (in prose, every line but the last runs to the margin — the strongest signal
+  there is), a first-line indent, a gap bigger than the run's own leading, or a change of size,
+  weight, slope or face. Where the signals disagree the split is kept: a boundary wrongly removed
+  cannot be recovered from the joined text.
 - **Lists** (`/L` → `/LI` → `/LBody`).
 - **Tables** (`/Table` → `/TR` → `/TD`) as a regular grid; the top row is header cells (`/TH`)
   scoped to their column, empty cells fill gaps so rows stay aligned, and the table carries its own
@@ -49,11 +55,17 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
   which also keeps a table's rules and a page's furniture from being mistaken for figures.
   Either kind of figure is described automatically from its caption — no app interaction needed —
   including when the caption is split across a page break and its real text sits on another page.
-  A caption that is only a bare
-  label ("Fig. 8", "Fig. 8 (Continued)") is never accepted as alt text: it would tick a checker's
-  box while telling a screen-reader user nothing. Otherwise images are decorative artifacts by
-  default; the app shows each one so a description can be typed, which promotes it to a tagged
-  figure with alt text.
+  Captions are recognised by label, and the label set is wide (`Fig.`, `Figure`, `Plate`, `Chart`,
+  `Diagram`, `Scheme`, `Photograph`, `Exhibit`, `Map`, …, numbered or not), because a caption
+  Rebind fails to recognise costs the reader the whole description. Ordinary prose that merely
+  happens to sit under a picture is never used: alt text has to be the document's own description
+  of the figure. A caption that is only a bare label ("Fig. 8", "Fig. 8 (Continued)") is never
+  accepted as alt text either — it would tick a checker's box while telling a screen-reader user
+  nothing — but it *is* offered in the editor as a starting point to finish.
+
+  A figure's own callout labels ("A", "B", "3 mm") always belong to the figure, described or not.
+  Left loose they became elements in their own right, and a picture entered the reading order as a
+  scatter of fragments read out as if they were prose.
 - **Links** — a working external link (URI) is tagged into the structure tree with an object
   reference back to its annotation. Two kinds are removed rather than carried through: an internal
   link using a legacy page/coordinate destination (PDF/UA-2 requires internal destinations to be
@@ -134,7 +146,10 @@ heartbeat, and the server exits when it stops.
 
 ### The result view
 
-Three columns, with the document at twice the width of either side of it.
+Three columns, with the document at twice the width of either side of it, and **Download PDF** in
+the page header. Nothing has to be saved: an edit goes to the server on its own and the document is
+rebuilt behind you, with the header saying where that has got to. There is no Apply button to
+forget, and no state that lives only in the tab.
 
 **Left — the accessibility report.** Adobe's own rule list, in Adobe's own groups, ticked off one
 at a time against the document Rebind actually produced. Every verdict is read off the finished
@@ -143,17 +158,22 @@ intended, because a green tick is a claim. A rule the document has nothing to te
 tables) is marked *not applicable* rather than passed. Anything that did not pass is a button:
 click it and the middle column turns to the page the problem is on.
 
-**Middle — the document**, sized to the window so a whole page is always visible and nothing
-scrolls. The keys are listed above it; the page fills the space; the element chooser sits beneath.
-Each element Rebind tagged is drawn over the page and is a tab stop, in reading order, so tabbing
-through the page is meeting it as a screen reader will. Tab past the last element and the next page
-opens, so a whole document is one unbroken walk.
+**Middle — the document and nothing else**, sized to the window so a whole page is always visible
+and nothing scrolls. Each element Rebind tagged is drawn over the page and is a tab stop, in
+reading order, so tabbing through the page is meeting it as a screen reader will. Tab past the last
+element and the next page opens, so a whole document is one unbroken walk.
 
-Land on an element and the chooser names it in large type, **with the key that sets it** beside the
-name, and says what that type means — so the keys are learned by meeting them rather than by
-reading a legend. Pressing a key sets the type and moves you straight to the next element, so
-correcting a page is one stream of keystrokes with no Tab in between. `Enter` is only for when you
-cannot remember which key you want: it opens a floating list of every type.
+**Right — the walk, the element, the keys.** The reading-order progress bar at the top (why you are
+walking), the element you are standing on in the middle, the key legend at the bottom. Land on an
+element and it is named in large type, **with the key that sets it** beside the name, and what that
+type means — so the keys are learned by meeting them rather than by reading a legend. Pressing a
+key sets the type and moves you straight to the next element, so correcting a page is one stream of
+keystrokes with no Tab in between. `Enter` is only for when you cannot remember which key you want:
+it opens a floating list of every type.
+
+Land on a **figure** and a description box appears there, pre-filled with the best guess Rebind has
+— the document's own caption where there is one — and yours to rewrite. Nothing is invented: with
+no caption to draw on, the box starts empty.
 
 | key | | key | | key | |
 |---|---|---|---|---|---|
@@ -171,12 +191,11 @@ figures are drawn hatched as "not read"; giving one a type puts it into the read
 nothing is one-way. A figure's description is typed in place, in the chooser (`Space` while the
 figure has focus).
 
-**Right — what needs you.** Every rule that could not be ticked, each next to the one thing that
-would tick it: the images that need describing, with a thumbnail and a box; the measured contrast
-failures, with the button that darkens exactly those colours; the pages where the reading order was
-a real decision, as buttons that put that page in the middle column.
+Everything that did not pass sits under the report on the left, each next to the one thing that
+would fix it — the images that need describing, with a thumbnail and a box; a field for a missing
+title or language; the pages to go and look at.
 
-Applying rebuilds the document from the corrected plan rather than patching the structure tree
+Every change rebuilds the document from the corrected plan rather than patching the structure tree
 afterwards, so grouping decisions change too. Every offered type has a test that applies it and
 validates the result, because what is legal here is not obvious: `/Caption` and `/Quote` are
 illegal directly under the document, `/Aside` is not a PDF 2.0 name at all, a grouping element may
@@ -196,7 +215,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.20.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.21.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,

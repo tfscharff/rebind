@@ -64,34 +64,30 @@ def test_reading_order_stays_with_the_person_and_names_every_page(remediated: Pa
     assert [loc["page"] for loc in order["locations"]] == [1, 2, 3]
 
 
-def test_colour_contrast_is_never_an_item_on_the_list(remediated: Path):
-    # Every item on the checklist is there because it may need a decision from the person reading
-    # it. Colour contrast never can: nobody can look at two colours and compute a luminance ratio.
-    # Leaving it on the list only ever put something that was already settled among the things
-    # still to do -- so it is not a check, it is a line saying what was done.
-    for contrast in ({}, {"measured": 40, "ok": True, "darkened": 3, "failures": []},
-                     {"measured": 40, "ok": False, "darkened": 2,
-                      "failures": [{"page": 7, "ratio": 2.1}]}):
-        titles = [c["title"] for c in build_checklist(remediated, contrast=contrast)]
-        assert "Colour contrast" not in titles, contrast
+def test_colour_contrast_is_on_the_list_and_ticked_off(remediated: Path):
+    # It belongs on the report -- it is one of Adobe's rules and a librarian needs to see it
+    # settled. What it must never be is a question: nobody can look at two colours and compute a
+    # luminance ratio, so the verdict has to come from a measurement of the corrected document.
+    corrected = _by_title(build_checklist(remediated, contrast={
+        "measured": 40, "ok": True, "darkened": 3, "failures": [],
+        "lowest": {"ratio": 4.8}}))["Colour contrast"]
+    assert corrected["status"] == PASS
+    assert "3 colours were corrected" in corrected["detail"]
 
+    # Nothing to measure is a pass too, not "not applicable": nothing fails and nothing is asked,
+    # and a dash beside it reads as an item still outstanding.
+    nothing = _by_title(build_checklist(remediated, contrast={}))["Colour contrast"]
+    assert nothing["status"] == PASS
+    assert "scan" in nothing["detail"]
 
-def test_the_contrast_note_says_what_was_done_and_asks_nothing():
-    from rebind.checklist import contrast_note
-
-    done = contrast_note({"measured": 40, "ok": True, "darkened": 3, "failures": []})
-    assert "40 lines" in done and "3 colour" in done
-
-    # Nothing to measure is not a shortfall: a scan's words are part of its picture.
-    assert "scan" in contrast_note({"measured": 0})
-
-    # A line that could not be corrected is still stated -- and still not handed over as a task,
-    # because there is nothing the reader could do with it.
-    left = contrast_note({"measured": 40, "ok": False, "darkened": 2,
-                          "failures": [{"page": 7}, {"page": 9}]})
-    assert "2 of 40" in left and "could not" in left
-    for word in ("you", "your", "please", "check"):
-        assert word not in left.lower().split(), left
+    # What Rebind could not repaint is still stated, with the pages -- and framed as a limitation
+    # here rather than a judgement for the reader to make.
+    left = _by_title(build_checklist(remediated, contrast={
+        "measured": 40, "ok": False, "darkened": 2,
+        "failures": [{"page": 7}, {"page": 9}]}))["Colour contrast"]
+    assert left["status"] == NEEDS_YOU
+    assert [loc["page"] for loc in left["locations"]] == [7, 9]
+    assert "could not repaint" in left["need"]
 
 
 def test_nothing_is_reported_without_a_way_to_act_on_it(remediated: Path):

@@ -85,7 +85,16 @@ FIGURE_MAX_COVERAGE = 0.6
 # earlier cap of 8 silently truncated its alt text mid-sentence ("...connected via silicone tubing
 # through two"), which reads worse to a screen reader than no caption at all. The continuation-gap
 # rule, not the line count, is what actually bounds a caption block.
-CAPTION_MARKER_RE = re.compile(r"^fig(?:ure)?s?\.?\s*(\d+)", re.IGNORECASE)
+#
+# The marker set is wider than "Fig." because publishers label figures a dozen ways and a caption
+# Rebind does not recognise costs the reader the whole description. The number is optional: an
+# unnumbered "Photograph of the reading room." below a picture is still that picture's caption.
+# What is NOT accepted is ordinary prose that merely happens to sit under an image -- alt text has
+# to be the document's own description of the figure, and a paragraph that follows one is not that.
+CAPTION_MARKER_RE = re.compile(
+    r"^(?:fig(?:ure)?s?|plate|chart|graph|diagram|scheme|illus(?:tration)?|image|photo(?:graph)?"
+    r"|exhibit|map|panel)\b\.?\s*(\d+)?",
+    re.IGNORECASE)
 CAPTION_MAX_GAP_PT = 20.0
 CAPTION_CONTINUATION_GAP_PT = 10.0
 CAPTION_MAX_LINES = 24
@@ -141,6 +150,30 @@ MAX_HEADING_BURST_RUN = 2
 # side-by-side cells to detect alone) and are kept so no row is dropped. The gap is bounded so prose
 # between two separate tables cannot merge them: at most this many consecutive undetected lines.
 MAX_INTERNAL_TABLE_GAP = 2
+
+# --- Paragraphs -------------------------------------------------------------------------------
+# A paragraph is several lines, and tagging each line as its own /P is wrong in a way that matters:
+# a screen reader pauses at every element boundary, so a page of prose read as forty paragraphs is
+# read as forty fragments. Lines are joined into one /P unless something says they are not the same
+# paragraph. The signals below are the ones typesetting actually leaves behind, in rough order of
+# how much they can be trusted:
+#
+#   * The previous line stops short of the measure. In justified or ragged-right prose every line
+#     but the last runs to the right margin, so a short line is the end of its paragraph. This is
+#     the strongest signal there is, and it is what makes the rest mostly unnecessary.
+#   * The next line is indented past the paragraph's own left edge -- a first-line indent, the
+#     other half of the same convention.
+#   * The vertical gap is bigger than the run's own leading (space between paragraphs).
+#   * The typography changes: a different size, weight, slope or face is a different thing.
+#
+# Where the signals disagree, the split is kept: two paragraphs wrongly joined lose a boundary a
+# reader needs, and a boundary is not recoverable from the joined text.
+PARAGRAPH_ALIGN_TOLERANCE_PT = 3.0    # left edges this close count as the same margin
+PARAGRAPH_INDENT_MIN_PT = 4.0         # a first line indented at least this much starts a paragraph
+PARAGRAPH_RAGGED_FRACTION = 0.10      # a line ending this far short of the measure ends its own
+PARAGRAPH_GAP_SLACK = 0.55            # extra leading (in line heights) that still reads as one
+PARAGRAPH_COLUMN_TOLERANCE_PT = 36.0  # left edges within this belong to the same column
+PARAGRAPH_SIZE_TOLERANCE = 0.18       # fraction by which two lines' sizes may differ and still match
 
 # Reading-order review thumbnails: big enough to recognize the page's shape and read the block
 # numbers laid over it, small enough that a dozen of them stay a page the browser renders at once.
@@ -235,7 +268,7 @@ def _vector_figures(src_page, lines: list[TextLine],
         return []
 
     # Caption marker lines, top of page downwards. Each one closes off the band below the previous.
-    markers = sorted((ln for ln in lines if _caption_number(ln.text)),
+    markers = sorted((ln for ln in lines if _is_caption_marker(ln.text)),
                      key=lambda ln: -ln.bbox[3])
     figures: list[tuple[str, tuple, str]] = []
     band_top = src_page.height
@@ -282,9 +315,19 @@ def _horizontally_overlaps(a: tuple[float, float, float, float],
     return a[0] < b[2] and b[0] < a[2]
 
 
+def _is_caption_marker(text: str) -> bool:
+    """Whether a line opens with a caption label of any kind, numbered or not."""
+    return CAPTION_MARKER_RE.match(text.strip()) is not None
+
+
 def _caption_number(text: str) -> str | None:
-    """The figure number a line's caption marker names ("Fig. 8" -> "8"), or None if the line
-    doesn't start with one."""
+    """The figure number a line's caption marker names ("Fig. 8" -> "8").
+
+    None when the line is not a caption *or* when it is an unnumbered one ("Photograph of the
+    reading room."). The number's only job is matching a caption to its figure across a page
+    break, which an unnumbered caption cannot do anyway -- so the two cases are the same answer
+    to this question, and `_is_caption_marker` is what asks whether a line is a caption at all.
+    """
     match = CAPTION_MARKER_RE.match(text.strip())
     return match.group(1) if match else None
 
@@ -293,7 +336,7 @@ def _caption_block(ordered: list[TextLine]) -> str | None:
     """`ordered[0]` must be a caption-marker line; concatenate it with any tightly-following
     continuation lines (small vertical gap -- the same paragraph, not unrelated content) into the
     full caption text, capped at CAPTION_MAX_LINES as a safety backstop."""
-    if not ordered or _caption_number(ordered[0].text) is None:
+    if not ordered or not _is_caption_marker(ordered[0].text):
         return None
     block = [ordered[0]]
     for prev, nxt in zip(ordered, ordered[1:]):
@@ -835,7 +878,7 @@ def _figure_text(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
     """
     floor = max(
         (ln.bbox[3] for ln in lines
-         if _caption_number(ln.text) and ln.bbox[3] <= bbox[1] + FIGURE_TEXT_TOLERANCE_PT),
+         if _is_caption_marker(ln.text) and ln.bbox[3] <= bbox[1] + FIGURE_TEXT_TOLERANCE_PT),
         default=None,
     )
     candidates = [ln for ln in lines if floor is None or ln.bbox[3] > floor]
@@ -1048,6 +1091,7 @@ def plan_page(lines: list[TextLine], page_roles: list[str]) -> list[dict]:
     n = len(lines)
     table_line_ids = detect_table_lines(lines)
     is_table = [id(line) in table_line_ids for line in lines]
+    measures = _column_measures(lines, page_roles)
     plan: list[dict] = []
     i = 0
     while i < n:
@@ -1074,9 +1118,79 @@ def plan_page(lines: list[TextLine], page_roles: list[str]) -> list[dict]:
                 i = j
                 continue
 
+        # Body text runs on until something says the paragraph has ended. Everything else -- a
+        # heading, a caption, page furniture -- is one element per line by nature.
+        if page_roles[i] == "P":
+            j = i
+            while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == "P"
+                   and not _is_list_item(lines[j + 1].text)
+                   and _same_paragraph(lines, i, j + 1, measures)):
+                j += 1
+            plan.append({"kind": "P", "first": i, "last": j})
+            i = j + 1
+            continue
+
         plan.append({"kind": page_roles[i], "first": i, "last": i})
         i += 1
     return plan
+
+
+def _column_measures(lines: list[TextLine], roles: list[str]) -> list[tuple[float, float]]:
+    """For each line, the (left, right) margins of the column of body text it sits in.
+
+    The right margin is what tells a last line from a middle one, and it has to come from the text
+    itself: nothing in a PDF states where a column ends. It is taken as the furthest right any body
+    line in the same column reaches, which is the measure by definition -- at least one line in a
+    paragraph of prose runs the full width of it.
+    """
+    body = [ln for ln, role in zip(lines, roles) if role == "P"]
+    out: list[tuple[float, float]] = []
+    for line in lines:
+        near = [ln for ln in body
+                if abs(ln.bbox[0] - line.bbox[0]) <= PARAGRAPH_COLUMN_TOLERANCE_PT]
+        if not near:
+            out.append((line.bbox[0], line.bbox[2]))
+            continue
+        out.append((min(ln.bbox[0] for ln in near), max(ln.bbox[2] for ln in near)))
+    return out
+
+
+def _same_paragraph(lines: list[TextLine], first: int, index: int,
+                    measures: list[tuple[float, float]]) -> bool:
+    """Whether `lines[index]` continues the paragraph that started at `lines[first]`."""
+    previous, current = lines[index - 1], lines[index]
+    if previous.bold != current.bold or previous.italic != current.italic:
+        return False
+    # Size is compared with tolerance, and the face only when both lines are born-digital. A
+    # recognized line has neither exactly: its "size" is derived from the height of a box drawn
+    # around inked pixels, which varies line to line with whatever ascenders and descenders happen
+    # to be in it, and its font name is whatever the recognizer reports. Demanding equality there
+    # refused nearly every join on a scan -- 470 paragraphs of 15 words each on a real one, which
+    # is a page of prose read as a list.
+    if abs(previous.size - current.size) > max(PARAGRAPH_SIZE_TOLERANCE * max(
+            previous.size, current.size, 1.0), 0.5):
+        return False
+    born_digital = previous.ocr_confidence is None and current.ocr_confidence is None
+    if born_digital and previous.font != current.font:
+        return False
+
+    height = max(previous.bbox[3] - previous.bbox[1], 1.0)
+    gap = previous.bbox[1] - current.bbox[3]
+    if gap < -height:
+        return False        # not below the previous line at all: a new column, or a new page
+    if gap > height * PARAGRAPH_GAP_SLACK:
+        return False        # set apart by more than its own leading
+
+    left, right = measures[index - 1]
+    if previous.bbox[2] < right - PARAGRAPH_RAGGED_FRACTION * max(right - left, 1.0):
+        return False        # the previous line stopped short of the measure, so it ended there
+
+    # The paragraph's own left margin is set by its *second* line: the first may be indented, and
+    # comparing against an indented first line would split every indented paragraph in two.
+    margin = lines[first + 1].bbox[0] if index > first + 1 else current.bbox[0]
+    if current.bbox[0] > margin + PARAGRAPH_INDENT_MIN_PT:
+        return False        # indented: the first line of the next paragraph
+    return abs(current.bbox[0] - margin) <= PARAGRAPH_ALIGN_TOLERANCE_PT
 
 
 def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
@@ -1514,6 +1628,16 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         for k, (_fid, fbox) in enumerate(described):
             for line in _figure_text(lines, fbox):
                 owner_figure[id(line)] = k
+        # A figure with no description yet stays a decorative artifact (tagging it without an /Alt
+        # is a conformance failure), but its own callout labels still belong to it. Left loose they
+        # became elements in their own right -- "A", "B", "3 mm" tagged as paragraphs and read out
+        # as if they were prose, which is how a picture ends up in the reading order as a scatter
+        # of fragments. They are held out here and drawn as artifacts with the picture.
+        inside_undescribed: set[int] = set()
+        for _fid, fbox in undescribed:
+            for line in _figure_text(lines, fbox):
+                if id(line) not in owner_figure:
+                    inside_undescribed.add(id(line))
         # An id for every line on the page, whether or not it ends up tagged. Giving a tag to a line
         # Rebind set aside is how an element is *added*: the exact inverse of removing one, and the
         # answer to "this running head really is a heading" or "that label inside the figure needs
@@ -1523,7 +1647,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         is_artifact = [
             index not in promoted
             and id(ln) not in owner_figure
-            and profile.role_of(ln, page_height=src_page.height) == "artifact"
+            and (id(ln) in inside_undescribed
+                 or profile.role_of(ln, page_height=src_page.height) == "artifact")
             for index, ln in enumerate(lines)
         ]
 
@@ -1700,8 +1825,13 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             editor_image, (0.0, 0.0, src_page.width, src_page.height),
             src_page.width, src_page.height, max_side=EDITOR_PAGE_PX)
         for fid, bbox in undescribed:
+            # A caption too thin to be used as alt text on its own ("Fig. 8", or a "(Continued)"
+            # page-break artifact) is still the best opening line anyone has: it is offered to the
+            # editor as a starting point for the person to finish, never written into the document
+            # unedited. Nothing is invented -- an empty box stays empty.
             undescribed_figures.append({
                 "id": fid, "page": src_page.number,
+                "alt_guess": (anchored.get(fid) or _figure_caption(lines, bbox) or "").strip(),
                 "thumb": _crop_data_uri(page_image, bbox, src_page.width, src_page.height)})
 
     struct_root.ParentTree = pdf.make_indirect(Dictionary(Nums=parent_tree_nums))

@@ -141,10 +141,10 @@ def test_a_finished_job_reports_the_two_manual_check_findings(tmp_path: Path):
     assert contrast["ok"] is True, contrast["failures"]
     assert contrast["darkened"] > 0
     assert contrast["lowest"]["ratio"] >= 4.5
-    # Contrast is not on the checklist at all -- it is never the reader's decision. What was done
-    # about it comes back as a line for the report header instead.
-    assert "Colour contrast" not in {c["title"] for c in status["checklist"]}
-    assert "correcting 1 colour" in status["contrast_note"], status["contrast_note"]
+    # It is on the report and ticked off -- settled by measurement, never put to the reader.
+    contrast_check = {c["title"]: c for c in status["checklist"]}["Colour contrast"]
+    assert contrast_check["status"] == "pass"
+    assert "1 colour was corrected" in contrast_check["detail"], contrast_check["detail"]
 
 
 def test_a_report_fix_is_applied_and_survives_a_later_rebuild(tmp_path: Path):

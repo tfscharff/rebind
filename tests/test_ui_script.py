@@ -130,14 +130,37 @@ def test_a_hotkey_sets_the_type_without_opening_anything():
     assert "if(at>=0 && at+1<boxes.length){ boxes[at+1].focus(); return; }" in script
 
 
-def test_the_element_chooser_sits_below_the_page_and_shows_the_key_that_sets_it():
-    page = index_html()
+def test_the_middle_column_holds_the_document_and_nothing_else():
+    # The keys and the element chooser moved to the right column, beside the reading-order block
+    # they belong with. The middle is the page and its pager.
     script = _script()
-    # The order in the middle column: keys, page, chooser, pager.
-    assert script.index('class="sheetwrap"') < script.index('class="typebar"')
+    stage = script[script.index("function drawStage("):script.index("function idleBanner(")]
+    assert 'class="sheetwrap"' in stage and 'class="pager"' in stage
+    assert 'class="typebar"' not in stage and 'class="stagetop"' not in stage
     # The key beside the name, so it is learned by meeting it rather than by reading a legend.
     assert '<kbd class="tag">' in script and "key.key" in script
-    assert ".typebar .what kbd.tag{" in page
+    assert ".typebar .what kbd.tag{" in index_html()
+
+
+def test_the_right_column_is_the_walk_the_element_and_the_keys():
+    script = _script()
+    todo = script[script.index("function drawTodo("):script.index("function actionFor(")]
+    assert "Reading order" in todo
+    assert 'id="typebar"' in todo, "the element chooser lives here now"
+    assert 'class="keylist"' in todo, "and so do the keys"
+
+
+def test_nothing_has_to_be_saved_by_hand():
+    # No Apply button anywhere: an edit goes to the server on its own and the header says where
+    # the rebuild has got to. State that exists only in the tab is state that can be lost.
+    script = _script()
+    assert "edapply" not in script, "the Apply button should be gone"
+    assert "function applyEdits(" in script and "setTimeout(sendEdits" in script
+    assert "applyEdits();" in script
+    # The rebuild must not throw the workspace away -- that would lose the user's place mid-edit.
+    assert "function awaitRebuild(" in script
+    assert "renderWorking" not in script[script.index("function sendEdits("):
+                                         script.index("function refreshElements(")]
 
 
 def test_enter_opens_the_hotkey_palette_and_escape_leaves_it_alone():

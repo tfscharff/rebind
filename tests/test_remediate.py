@@ -847,6 +847,52 @@ def test_invisible_mode_restored_by_Q_does_not_delete_visible_text():
     assert b"visible" in body, "text after a restored graphics state was wrongly deleted"
 
 
+def test_a_paragraph_is_one_element_not_one_per_line(tmp_path: Path):
+    # Tagging each line as its own /P is wrong in a way that matters: a screen reader pauses at
+    # every element boundary, so a page of prose comes out as a stream of fragments. Lines are
+    # joined into one paragraph unless the typesetting says otherwise.
+    from tests.fixtures import born_digital_pdf
+
+    source = born_digital_pdf(
+        "<p>" + " ".join(f"Sentence number {i} of the first paragraph, long enough that this "
+                         "paragraph must wrap over several lines on the page." for i in range(4))
+        + "</p>"
+        "<p>" + " ".join(f"Sentence number {i} of the second paragraph, also long enough to "
+                         "wrap over more than one line of its own." for i in range(4)) + "</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T")
+
+    paragraphs = [e for e in result.elements if e["kind"] == "P"]
+    assert len(paragraphs) == 2, [p["text"][:60] for p in paragraphs]
+    # And the two are still two: joining them would lose a boundary a reader needs, and no amount
+    # of later processing can put it back.
+    assert "first paragraph" in paragraphs[0]["text"]
+    assert "second paragraph" in paragraphs[1]["text"]
+    # Every line's text survives the join -- this groups lines, it never drops one. (The editor's
+    # own preview is capped at 300 characters, so the document itself is what to check.)
+    text = " ".join(_selectable_text(out).split())
+    assert "Sentence number 3 of the first paragraph" in text
+    assert "Sentence number 3 of the second paragraph" in text
+    # Each one spans several lines of the page, which is the whole point.
+    assert all(p["height"] > 5 for p in paragraphs), paragraphs
+
+
+def test_a_heading_never_joins_the_paragraph_under_it(tmp_path: Path):
+    from tests.fixtures import born_digital_pdf
+
+    source = born_digital_pdf(
+        "<h1>The Heading</h1>"
+        "<p>Body text that follows the heading and runs on long enough to wrap onto a second "
+        "line of its own so the join has something to do.</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T")
+
+    kinds = [e["kind"] for e in result.elements]
+    assert kinds == ["H1", "P"], [(e["kind"], e["text"][:40]) for e in result.elements]
+
+
 def test_a_scans_invisible_ocr_layer_is_not_measured_for_contrast():
     # The measurement read a Tesseract sandwich's invisible text as if it were on the page: 939
     # lines and 49 "contrast failures" on a real scan, every one of them text drawn in rendering

@@ -84,6 +84,10 @@ header.site{border-bottom:1px solid var(--line);padding:1.4rem 0}
 .brand{display:flex;align-items:baseline;gap:.7rem}
 .brand h1{font-family:var(--serif);font-weight:600;font-size:1.7rem;margin:0;letter-spacing:-.01em}
 .brand .tag{color:var(--muted);font-size:.92rem}
+/* The finished document is always one click away, from anywhere in the workspace. */
+.headright{margin-left:auto;display:flex;align-items:center;gap:.8rem}
+.saved{font-size:.78rem;color:var(--muted);font-family:var(--mono)}
+.saved.working{color:var(--stamp)}
 main{padding:2.4rem 0 4rem}
 /* Drop zone */
 .drop{position:relative;border:1.5px dashed var(--cloth);border-radius:var(--radius);
@@ -132,7 +136,28 @@ body.wide .panel{margin-top:0}
 @media (max-width:80rem){ .workspace{grid-template-columns:minmax(0,1.6fr) minmax(13rem,1fr)}
   .col-report{display:none} }
 .col-report,.col-todo,.col-stage{min-height:0;height:100%;display:flex;flex-direction:column}
-.col-report>.panel,.col-todo>.panel{flex:1;min-height:0;overflow-y:auto}
+.col-report>.panel{flex:1;min-height:0;overflow-y:auto}
+/* The right column stacks three blocks: why you are walking, what you have landed on, and what
+   you can press. Only the middle one grows, so the keys stay visible at the bottom. */
+.col-todo{gap:.6rem}
+.col-todo>.panel{flex:none}
+.col-todo>.typebar{flex:1;min-height:8rem;overflow-y:auto}
+.walkbar{height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin:.2rem 0 .35rem}
+.walkfill{height:100%;background:var(--pass);transition:width .2s}
+@media (prefers-reduced-motion:reduce){.walkfill{transition:none}}
+.walknum{margin:0;font-family:var(--mono);font-size:.78rem;color:var(--muted)}
+.walknum.done{color:var(--pass);font-weight:700}
+.keys h2{font-size:1rem}
+.keys .sub{margin:0 0 .4rem}
+.keys .sub b{color:var(--ink)}
+.keylist{margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(7.5rem,1fr));
+  gap:.1rem .5rem}
+.keylist>div{display:flex;gap:.35rem;align-items:baseline}
+.keylist dt{margin:0;flex:none}
+.keylist dd{margin:0;font-size:.75rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.altlab{display:block;font-size:.78rem;font-weight:600;margin:.5rem 0 0}
+.altlab .req{color:var(--attention);font-weight:400}
 
 /* ---- Left: the checklist, ticked off one at a time ---- */
 .report .score{font-family:var(--mono);font-size:.78rem;color:var(--muted);margin:0 0 .3rem}
@@ -163,13 +188,8 @@ li.check button.where:focus-visible{outline:2px solid var(--stamp);outline-offse
   border-radius:3px}
 li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:none;font-weight:400}
 
-/* ---- Middle: the document ---- */
+/* ---- Middle: the document, and only the document ---- */
 .col-stage{gap:.55rem}
-/* The keys, at the top, where they are read before the first Tab rather than hunted for after. */
-.stagetop{flex:none;border:1px solid var(--line);border-radius:8px;background:var(--panel);
-  padding:.4rem .7rem;font-size:.78rem;color:var(--muted);display:flex;flex-wrap:wrap;
-  gap:.2rem .9rem;align-items:baseline}
-.stagetop b{color:var(--ink);font-weight:600}
 /* The page fills whatever height is left, and its width follows from that -- so the whole page is
    always visible, whatever shape it is, without the window ever scrolling. */
 .sheetwrap{flex:1;min-height:0;display:flex;justify-content:center;align-items:stretch}
@@ -178,9 +198,8 @@ li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:non
 .sheet img{display:block;height:100%;width:auto}
 /* The chooser sits under the page: the element's name in large type, what it is, and its nearest
    HTML equivalent, which is the part most people recognise on sight. */
-.typebar{flex:none;border:1px solid var(--line);border-radius:var(--radius);
-  background:var(--panel);padding:.55rem .9rem;min-height:5rem;display:flex;
-  flex-direction:column;justify-content:center}
+.typebar{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);
+  padding:.55rem .9rem;display:flex;flex-direction:column;justify-content:center}
 .typebar .what{font-family:var(--serif);font-size:1.9rem;line-height:1.1;margin:0;
   letter-spacing:-.02em;display:flex;align-items:baseline;gap:.55rem;flex-wrap:wrap}
 .typebar .what kbd.tag{font-size:.95rem;padding:.1rem .45rem;border-color:var(--stamp);
@@ -268,6 +287,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
 <body>
 <header class="site"><div class="wrap brand">
   <h1>Rebind</h1><span class="tag">accessible PDF reconstruction</span>
+  <div class="headright" id="headright"></div>
 </div></header>
 
 <main class="wrap">
@@ -386,11 +406,28 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       '<div class="col-stage" id="stage"></div>'+
       '<aside class="col-todo" id="todo" aria-labelledby="todo-h"></aside>'+
       '</div>';
+    drawHeader();
     drawReport();
     // The right column is drawn by loadEditor, once the page list is known: the reading-order
-    // item counts pages, and it cannot count them before they have arrived.
+    // block counts pages, and it cannot count them before they have arrived.
     loadEditor(id, name);
     say('Done. Your accessible PDF is ready.');
+  }
+
+  // The download and the save state live in the page header, so they are in the same place
+  // whatever the workspace is showing.
+  function drawHeader(){
+    var host=document.getElementById('headright');
+    if(!host) return;
+    host.innerHTML='<span class="saved" id="savestate">All changes saved</span>'+
+      '<a class="btn primary" id="dl" href="/jobs/'+ed.id+'/pdf" download>Download PDF</a>';
+  }
+
+  function setSaveState(text, working){
+    var el=document.getElementById('savestate');
+    if(!el) return;
+    el.textContent=text;
+    el.className='saved'+(working?' working':'');
   }
 
   // ---- Left column: Adobe's checklist, ticked off as it goes ----------------------------------
@@ -405,16 +442,31 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       byGroup[c.group].push(c);
     });
     var h='<section class="panel report"><h2 id="rep-h">Accessibility report</h2>'+
-      '<p class="score">'+passed+' of '+total+' checks pass</p>'+
-      // Not a check: a receipt for the one thing that is never the reader's to decide.
-      (ed.status.contrast_note? '<p class="note">'+esc(ed.status.contrast_note)+'</p>' : '');
+      '<p class="score">'+passed+' of '+total+' checks pass</p>';
     groups.forEach(function(g){
       h+='<div class="group"><h3>'+esc(g)+'</h3><ul class="checks">';
       byGroup[g].forEach(function(c){ h+=checkRow(c); });
       h+='</ul></div>';
     });
-    h+='</section>';
+    // Whatever did not pass, with the thing that would fix it, directly under the list it came
+    // from. Reading order is not repeated here -- it has the whole right column.
+    var open=ed.checks.filter(function(c){
+      return effectiveStatus(c)==='needs-you' && c.action!=='reading-order'; });
+    if(open.length){
+      h+='<div class="group"><h3>Needs you</h3>';
+      open.forEach(function(c){
+        h+='<div class="item">'+
+          '<div class="title">'+esc(c.title)+'</div>'+
+          '<p class="detail">'+esc(c.detail)+'</p>'+
+          (c.need? '<p class="need">'+esc(c.need)+'</p>':'')+
+          actionFor(c)+'</div>';
+      });
+      h+='</div>';
+    }
+    h+=structureBadge(ed.status.structure_ok, ed.status.structure_issues||[])+
+      '<a class="reset" href="/">Do another document</a></section>';
     host.innerHTML=h;
+    wireActions();
     // Clicking an item that has a place in the document takes you there, rather than leaving you
     // to find it: the middle column turns to the page and focuses the first element on it.
     Array.prototype.slice.call(host.querySelectorAll('.check button')).forEach(function(b){
@@ -500,33 +552,31 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   }
 
   // ---- Right column: everything not ticked, next to what would tick it ------------------------
+  // The right column: the one check that is still yours, then the element you are standing on,
+  // then the keys. Everything here is about the page in the middle, in the order you need it --
+  // why you are walking, what you have landed on, and what you can press.
   function drawTodo(){
     var host=document.getElementById('todo');
     if(!host) return;
-    var open=ed.checks.filter(function(c){
-      var s=effectiveStatus(c);
-      return s==='needs-you'||s==='manual'; });
-    var dirty=Object.keys(ed.tags_edit).length||Object.keys(ed.removed).length||
-              Object.keys(ed.alts).length;
-    var h='<section class="panel todo"><h2 id="todo-h">What needs you</h2>'+
-      '<div class="actions">'+
-      '<a class="btn primary" href="/jobs/'+ed.id+'/pdf" download>Download PDF</a>'+
-      '<button type="button" class="btn ghost" id="edapply"'+(dirty?'':' disabled')+
-      '>Apply my changes</button></div>'+
-      structureBadge(ed.status.structure_ok, ed.status.structure_issues||[]);
-    if(!open.length){
-      h+='<p class="allclear">Everything Rebind can check passes.</p>';
-    }
-    open.forEach(function(c){
-      h+='<div class="item'+(effectiveStatus(c)==='manual'?' manual':'')+'">'+
-        '<div class="title">'+esc(c.title)+'</div>'+
-        '<p class="detail">'+esc(c.detail)+'</p>'+
-        (c.need? '<p class="need">'+esc(c.need)+'</p>':'')+
-        actionFor(c)+'</div>';
-    });
-    h+='<a class="reset" href="/">Do another document</a></section>';
+    var walked=walkedCount(), total=ed.pageList.length||1;
+    var done=allPagesWalked();
+    var h='<section class="panel todo"><h2 id="todo-h">Reading order</h2>'+
+      '<p class="sub">The one thing no measurement can settle. Tab through every page and it is '+
+      'checked off.</p>'+
+      '<div class="walkbar"><div class="walkfill" style="width:'+
+        Math.round(100*walked/total)+'%"></div></div>'+
+      '<p class="walknum'+(done?' done':'')+'" id="roprogress">'+
+      esc(readingOrderProgress())+'</p>'+
+      '</section>'+
+      '<section class="panel typebar" id="typebar" role="status" aria-live="polite">'+
+      idleBanner()+'</section>'+
+      '<section class="panel keys"><h2>Keys</h2>'+
+      '<p class="sub"><b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
+      '<b>[</b> <b>]</b> turn the page · <b>Enter</b> lists every type</p>'+
+      '<dl class="keylist">'+ed.allKeys.map(function(k){
+        return '<div><dt><kbd>'+esc(k.key)+'</kbd></dt><dd>'+esc(k.label)+'</dd></div>';
+      }).join('')+'</dl></section>';
     host.innerHTML=h;
-    wireTodo();
   }
 
   // Every open item gets a control. A fix Rebind can perform is a button; a fault that can only
@@ -534,7 +584,6 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // a way to act on it -- an issue with no route to a fix is just a complaint.
   function actionFor(c){
     if(c.action==='describe') return renderFigures();
-    if(c.action==='reading-order') return renderWalk();
     if(c.action==='set-title') return renderFixField(c, 'A short, meaningful title');
     if(c.action==='set-language') return renderFixField(c, 'e.g. en, en-GB, fr');
     if(c.action==='strip-scripts') return renderFixButton(c, 'Remove the scripts');
@@ -551,15 +600,6 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     if(c.locations.length>24){ out+='<span class="caveat">…and '+(c.locations.length-24)+
       ' more pages.</span>'; }
     return out+'</div>';
-  }
-
-  function renderWalk(){
-    return '<p class="need" id="roprogress">'+esc(readingOrderProgress())+'</p>'+
-      '<div class="pagejump">'+
-      '<button type="button" class="btn ghost small jump" data-page="'+
-      (ed.pageList[0]||1)+'">Start walking</button></div>'+
-      '<span class="caveat">Tab moves through the page and on to the next one at the end, so '+
-      'this is one long walk, not a page at a time.</span>';
   }
 
   function renderFixField(c, placeholder){
@@ -604,9 +644,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       'style="margin-top:.6rem">Add descriptions</button>';
   }
 
-  function wireTodo(){
-    var apply=document.getElementById('edapply');
-    if(apply) apply.addEventListener('click', applyEdits);
+  function wireActions(){
     var alts=document.getElementById('applyalts');
     if(alts) alts.addEventListener('click', applyDescriptions);
     Array.prototype.slice.call(document.querySelectorAll('.dofix')).forEach(function(b){
@@ -647,15 +685,58 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     return out;
   }
 
+  // Nothing is ever "unsaved". An edit goes to the server on its own, the document is rebuilt in
+  // the background, and the header says where that has got to -- there is no button to forget to
+  // press and no state that exists only in this tab. Edits are coalesced so that a run of
+  // keystrokes is one rebuild rather than one per press.
+  var saveTimer=null, saving=false, pending=false;
+
   function applyEdits(){
+    if(saveTimer) clearTimeout(saveTimer);
+    setSaveState('Saving…', true);
+    saveTimer=setTimeout(sendEdits, 900);
+  }
+
+  function sendEdits(){
+    if(saving){ pending=true; return; }
+    saving=true; pending=false;
+    setSaveState('Saving…', true);
     var removed=Object.keys(ed.removed).filter(function(k){ return ed.removed[k]; });
-    renderWorking(ed.name, Date.now()); say('Applying your changes…');
     fetch('/jobs/'+ed.id+'/edits',{method:'POST',headers:{'content-type':'application/json'},
       body:JSON.stringify({tags:stripArtifacts(ed.tags_edit), removed:removed, alts:ed.alts})})
       .then(function(r){return r.json();}).then(function(j){
-        if(j.error){ showError(j.error); return; }
-        watch(ed.id, ed.name, Date.now());
-      }).catch(function(){ showError('Could not apply your changes.'); });
+        if(j.error){ saving=false; setSaveState('Could not save', true); return; }
+        awaitRebuild();
+      }).catch(function(){ saving=false; setSaveState('Could not save', true); });
+  }
+
+  // The rebuild is watched quietly: the workspace stays exactly where it is, keeping the page you
+  // are on and the element you are standing on, and only the report and the element list are
+  // refreshed when it lands. Throwing the view away mid-edit would lose your place.
+  function awaitRebuild(){
+    var tick=setInterval(function(){
+      fetch('/jobs/'+ed.id).then(function(r){return r.json();}).then(function(s){
+        if(s.status==='running') return;
+        clearInterval(tick);
+        saving=false;
+        if(s.status==='error'){ setSaveState('Could not save', true); return; }
+        ed.status=s; ed.figures=s.figures||[]; ed.checks=s.checklist||[];
+        refreshElements();
+      }).catch(function(){});
+    }, 900);
+  }
+
+  function refreshElements(){
+    fetch('/jobs/'+ed.id+'/elements').then(function(r){return r.json();}).then(function(d){
+      if(!d.error){
+        ed.elements=d.elements||[]; ed.pages=d.pages||{};
+        ed.pageList=Object.keys(ed.pages).map(Number).sort(function(a,b){return a-b;});
+        if(ed.pageList.indexOf(ed.page)<0) ed.page=ed.pageList[0]||1;
+      }
+      drawReport(); drawStage(); drawTodo();
+      setSaveState('All changes saved', false);
+      if(pending) sendEdits();
+    }).catch(function(){ setSaveState('All changes saved', false); });
   }
 
   // ---- Middle column: the document, every element a tab stop ----------------------------------
@@ -702,18 +783,11 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     if(!host) return;
     var items=elementsOnPage();
     var pos=ed.pageList.indexOf(ed.page);
-    // The chooser sits *below* the page: the page is what you are looking at, and the name of the
-    // thing you just landed on belongs under it, not pushing it down the screen. It is a live
-    // region, so a screen reader hears the type on arrival too.
-    var h='<div class="stagetop">'+
-      '<span><b>Tab</b> next element</span><span><b>Shift + Tab</b> previous</span>'+
-      '<span><b>a key</b> sets the type</span><span><b>Enter</b> all the types</span>'+
-      '<span><b>[</b> <b>]</b> turn the page</span></span>'+
-      '</div>'+
-      '<div class="sheetwrap"><div class="sheet" id="sheet">'+
+    // The middle column is the document and nothing else: the page, as large as the window will
+    // allow, with the pager under it. Everything that talks *about* the page moved right.
+    var h='<div class="sheetwrap"><div class="sheet" id="sheet">'+
       (ed.pages[ed.page]? '<img src="'+ed.pages[ed.page]+'" alt="Page '+ed.page+'">':'')+
       items.map(function(e,i){ return boxHtml(e,i); }).join('')+'</div></div>'+
-      '<div class="typebar" id="typebar" role="status" aria-live="polite">'+idleBanner()+'</div>'+
       '<div class="pager">'+
       '<button type="button" class="btn ghost small" id="edprev"'+(pos<=0?' disabled':'')+
       '>‹ Previous</button>'+
@@ -755,20 +829,32 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       (key&&key.key? '<kbd class="tag">'+esc(key.key)+'</kbd>' : '')+'</p>'+
       '<p class="why">'+esc(key&&key.what? key.what : 'A structure element.')+'</p>';
     if(k==='Figure'){
-      h+='<div class="altbox"><textarea id="altnow" rows="2" data-id="'+esc(e.id)+'" '+
-        'aria-label="Description of this figure" placeholder="What does this picture show?">'+
-        esc(alt)+'</textarea></div>'+
-        '<p class="hint">Space to type a description</p>';
+      // A figure is the one thing a machine cannot finish. The box is here the moment you land on
+      // one, pre-filled with the best guess Rebind has -- the document's own caption where there
+      // is one, otherwise the figure's own text -- and yours to rewrite.
+      h+='<label class="altlab" for="altnow">Description <span class="req">needed</span></label>'+
+        '<div class="altbox"><textarea id="altnow" rows="3" data-id="'+esc(e.id)+'" '+
+        'placeholder="What does this picture show?">'+esc(alt||altGuess(e))+'</textarea></div>'+
+        '<p class="hint">Space jumps here from the page · Esc goes back</p>';
     }
     bar.innerHTML=h;
     var box=document.getElementById('altnow');
     if(box) box.addEventListener('input',function(){
       ed.alts[box.getAttribute('data-id')]=box.value;
-      var apply=document.getElementById('edapply'); if(apply) apply.disabled=false;
+      applyEdits();
     });
     if(box) box.addEventListener('keydown',function(ev){
       if(ev.key==='Escape'){ ev.preventDefault(); focusBox(e.id); }
     });
+  }
+
+  // The best opening line Rebind has for a figure nobody has described yet: the caption it found
+  // beside the picture, or -- for a figure made out of text -- that text. Never invented, and
+  // never written into the document unless it is still there when the edit is saved.
+  function altGuess(e){
+    var guess='';
+    ed.figures.forEach(function(f){ if(f.id===e.id && f.alt_guess) guess=f.alt_guess; });
+    return guess || e.text || '';
   }
 
   function focusBox(elementId){
@@ -904,10 +990,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     if(tag==='Artifact') ed.removed[elementId]=true; else delete ed.removed[elementId];
     ed.focused=null;
     drawStage();
-    // Deliberately NOT redrawing the right column: it holds description boxes the user may be
-    // half way through typing into, and rebuilding it would throw that text away.
-    var apply=document.getElementById('edapply');
-    if(apply) apply.disabled=false;
+    applyEdits();
     say(tagLabel(tag)+' set.');
     var boxes=document.querySelectorAll('.ob');
     if(at>=0 && at+1<boxes.length){ boxes[at+1].focus(); return; }

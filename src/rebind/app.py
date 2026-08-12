@@ -56,7 +56,6 @@ class _Job:
     strip_scripts: bool = False
     # Adobe's own rule list, judged against the produced PDF (see rebind.checklist)
     checklist: list = field(default_factory=list)
-    contrast_note: str = ""
     elements: list = field(default_factory=list)     # every tagged element, for the page editor
     page_images: dict = field(default_factory=dict)  # page number -> data URI of the page
     edits: dict = field(default_factory=dict)        # the user's corrections, kept across re-runs
@@ -90,7 +89,7 @@ def _run_conversion(job: _Job, source: Path) -> None:
     # Absolute imports, not relative: when PyInstaller freezes app.py as the __main__ entry
     # script, a relative import has no parent package and raises ImportError (see /render-smoke,
     # which uses the same absolute form for the same reason).
-    from rebind.checklist import build_checklist, contrast_note
+    from rebind.checklist import build_checklist
     from rebind.extract import ExtractionError
     from rebind.remediate import Edits, remediate
     from rebind.ui import build_review
@@ -120,9 +119,6 @@ def _run_conversion(job: _Job, source: Path) -> None:
             result.pdf_path, page_count=result.page_count, empty_pages=result.empty_pages,
             undescribed_figures=tuple(result.figures), reading_order=result.reading_order,
             contrast=result.contrast)
-        # Contrast is not on that list: it is never a decision for the person reading it. What was
-        # done about it is reported as a line beneath the score instead of an item to work through.
-        job.contrast_note = contrast_note(result.contrast)
         job.status = "done"
     except ExtractionError as exc:
         job.status = "error"
@@ -188,7 +184,6 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
             body["reading_order"] = job.reading_order
             body["contrast"] = job.contrast
             body["checklist"] = job.checklist
-            body["contrast_note"] = job.contrast_note
         if job.status == "error":
             body["error"] = job.error
         return JSONResponse(body)
