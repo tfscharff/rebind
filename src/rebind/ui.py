@@ -1,9 +1,11 @@
 """The browser UI: a thin shell over the conversion pipeline.
 
 Rebind runs as a local web app (the OpenRefine pattern), so a librarian hands over a broken scan
-and gets back a born-accessible document. The page's signature is the *review queue* -- a
-conservator's condition report of what Rebind could not be certain about, because "know what you
-don't know" is the product's whole thesis. The HTML/CSS/JS is inlined (no static files, no external
+and gets back a born-accessible document. The page's signature is the *condition report* -- Adobe's
+own accessibility checklist, ticked off item by item against the document Rebind actually produced,
+because "know what you don't know" is the product's whole thesis. What cannot be ticked moves to
+the right, next to the one thing that would fix it. The document itself sits in the middle, marked
+up, and every element in it is a tab stop. The HTML/CSS/JS is inlined (no static files, no external
 requests) so it works offline and needs nothing extra bundled into the frozen build.
 """
 
@@ -58,7 +60,7 @@ _PAGE = r"""<!doctype html>
 :root{
   --paper:#fbfaf8; --panel:#ffffff; --ink:#1e2321; --muted:#6b7671;
   --cloth:#2f5d62; --cloth-deep:#234a4e; --stamp:#a6412e; --stamp-deep:#873625;
-  --line:#e4e0d8; --info:#2f5d62; --attention:#a6412e;
+  --line:#e4e0d8; --info:#2f5d62; --attention:#a6412e; --pass:#3d7a4e;
   --radius:10px; --maxw:56rem;
   --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
   --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -68,7 +70,7 @@ _PAGE = r"""<!doctype html>
   :root{
     --paper:#15191a; --panel:#1c2122; --ink:#eef0ec; --muted:#9aa39e;
     --cloth:#6bb3ba; --cloth-deep:#8fccd2; --stamp:#e08066; --stamp-deep:#eb9a83;
-    --line:#2c3335; --info:#8fccd2; --attention:#e08066;
+    --line:#2c3335; --info:#8fccd2; --attention:#e08066; --pass:#7fbf90;
   }
 }
 *{box-sizing:border-box}
@@ -76,9 +78,8 @@ html{color-scheme:light dark}
 body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
   line-height:1.55;-webkit-font-smoothing:antialiased}
 .wrap{max-width:var(--maxw);margin:0 auto;padding:0 1.25rem;transition:max-width .2s}
-/* The result view carries the page editor beside the report, so it needs more room than the
-   reading measure the upload page is set to. */
-body.wide .wrap{max-width:82rem}
+/* The workspace is far wider than the reading measure the upload page is set to. */
+body.wide .wrap{max-width:104rem}
 header.site{border-bottom:1px solid var(--line);padding:1.4rem 0}
 .brand{display:flex;align-items:baseline;gap:.7rem}
 .brand h1{font-family:var(--serif);font-weight:600;font-size:1.7rem;margin:0;letter-spacing:-.01em}
@@ -96,7 +97,7 @@ main{padding:2.4rem 0 4rem}
 .drop input[type=file]{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden}
 /* Status */
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
-  padding:1.4rem 1.5rem;margin-top:1.5rem}
+  padding:1.1rem 1.2rem;margin-top:1rem}
 .status{display:flex;align-items:center;gap:.9rem}
 .spinner{width:20px;height:20px;border:3px solid var(--line);border-top-color:var(--cloth);
   border-radius:50%;animation:spin 1s linear infinite;flex:none}
@@ -104,129 +105,129 @@ main{padding:2.4rem 0 4rem}
 @media (prefers-reduced-motion:reduce){.spinner{animation:none}}
 .status .what{font-weight:600}
 .status .elapsed{color:var(--muted);font-size:.86rem;font-family:var(--mono)}
-/* Result */
-.result h2{font-family:var(--serif);font-size:1.3rem;margin:0 0 .3rem}
-.downloads{display:flex;flex-wrap:wrap;gap:.7rem;margin:1rem 0 .3rem}
 .btn{display:inline-flex;align-items:center;gap:.5rem;font-weight:600;text-decoration:none;
-  padding:.62rem 1.05rem;border-radius:8px;border:1px solid transparent;font-size:.95rem}
+  padding:.62rem 1.05rem;border-radius:8px;border:1px solid transparent;font-size:.95rem;
+  cursor:pointer;font-family:inherit}
 .btn.primary{background:var(--cloth);color:#fff}
 .btn.primary:hover{background:var(--cloth-deep)}
 .btn.ghost{background:transparent;color:var(--cloth);border-color:var(--line)}
+.btn.small{padding:.2rem .6rem;font-size:.85rem}
+.btn:disabled{opacity:.5;cursor:default}
 .btn:focus-visible{outline:3px solid var(--stamp);outline-offset:2px}
-/* Review queue — the condition report */
-.queue{margin-top:1.6rem}
-.queue h2{font-family:var(--serif);font-size:1.2rem;margin:0 0 .2rem}
-.queue .sub{color:var(--muted);font-size:.9rem;margin:0 0 1rem}
-ul.conditions{list-style:none;margin:0;padding:0;display:grid;gap:.7rem}
-li.cond{border:1px solid var(--line);border-left:4px solid var(--info);border-radius:8px;
-  background:var(--panel);padding:.9rem 1.05rem}
-li.cond.attention{border-left-color:var(--attention)}
-.cond .top{display:flex;align-items:baseline;justify-content:space-between;gap:1rem}
-.cond .title{font-weight:600}
-.cond .badge{font-family:var(--mono);font-size:.74rem;text-transform:uppercase;letter-spacing:.04em;
-  color:var(--muted);white-space:nowrap}
-.cond .detail{color:var(--muted);font-size:.92rem;margin:.35rem 0 0}
-.cond .pages{font-family:var(--mono);font-size:.8rem;color:var(--ink);margin:.5rem 0 0}
-.cond .pages b{color:var(--muted);font-weight:400}
-.clean{display:flex;gap:.7rem;align-items:center;color:var(--cloth);font-weight:600}
-.struct-badge{font-family:var(--mono);font-size:.78rem;text-transform:uppercase;letter-spacing:.03em;
-  margin:.3rem 0 0}
-.struct-badge.ok{color:var(--cloth)}
-.struct-badge.attention{color:var(--attention);text-transform:none;letter-spacing:normal}
-/* Figure description editor */
-.figures h2{font-family:var(--serif);font-size:1.2rem;margin:0 0 .2rem}
-.figrow{display:flex;gap:1rem;align-items:flex-start;padding:.9rem 0;border-top:1px solid var(--line)}
-.figrow:first-of-type{border-top:none}
-.figthumb{width:110px;height:auto;max-height:110px;object-fit:contain;border:1px solid var(--line);border-radius:6px;background:#fff;flex:none}
-.figfield{flex:1}
-.figfield label{font-weight:600;font-size:.92rem;display:block}
-.figpage{font-family:var(--mono);font-size:.75rem;color:var(--muted);font-weight:400;margin-left:.4rem}
-.figfield textarea{width:100%;margin-top:.4rem;font:inherit;font-size:.95rem;padding:.5rem .6rem;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--ink);resize:vertical}
-.figfield textarea:focus-visible{outline:3px solid var(--stamp);outline-offset:1px}
-#applyalts{margin-top:1rem}
-/* The two checks Adobe always leaves to a human: reading order and colour contrast */
-.check h2{font-family:var(--serif);font-size:1.2rem;margin:0 0 .5rem}
-.verdict{margin:0 0 .4rem;font-weight:600}
-.verdict.ok{color:var(--cloth)}
-.verdict.attention{color:var(--attention)}
-.pageorder{margin:1.1rem 0 0}
-.pageorder figcaption{font-family:var(--mono);font-size:.78rem;color:var(--muted);margin-bottom:.35rem}
+h2{font-family:var(--serif);font-size:1.15rem;margin:0 0 .3rem}
+.sub{color:var(--muted);font-size:.88rem;margin:0 0 .8rem}
+
+/* ---- The workspace: report | document | what needs you --------------------------------------
+   The document is the point, so the middle column is twice either side of it. */
+.workspace{display:grid;grid-template-columns:minmax(14rem,1fr) minmax(0,2.2fr) minmax(15rem,1fr);
+  gap:1.1rem;align-items:start}
+@media (max-width:80rem){ .workspace{grid-template-columns:minmax(0,1.6fr) minmax(14rem,1fr)}
+  .col-report{grid-column:1 / -1} }
+@media (max-width:56rem){ .workspace{grid-template-columns:minmax(0,1fr)}
+  .col-report,.col-todo{grid-column:auto} }
+.col-report,.col-todo{position:sticky;top:.8rem;max-height:calc(100vh - 2rem);overflow-y:auto}
+
+/* ---- Left: the checklist, ticked off one at a time ---- */
+.report .score{font-family:var(--mono);font-size:.78rem;color:var(--muted);margin:0 0 .7rem}
+.group{margin:.9rem 0 0}
+.group h3{font-size:.72rem;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);
+  margin:0 0 .25rem;font-weight:600;font-family:var(--sans)}
+ul.checks{list-style:none;margin:0;padding:0}
+li.check{display:flex;gap:.5rem;align-items:baseline;padding:.16rem 0;font-size:.86rem;
+  opacity:0;transform:translateY(-2px);transition:opacity .18s ease,transform .18s ease}
+li.check.shown{opacity:1;transform:none}
+@media (prefers-reduced-motion:reduce){li.check{transition:none}}
+li.check .mark{flex:none;width:1.1rem;text-align:center;font-weight:700}
+li.check.pass .mark{color:var(--pass)}
+li.check.pass .name{color:var(--muted)}
+li.check.needs-you .mark,li.check.manual .mark{color:var(--attention)}
+li.check.needs-you .name,li.check.manual .name{font-weight:600}
+li.check.na{opacity:.45}
+li.check.na.shown{opacity:.45}
+li.check .name{min-width:0}
+
+/* ---- Middle: the document ---- */
+.typebar{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);
+  padding:.7rem .9rem;min-height:5.2rem;display:flex;flex-direction:column;justify-content:center}
+.typebar .what{font-family:var(--serif);font-size:2rem;line-height:1.1;margin:0;
+  letter-spacing:-.02em}
+.typebar .what.idle{font-size:1.15rem;color:var(--muted)}
+.typebar .why{margin:.25rem 0 0;color:var(--muted);font-size:.88rem}
+.typebar .hint{margin:.3rem 0 0;font-size:.78rem;color:var(--muted);font-family:var(--mono)}
+.typebar .altbox{margin:.45rem 0 0;display:flex;gap:.5rem;align-items:flex-start}
+.typebar .altbox textarea{flex:1;font:inherit;font-size:.88rem;padding:.35rem .5rem;
+  border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ink);
+  resize:vertical}
 /* The numbered overlay: boxes are positioned in percentages of the page, so the sheet just has to
-   be a positioning context of the same aspect ratio as the thumbnail inside it. */
-.sheet{position:relative;display:inline-block;max-width:100%;border:1px solid var(--line);
-  border-radius:4px;overflow:hidden;background:#fff}
-.sheet img{display:block;max-width:100%;height:auto}
+   be a positioning context of the same aspect ratio as the page picture inside it. */
+.sheet{position:relative;display:block;border:1px solid var(--line);border-radius:6px;
+  overflow:hidden;background:#fff;margin:.8rem 0}
+.sheet img{display:block;width:100%;height:auto}
 .ob{position:absolute;border:1.5px solid var(--stamp);border-radius:2px;
-  background:color-mix(in srgb,var(--stamp) 7%,transparent)}
+  background:color-mix(in srgb,var(--stamp) 7%,transparent);cursor:pointer}
 .ob i{position:absolute;left:-1.5px;top:-1.5px;font-style:normal;font-family:var(--mono);
   font-size:.68rem;line-height:1;padding:.15rem .28rem;background:var(--stamp);color:#fff;
   border-radius:2px 0 2px 0}
-.ratios{list-style:none;margin:.7rem 0 0;padding:0;font-size:.9rem}
-.ratios li{display:flex;gap:.6rem;align-items:baseline;padding:.35rem 0;border-top:1px solid var(--line)}
-.ratios li:first-child{border-top:none}
-.ratios .swatch{font-family:var(--serif);padding:.1rem .35rem;border-radius:3px;
-  border:1px solid var(--line);flex:none}
-.ratios .ratio{font-family:var(--mono);font-weight:700;color:var(--attention)}
-.ratios .need,.ratios .where{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
-.ratios .sample{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ratios .more{color:var(--muted);font-style:italic}
-.fixrow{display:flex;gap:.8rem;align-items:center;flex-wrap:wrap;margin-top:.9rem}
-.fixrow .caveat{font-size:.82rem;color:var(--muted);flex:1;min-width:16rem}
-/* Two columns: the report on the left, the page editor on the right where it has room to be big
-   and can stay in view while the left column is read. Collapses to one column when narrow. */
-.workspace{display:grid;grid-template-columns:11rem minmax(0,1fr) minmax(22rem,34%);gap:1.2rem;
-  align-items:start}
-@media (max-width:78rem){ .workspace{grid-template-columns:minmax(0,1fr) minmax(20rem,38%)}
-  .col-keys{grid-column:1 / -1} }
-@media (max-width:56rem){ .workspace{grid-template-columns:minmax(0,1fr)} }
-.col-side,.col-keys{position:sticky;top:1rem}
-.keys h2{font-family:var(--serif);font-size:1.05rem;margin:0 0 .2rem}
-.keylist{margin:.5rem 0 0;display:grid;gap:.22rem}
-.keylist>div{display:flex;gap:.45rem;align-items:baseline}
-.keylist dt{margin:0;flex:none}
-.keylist dd{margin:0;font-size:.78rem;color:var(--muted);line-height:1.25}
-kbd{font-family:var(--mono);font-size:.72rem;background:var(--paper);border:1px solid var(--line);
-  border-bottom-width:2px;border-radius:4px;padding:.05rem .3rem;color:var(--ink)}
-.pageview{padding:.7rem}
-.editor h2{font-family:var(--serif);font-size:1.2rem;margin:0}
-.edhead{display:flex;gap:1rem;align-items:baseline;justify-content:space-between;flex-wrap:wrap}
-.pager{display:flex;gap:.4rem;align-items:center}
-.pager .pageno{font-family:var(--mono);font-size:.78rem;color:var(--muted)}
-.btn.small{padding:.2rem .55rem;font-size:.85rem}
-.btn.ghost{background:transparent;color:var(--cloth);border:1px solid var(--line)}
-.sheet.big{width:100%;margin:.6rem 0 .9rem}
-.sheet.big img{width:100%}
 .ob.fig{border-style:dashed}
 .ob.gone{border-color:var(--muted);background:repeating-linear-gradient(45deg,
   color-mix(in srgb,var(--muted) 18%,transparent) 0 4px,transparent 4px 8px)}
 .ob.gone i{background:var(--muted)}
-.ob.on{border-width:3px;box-shadow:0 0 0 3px color-mix(in srgb,var(--stamp) 35%,transparent)}
-/* The element list IS the reading order, so its DOM order is the tab order -- no tabindex games. */
-.ellist{list-style:none;margin:0;padding:0;max-height:34rem;overflow-y:auto}
-.elrow{display:flex;gap:.6rem;align-items:flex-start;padding:.5rem .35rem;border-radius:5px;
-  border-top:1px solid var(--line);scroll-margin:2rem}
-.elrow:focus{outline:3px solid var(--stamp);outline-offset:-1px;
-  background:color-mix(in srgb,var(--stamp) 7%,transparent)}
-.elrow:first-child{border-top:none}
-.elrow.gone{opacity:.55}
-.elrow .num{font-family:var(--mono);font-size:.72rem;color:#fff;background:var(--stamp);
-  border-radius:2px;padding:.1rem .3rem;flex:none;margin-top:.2rem}
-.elrow.gone .num{background:var(--muted)}
-.elbody{flex:1;min-width:0}
-.elbody select{font:inherit;font-size:.85rem;padding:.15rem .3rem;border:1px solid var(--line);
-  border-radius:4px;background:var(--panel);color:var(--ink)}
-.eltext{margin:.25rem 0 0;font-size:.86rem;color:var(--muted);overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
-.altlab{display:block;font-size:.8rem;font-weight:600;margin-top:.3rem}
-.altlab textarea{width:100%;margin-top:.2rem;font:inherit;font-size:.86rem;padding:.35rem .45rem;
-  border:1px solid var(--line);border-radius:5px;background:var(--panel);color:var(--ink);
+.ob:focus{outline:none;border-width:3px;background:color-mix(in srgb,var(--stamp) 18%,transparent);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--stamp) 45%,transparent)}
+.pager{display:flex;gap:.5rem;align-items:center;justify-content:center}
+.pager .pageno{font-family:var(--mono);font-size:.8rem;color:var(--muted)}
+
+/* ---- Right: what is not ticked, and what would tick it ---- */
+.todo .item{border:1px solid var(--line);border-left:4px solid var(--attention);border-radius:8px;
+  background:var(--panel);padding:.7rem .8rem;margin-bottom:.6rem}
+.todo .item.manual{border-left-color:var(--info)}
+.todo .item .title{font-weight:600;font-size:.92rem}
+.todo .item .detail{color:var(--muted);font-size:.85rem;margin:.25rem 0 0}
+.todo .item .need{font-size:.85rem;margin:.4rem 0 0}
+.todo .allclear{color:var(--pass);font-weight:600}
+.figrow{display:flex;gap:.6rem;align-items:flex-start;margin-top:.6rem}
+.figthumb{width:64px;height:auto;max-height:64px;object-fit:contain;border:1px solid var(--line);
+  border-radius:4px;background:#fff;flex:none}
+.figrow textarea{flex:1;min-width:0;font:inherit;font-size:.85rem;padding:.35rem .45rem;
+  border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ink);
   resize:vertical}
-.elrow .tagme{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:none;margin-top:.3rem}
-.editor :focus-visible{outline:3px solid var(--stamp);outline-offset:2px}
+.pagejump{display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.45rem}
+.ratios{list-style:none;margin:.5rem 0 0;padding:0;font-size:.82rem}
+.ratios li{display:flex;gap:.4rem;align-items:baseline;padding:.25rem 0;
+  border-top:1px solid var(--line)}
+.ratios li:first-child{border-top:none}
+.ratios .swatch{font-family:var(--serif);padding:.05rem .3rem;border-radius:3px;
+  border:1px solid var(--line);flex:none}
+.ratios .ratio{font-family:var(--mono);font-weight:700;color:var(--attention)}
+.ratios .where{font-family:var(--mono);font-size:.74rem;color:var(--muted)}
+.ratios .sample{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.caveat{font-size:.78rem;color:var(--muted);display:block;margin-top:.4rem}
+.actions{display:flex;flex-direction:column;gap:.5rem;margin-bottom:.8rem}
+
+/* ---- The floating hotkey palette, opened with Enter ---- */
+.palette{position:fixed;inset:0;background:color-mix(in srgb,#000 45%,transparent);
+  display:flex;align-items:center;justify-content:center;z-index:50;padding:1rem}
+.palette .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:1.1rem 1.3rem;max-width:44rem;width:100%;max-height:88vh;overflow-y:auto;
+  box-shadow:0 18px 50px rgba(0,0,0,.3)}
+.palette h2{margin:0}
+.palette .keys{list-style:none;margin:.7rem 0 0;padding:0;display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:.15rem .9rem}
+.palette .keys li{display:flex;gap:.5rem;align-items:baseline;padding:.2rem .3rem;border-radius:5px}
+.palette .keys li.current{background:color-mix(in srgb,var(--stamp) 12%,transparent)}
+.palette .keys .lab{font-size:.88rem}
+.palette .keys .what{font-size:.76rem;color:var(--muted)}
+kbd{font-family:var(--mono);font-size:.72rem;background:var(--paper);border:1px solid var(--line);
+  border-bottom-width:2px;border-radius:4px;padding:.05rem .32rem;color:var(--ink);flex:none;
+  min-width:1.35rem;text-align:center}
 .error{border-left:4px solid var(--attention)}
 .error .detail{color:var(--ink)}
 .visually-hidden{position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden}
-a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9rem}
+a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
+.struct-badge{font-family:var(--mono);font-size:.74rem;text-transform:uppercase;
+  letter-spacing:.03em;margin:.2rem 0 .6rem}
+.struct-badge.ok{color:var(--pass)}
+.struct-badge.attention{color:var(--attention);text-transform:none;letter-spacing:normal}
 </style>
 </head>
 <body>
@@ -283,7 +284,8 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
   });
   file.addEventListener('change',function(){ if(file.files[0]) start(file.files[0]); });
 
-  function esc(s){return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+  function esc(s){return String(s).replace(/[&<>"]/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
 
   function start(f){
     if(f.type && f.type.indexOf('pdf')===-1 && !/\.pdf$/i.test(f.name)){
@@ -303,6 +305,7 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
   }
 
   function renderWorking(name, started){
+    document.body.classList.remove('wide');
     work.hidden=false;
     work.innerHTML='<h2 id="work-h" class="visually-hidden">Progress</h2>'+
       '<div class="panel"><div class="status">'+
@@ -332,153 +335,218 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
     },1200);
   }
 
+  // ---- State ---------------------------------------------------------------------------------
+  var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
+          tags_edit:{},removed:{},alts:{},focused:null,figures:[],checks:[],status:null,
+          palette:false};
+
   function done(id, name, s){
     if(elapsedTimer) clearInterval(elapsedTimer);
-    var review=s.review, figures=s.figures||[];
-    var h='<h2 class="visually-hidden">Result</h2><div class="panel result">'+
-      '<h2>Your accessible PDF is ready</h2>'+
-      structureBadge(s.structure_ok, s.structure_issues||[])+
-      '<div class="downloads">'+
-      '<a class="btn primary" href="/jobs/'+id+'/pdf" download>Download PDF</a>'+
-      '</div></div>';
-    h+=renderFigures(id, name, figures);
-    h+=renderQueue(review);
-    h+=renderReadingOrder(s.reading_order);
-    h+=renderContrast(s.contrast);
-    h+='<a class="reset" href="/">Do another document</a>';
-    // Two columns: everything above on the left, the page editor on the right where it can be
-    // tall and stay put while the left column is read.
+    ed.id=id; ed.name=name; ed.status=s;
+    ed.figures=s.figures||[]; ed.checks=s.checklist||[];
     document.body.classList.add('wide');
-    // Three columns: the hotkeys to the left, the page (where the highlight follows the focused
-    // element) in the middle with the report beneath it, and the element list on the right.
-    work.innerHTML='<div class="workspace">'+
-      '<div class="col-keys" id="keys"></div>'+
-      '<div class="col-main"><div id="pageview"></div>'+h+'</div>'+
-      '<div class="col-side" id="editor"></div></div>';
-    if(figures.length){ wireFigures(id, name); }
-    wireContrast(id, name);
+    work.innerHTML='<h2 id="work-h" class="visually-hidden">Your accessible PDF</h2>'+
+      '<div class="workspace">'+
+      '<aside class="col-report" id="report" aria-labelledby="rep-h"></aside>'+
+      '<div class="col-stage" id="stage"></div>'+
+      '<aside class="col-todo" id="todo" aria-labelledby="todo-h"></aside>'+
+      '</div>';
+    drawReport();
+    drawTodo();
     loadEditor(id, name);
-    say(figures.length? ('Done. '+figures.length+' image'+(figures.length>1?'s':'')+' can be described for a screen reader.') : 'Done. Your accessible PDF is ready to download.');
-    work.setAttribute('tabindex','-1');
-    work.focus();
+    say('Done. Your accessible PDF is ready.');
+  }
+
+  // ---- Left column: Adobe's checklist, ticked off as it goes ----------------------------------
+  function drawReport(){
+    var host=document.getElementById('report');
+    if(!host) return;
+    var passed=0, total=0;
+    ed.checks.forEach(function(c){ if(c.status!=='n/a'){ total++; if(c.status==='pass') passed++; } });
+    var groups=[], byGroup={};
+    ed.checks.forEach(function(c){
+      if(!byGroup[c.group]){ byGroup[c.group]=[]; groups.push(c.group); }
+      byGroup[c.group].push(c);
+    });
+    var h='<section class="panel report"><h2 id="rep-h">Accessibility report</h2>'+
+      '<p class="score">'+passed+' of '+total+' checks pass</p>';
+    var n=0;
+    groups.forEach(function(g){
+      h+='<div class="group"><h3>'+esc(g)+'</h3><ul class="checks">';
+      byGroup[g].forEach(function(c){
+        var cls=c.status==='n/a'?'na':c.status;
+        var mark=c.status==='pass'?'✓':(c.status==='n/a'?'–':'!');
+        h+='<li class="check '+cls+'" data-step="'+(n++)+'">'+
+          '<span class="mark" aria-hidden="true">'+mark+'</span>'+
+          '<span class="name">'+esc(c.title)+
+          '<span class="visually-hidden">: '+esc(statusWord(c.status))+'</span></span></li>';
+      });
+      h+='</ul></div>';
+    });
+    h+='</section>';
+    host.innerHTML=h;
+    revealChecks(host);
+  }
+
+  function statusWord(status){
+    if(status==='pass') return 'passes';
+    if(status==='n/a') return 'not applicable';
+    if(status==='manual') return 'needs your eye';
+    return 'needs you';
+  }
+
+  // Ticked off one at a time, so the report reads as something being worked through rather than a
+  // wall that was always there. Capped in total length, and skipped outright for anyone who has
+  // asked the system for less motion.
+  function revealChecks(host){
+    var rows=Array.prototype.slice.call(host.querySelectorAll('li.check'));
+    var still=window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(still){ rows.forEach(function(r){ r.classList.add('shown'); }); return; }
+    var step=Math.max(12, Math.min(45, 1400/(rows.length||1)));
+    rows.forEach(function(row,i){
+      setTimeout(function(){ row.classList.add('shown'); }, i*step);
+    });
+  }
+
+  // ---- Right column: everything not ticked, next to what would tick it ------------------------
+  function drawTodo(){
+    var host=document.getElementById('todo');
+    if(!host) return;
+    var open=ed.checks.filter(function(c){
+      return c.status==='needs-you'||c.status==='manual'; });
+    var dirty=Object.keys(ed.tags_edit).length||Object.keys(ed.removed).length||
+              Object.keys(ed.alts).length;
+    var h='<section class="panel todo"><h2 id="todo-h">What needs you</h2>'+
+      '<div class="actions">'+
+      '<a class="btn primary" href="/jobs/'+ed.id+'/pdf" download>Download PDF</a>'+
+      '<button type="button" class="btn ghost" id="edapply"'+(dirty?'':' disabled')+
+      '>Apply my changes</button></div>'+
+      structureBadge(ed.status.structure_ok, ed.status.structure_issues||[]);
+    if(!open.length){
+      h+='<p class="allclear">Everything Rebind can check passes.</p>';
+    }
+    open.forEach(function(c){
+      h+='<div class="item'+(c.status==='manual'?' manual':'')+'">'+
+        '<div class="title">'+esc(c.title)+'</div>'+
+        '<p class="detail">'+esc(c.detail)+'</p>'+
+        (c.need? '<p class="need">'+esc(c.need)+'</p>':'')+
+        actionFor(c)+'</div>';
+    });
+    h+='<a class="reset" href="/">Do another document</a></section>';
+    host.innerHTML=h;
+    wireTodo();
+  }
+
+  function actionFor(c){
+    if(c.action==='describe') return renderFigures();
+    if(c.action==='contrast') return renderContrast(ed.status.contrast);
+    if(c.action==='reading-order') return renderReadingOrder(ed.status.reading_order);
+    return '';
   }
 
   function structureBadge(ok, issues){
     if(ok) return '<p class="struct-badge ok">PDF/UA-2 tagged</p>';
-    var list=issues.map(function(i){return esc(i);}).join(', ');
-    return '<p class="struct-badge attention">Structure check found an issue: '+list+'</p>';
+    return '<p class="struct-badge attention">Structure check: '+
+      issues.map(function(i){return esc(i);}).join(', ')+'</p>';
   }
 
-  function renderFigures(id, name, figures){
-    if(!figures.length) return '';
-    var out='<section class="panel figures" aria-labelledby="fig-h"><h2 id="fig-h">Describe the images</h2>'+
-      '<p class="sub">A screen reader can\'t see these images. Describe what each one shows, and Rebind will add it to the PDF. Leave one blank to keep it as decoration.</p>'+
-      '<div id="figlist">';
-    figures.forEach(function(f){
+  function renderFigures(){
+    if(!ed.figures.length) return '';
+    var out='<div id="figlist">';
+    ed.figures.forEach(function(f){
       out+='<div class="figrow">'+
-        '<img class="figthumb" src="'+f.thumb+'" alt="Preview of an image on page '+esc(f.page)+'">'+
-        '<div class="figfield"><label>Description <span class="figpage">page '+esc(f.page)+'</span>'+
-        '<textarea data-fid="'+esc(f.id)+'" rows="2" placeholder="e.g. A bar chart of sales rising each quarter."></textarea></label></div>'+
-        '</div>';
+        '<img class="figthumb" src="'+esc(f.thumb)+'" alt="Preview of an image on page '+
+        esc(f.page)+'">'+
+        '<textarea data-fid="'+esc(f.id)+'" rows="2" aria-label="Description for the image on '+
+        'page '+esc(f.page)+'" placeholder="What does this picture show?"></textarea></div>';
     });
-    out+='</div><button type="button" class="btn primary" id="applyalts">Add descriptions</button></section>';
-    return out;
+    return out+'</div><button type="button" class="btn small" id="applyalts" '+
+      'style="margin-top:.6rem">Add descriptions</button>';
   }
 
-  function wireFigures(id, name){
-    var btn=document.getElementById('applyalts');
-    if(!btn) return;
-    btn.addEventListener('click', function(){
-      var alts={};
-      document.querySelectorAll('#figlist textarea').forEach(function(t){
-        if(t.value.trim()) alts[t.getAttribute('data-fid')]=t.value.trim();
-      });
-      if(!Object.keys(alts).length){ say('Type a description first, or download the PDF as is.'); return; }
-      btn.disabled=true; btn.textContent='Adding…';
-      renderWorking(name, Date.now()); say('Adding your descriptions…');
-      fetch('/jobs/'+id+'/describe',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({alts:alts})})
-        .then(function(r){return r.json();}).then(function(j){
-          if(j.error){ showError(j.error); return; }
-          watch(id, name, Date.now());
-        }).catch(function(){ showError('Could not apply descriptions.'); });
-    });
-  }
-
-  // The two checks Adobe's checker always hands back to a human. Rebind can't make them pass --
-  // nothing can -- so it shows its work instead: the order it chose, and a real measurement.
+  // Rebind cannot pass this one -- nothing can -- so it points at the pages where the order was a
+  // real decision, and the button puts that page in the middle column to be tabbed through.
   function renderReadingOrder(ro){
-    if(!ro || !ro.checked) return '';
-    var out='<section class="panel check" aria-labelledby="ro-h"><h2 id="ro-h">Reading order</h2>';
-    if(!ro.pages.length){
-      out+='<p class="verdict ok">All '+ro.checked+' page'+(ro.checked>1?'s':'')+' read straight down a single column — there is no ordering decision to second-guess.</p>';
-      return out+'</section>';
-    }
-    out+='<p class="verdict ok">'+ro.clear+' of '+ro.checked+' pages read straight down — nothing to check.</p>'+
-      '<p class="sub">These '+ro.pages.length+' had a real choice in them. The numbers show the order a screen reader will read each block. If a number is in the wrong place, the order is wrong.</p>';
+    if(!ro || !ro.pages || !ro.pages.length) return '';
+    var out='<div class="pagejump">';
     ro.pages.forEach(function(p){
-      out+='<figure class="pageorder"><figcaption>Page '+esc(p.page)+' — '+esc(p.reason)+'</figcaption>'+
-        '<div class="sheet">'+
-        (p.thumb? '<img src="'+p.thumb+'" alt="Page '+esc(p.page)+'">' : '')+
-        p.blocks.map(function(b){
-          return '<span class="ob" style="left:'+b.left+'%;top:'+b.top+'%;width:'+b.width+'%;height:'+b.height+'%" title="'+esc(b.text)+'"><i>'+b.n+'</i></span>';
-        }).join('')+
-        '</div></figure>';
+      out+='<button type="button" class="btn ghost small jump" data-page="'+esc(p.page)+'" '+
+        'title="'+esc(p.reason)+'">p. '+esc(p.page)+'</button>';
     });
-    return out+'</section>';
+    return out+'</div><span class="caveat">Tab through the page to hear the order Rebind '+
+      'chose.</span>';
   }
 
   function renderContrast(c){
-    if(!c || !c.measured) return '';
-    var out='<section class="panel check" aria-labelledby="ct-h"><h2 id="ct-h">Colour contrast</h2>';
-    var lowest=c.lowest? (' Lowest measured: '+c.lowest.ratio+':1.') : '';
-    if(c.ok){
-      var how=c.darkened? ' '+c.darkened+' text colour'+(c.darkened>1?'s were':' was')+' darkened to get there — nothing else about the page changed.'
-                        : '';
-      return out+'<p class="verdict ok">All '+c.measured+' lines of text meet WCAG AA against what is actually behind them.'+esc(lowest)+esc(how)+'</p></section>';
-    }
-    out+='<p class="verdict attention">'+c.failures.length+' of '+c.measured+' lines fall below WCAG AA, on page'+(c.pages.length>1?'s':'')+' '+c.pages.join(', ')+'.</p>'+
-      '<p class="sub">Measured from the rendered page, so this is the contrast a reader actually sees. This is how the original was published — Rebind changes nothing unless you ask it to.</p>'+
-      '<ul class="ratios">';
-    c.failures.slice(0,12).forEach(function(f){
-      out+='<li><span class="swatch" style="background:'+esc(f.paper)+';color:'+esc(f.ink)+'">Aa</span>'+
-        '<span class="ratio">'+f.ratio+':1</span> <span class="need">needs '+f.required+':1</span>'+
+    if(!c || !c.measured || c.ok) return '';
+    var out='<ul class="ratios">';
+    c.failures.slice(0,6).forEach(function(f){
+      out+='<li><span class="swatch" style="background:'+esc(f.paper)+';color:'+esc(f.ink)+
+        '">Aa</span><span class="ratio">'+esc(f.ratio)+':1</span>'+
         '<span class="where">p. '+esc(f.page)+'</span>'+
         '<span class="sample">'+esc(f.text)+'</span></li>';
     });
-    if(c.failures.length>12){ out+='<li class="more">…and '+(c.failures.length-12)+' more.</li>'; }
-    out+='</ul>'+
-      '<div class="fixrow"><button type="button" class="btn" id="darkenbtn">Darken this text to meet AA</button>'+
-      '<span class="caveat">Changes how the document looks. Only the text colours above are altered — never a colour the artwork also uses — and each keeps its hue.</span></div>';
-    return out+'</section>';
+    if(c.failures.length>6){ out+='<li class="sample">…and '+(c.failures.length-6)+' more.</li>'; }
+    out+='</ul><button type="button" class="btn small" id="darkenbtn" '+
+      'style="margin-top:.5rem">Darken this text to meet AA</button>'+
+      '<span class="caveat">The only thing Rebind will change about how the document looks. '+
+      'Each colour keeps its hue, and no colour the artwork also uses is touched.</span>';
+    return out;
   }
 
-  function wireContrast(id, name){
-    var btn=document.getElementById('darkenbtn');
-    if(!btn) return;
-    btn.addEventListener('click', function(){
-      btn.disabled=true;
-      renderWorking(name, Date.now()); say('Darkening the faint text…');
-      fetch('/jobs/'+id+'/contrast',{method:'POST'})
+  function wireTodo(){
+    var apply=document.getElementById('edapply');
+    if(apply) apply.addEventListener('click', applyEdits);
+    var alts=document.getElementById('applyalts');
+    if(alts) alts.addEventListener('click', applyDescriptions);
+    var darken=document.getElementById('darkenbtn');
+    if(darken) darken.addEventListener('click', function(){
+      darken.disabled=true;
+      renderWorking(ed.name, Date.now()); say('Darkening the faint text…');
+      fetch('/jobs/'+ed.id+'/contrast',{method:'POST'})
         .then(function(r){return r.json();}).then(function(j){
           if(j.error){ showError(j.error); return; }
-          watch(id, name, Date.now());
+          watch(ed.id, ed.name, Date.now());
         }).catch(function(){ showError('Could not adjust the contrast.'); });
+    });
+    Array.prototype.slice.call(document.querySelectorAll('.jump')).forEach(function(b){
+      b.addEventListener('click', function(){
+        goToPage(parseInt(b.getAttribute('data-page'),10));
+      });
     });
   }
 
-  // ---- Page editor -------------------------------------------------------------------------
-  // What Rebind decided, laid over a picture of the page, with every decision changeable. The
-  // list is the reading order, so tabbing through it is tabbing through the document as a screen
-  // reader will meet it.
-  var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
-          tags_edit:{},removed:{},alts:{},focused:null};
+  function applyDescriptions(){
+    var alts={};
+    Array.prototype.slice.call(document.querySelectorAll('#figlist textarea')).forEach(function(t){
+      if(t.value.trim()) alts[t.getAttribute('data-fid')]=t.value.trim();
+    });
+    if(!Object.keys(alts).length){ say('Type a description first.'); return; }
+    renderWorking(ed.name, Date.now()); say('Adding your descriptions…');
+    fetch('/jobs/'+ed.id+'/describe',{method:'POST',
+      headers:{'content-type':'application/json'},body:JSON.stringify({alts:alts})})
+      .then(function(r){return r.json();}).then(function(j){
+        if(j.error){ showError(j.error); return; }
+        watch(ed.id, ed.name, Date.now());
+      }).catch(function(){ showError('Could not apply descriptions.'); });
+  }
 
+  function applyEdits(){
+    var removed=Object.keys(ed.removed).filter(function(k){ return ed.removed[k]; });
+    renderWorking(ed.name, Date.now()); say('Applying your changes…');
+    fetch('/jobs/'+ed.id+'/edits',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({tags:ed.tags_edit, removed:removed, alts:ed.alts})})
+      .then(function(r){return r.json();}).then(function(j){
+        if(j.error){ showError(j.error); return; }
+        watch(ed.id, ed.name, Date.now());
+      }).catch(function(){ showError('Could not apply your changes.'); });
+  }
+
+  // ---- Middle column: the document, every element a tab stop ----------------------------------
   function loadEditor(id, name){
-    ed.id=id; ed.name=name;
-    var host=document.getElementById('editor');
+    var host=document.getElementById('stage');
     if(!host) return;
-    host.innerHTML='<section class="panel editor"><h2>Page elements</h2>'+
-      '<p class="sub">Loading the page…</p></section>';
+    host.innerHTML='<div class="panel"><p class="sub" style="margin:0">Laying out the page…</p></div>';
     fetch('/jobs/'+id+'/elements').then(function(r){return r.json();}).then(function(d){
       if(d.error){ host.innerHTML=''; return; }
       ed.elements=d.elements||[]; ed.pages=d.pages||{}; ed.tags=d.tags||[]; ed.keys=d.keys||[];
@@ -487,7 +555,7 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
       ed.alts=(d.edits&&d.edits.alts)||{};
       ed.pageList=Object.keys(ed.pages).map(Number).sort(function(a,b){return a-b;});
       if(ed.pageList.indexOf(ed.page)<0) ed.page=ed.pageList[0]||1;
-      drawEditor();
+      drawStage();
     }).catch(function(){ host.innerHTML=''; });
   }
 
@@ -497,110 +565,181 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
 
   function kindOf(e){ return ed.tags_edit[e.id]||e.kind; }
 
-  function drawEditor(){
-    var host=document.getElementById('editor');
+  function keyFor(tag){
+    var found=null;
+    ed.keys.forEach(function(k){ if(k.tag===tag) found=k; });
+    return found;
+  }
+
+  function tagLabel(t){
+    var k=keyFor(t);
+    return k? k.label : t;
+  }
+
+  function drawStage(){
+    var host=document.getElementById('stage');
     if(!host) return;
     var items=elementsOnPage();
     var pos=ed.pageList.indexOf(ed.page);
-    var dirty=Object.keys(ed.tags_edit).length||Object.keys(ed.removed).length||
-              Object.keys(ed.alts).length;
-    var h='<section class="panel editor" aria-labelledby="ed-h">'+
-      '<div class="edhead"><h2 id="ed-h">Page elements</h2>'+
-      '<div class="pager">'+
-      '<button type="button" class="btn small" id="edprev"'+(pos<=0?' disabled':'')+'>‹</button>'+
-      '<span class="pageno">Page '+ed.page+' of '+(ed.pageList.length||1)+'</span>'+
-      '<button type="button" class="btn small" id="ednext"'+
-        (pos>=ed.pageList.length-1?' disabled':'')+'>›</button>'+
-      '</div></div>'+
-      '<p class="sub">The numbered items are what a screen reader reads, in order. Change what '+
-      'any of them is, remove one that should not be read, or describe a picture. Greyed rows '+
-      'are page furniture Rebind left out — give one a type to have it read after all.</p>';
-
-    if(!items.length){
-      h+='<p class="sub">Nothing is tagged on this page.</p>';
-    }
-    h+='<ol class="ellist">';
-    items.forEach(function(e,i){
-      var kind=kindOf(e);
-      var untagged=(kind==='Artifact');
-      var gone=!!ed.removed[e.id]||untagged;
-      // The row is the tab stop; the controls inside it are reachable by mouse but out of the tab
-      // order, so Tab walks elements one press at a time and a key sets the type immediately.
-      h+='<li class="elrow'+(gone?' gone':'')+'" data-row="'+esc(e.id)+'" tabindex="0"'+
-        ' aria-label="'+esc((untagged?'Not read':tagLabel(kind))+': '+
-          (e.text||e.alt||'picture').slice(0,80))+'">'+
-        '<span class="num">'+(untagged?'—':(i+1))+'</span>'+
-        '<div class="elbody">'+
-        '<label class="visually-hidden" for="k-'+esc(e.id)+'">Element type for item '+(i+1)+'</label>'+
-        '<select id="k-'+esc(e.id)+'" class="kind" tabindex="-1" data-id="'+esc(e.id)+'">'+
-          ['Artifact'].concat(ed.tags).map(function(t){
-            return '<option value="'+t+'"'+(t===kind?' selected':'')+'>'+tagLabel(t)+'</option>';
-          }).join('')+
-        '</select>'+
-        (kind==='Figure'
-          ? '<label class="altlab">Description<textarea class="alt" data-id="'+esc(e.id)+
-            '" rows="2" placeholder="What does this picture show?">'+
-            esc(ed.alts[e.id]!==undefined?ed.alts[e.id]:(e.alt||''))+'</textarea></label>'
-          : '<p class="eltext">'+esc(e.text||'(no text)')+'</p>')+
-        '</div>'+
-        (untagged? '<span class="tagme">not read</span>' : '')+
-        '</li>';
-    });
-    h+='</ol>'+
-      '<div class="fixrow"><button type="button" class="btn primary" id="edapply"'+
-      (dirty?'':' disabled')+'>Apply changes</button>'+
-      '<span class="caveat">'+(dirty? 'The document is rebuilt with your changes.'
-                                    : 'Make a change to enable this.')+'</span></div>'+
-      '</section>';
-    host.innerHTML=h;
-    drawPageView();
-    drawKeys();
-    wireEditor();
-  }
-
-  // The page itself lives in the middle column, and the highlight moves with the focused row.
-  function drawPageView(){
-    var view=document.getElementById('pageview');
-    if(!view) return;
-    var items=elementsOnPage();
-    view.innerHTML='<section class="panel pageview"><div class="sheet big">'+
+    // The type banner sits above the page, so the element's name is in the same glance as the
+    // element itself. It is a live region: a screen reader hears the type on arrival too.
+    var h='<div class="typebar" id="typebar" role="status" aria-live="polite">'+idleBanner()+'</div>'+
+      '<div class="sheet" id="sheet">'+
       (ed.pages[ed.page]? '<img src="'+ed.pages[ed.page]+'" alt="Page '+ed.page+'">':'')+
-      items.map(function(e,i){
-        var k=kindOf(e);
-        var cls='ob'+(ed.removed[e.id]||k==='Artifact'?' gone':'')+(k==='Figure'?' fig':'')+
-          (ed.focused===e.id?' on':'');
-        return '<span class="'+cls+'" data-box="'+esc(e.id)+'" style="left:'+e.left+'%;top:'+
-          e.top+'%;width:'+e.width+'%;height:'+e.height+'%"><i>'+
-          (k==='Artifact'?'—':(i+1))+'</i></span>';
-      }).join('')+'</div></section>';
+      items.map(function(e,i){ return boxHtml(e,i); }).join('')+'</div>'+
+      '<div class="pager">'+
+      '<button type="button" class="btn ghost small" id="edprev"'+(pos<=0?' disabled':'')+
+      '>‹ Previous</button>'+
+      '<span class="pageno">Page '+ed.page+' of '+(ed.pageList.length||1)+'</span>'+
+      '<button type="button" class="btn ghost small" id="ednext"'+
+      (pos>=ed.pageList.length-1?' disabled':'')+'>Next ›</button></div>';
+    host.innerHTML=h;
+    wireStage();
   }
 
-  function drawKeys(){
-    var host=document.getElementById('keys');
-    if(!host) return;
-    host.innerHTML='<section class="panel keys" aria-labelledby="kh"><h2 id="kh">Keys</h2>'+
-      '<p class="sub">Tab to an element, then press a key to set what it is.</p>'+
-      '<dl class="keylist">'+ed.keys.map(function(k){
-        return '<div><dt><kbd>'+esc(k.key)+'</kbd></dt><dd>'+esc(k.label)+'</dd></div>';
-      }).join('')+
-      '<div><dt><kbd>↑</kbd><kbd>↓</kbd></dt><dd>Previous / next element</dd></div>'+
-      '<div><dt><kbd>[</kbd><kbd>]</kbd></dt><dd>Previous / next page</dd></div>'+
-      '</dl></section>';
+  function idleBanner(){
+    return '<p class="what idle">Tab into the page to walk its elements</p>'+
+      '<p class="why">Every block Rebind tagged is a stop. The order you tab through them is the '+
+      'order a screen reader reads them in.</p>'+
+      '<p class="hint">Enter changes what an element is · [ ] turn the page</p>';
   }
 
-  function highlight(elementId){
-    var view=document.getElementById('pageview');
-    if(!view) return;
-    view.querySelectorAll('.ob').forEach(function(b){ b.classList.remove('on'); });
-    var box=view.querySelector('[data-box="'+elementId+'"]');
-    if(box){
-      box.classList.add('on');
-      if(box.scrollIntoView) box.scrollIntoView({block:'nearest'});
+  function boxHtml(e,i){
+    var k=kindOf(e);
+    var untagged=(k==='Artifact');
+    var gone=!!ed.removed[e.id]||untagged;
+    var cls='ob'+(gone?' gone':'')+(k==='Figure'?' fig':'');
+    return '<span class="'+cls+'" tabindex="0" role="button" data-box="'+esc(e.id)+'"'+
+      ' aria-label="'+esc((untagged?'Not read':tagLabel(k))+', item '+(i+1)+': '+
+        (e.text||e.alt||'picture').slice(0,80))+'"'+
+      ' style="left:'+e.left+'%;top:'+e.top+'%;width:'+e.width+'%;height:'+e.height+'%">'+
+      '<i aria-hidden="true">'+(untagged?'—':(i+1))+'</i></span>';
+  }
+
+  // What the banner says while an element has focus: the type in big letters, what that type
+  // means, and -- for a figure -- the description box, editable where it stands.
+  function showType(e){
+    var bar=document.getElementById('typebar');
+    if(!bar) return;
+    var k=kindOf(e), key=keyFor(k);
+    var alt=ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'');
+    var h='<p class="what">'+esc(key? key.label : k)+'</p>'+
+      '<p class="why">'+esc(key&&key.what? key.what : 'A structure element.')+'</p>';
+    if(k==='Figure'){
+      h+='<div class="altbox"><textarea id="altnow" rows="2" data-id="'+esc(e.id)+'" '+
+        'aria-label="Description of this figure" placeholder="What does this picture show?">'+
+        esc(alt)+'</textarea></div>'+
+        '<p class="hint">Space to type a description · Enter to change the type</p>';
+    } else {
+      h+='<p class="hint">Enter to change what this is · [ ] turn the page</p>';
+    }
+    bar.innerHTML=h;
+    var box=document.getElementById('altnow');
+    if(box) box.addEventListener('input',function(){
+      ed.alts[box.getAttribute('data-id')]=box.value;
+      var apply=document.getElementById('edapply'); if(apply) apply.disabled=false;
+    });
+    if(box) box.addEventListener('keydown',function(ev){
+      if(ev.key==='Escape'){ ev.preventDefault(); focusBox(e.id); }
+    });
+  }
+
+  function focusBox(elementId){
+    var box=document.querySelector('[data-box="'+elementId+'"]');
+    if(box) box.focus();
+  }
+
+  function goToPage(page){
+    if(ed.pageList.indexOf(page)<0) return;
+    ed.page=page; ed.focused=null; drawStage();
+    var first=document.querySelector('.ob');
+    if(first) first.focus();
+  }
+
+  function turnPage(step){
+    var at=ed.pageList.indexOf(ed.page);
+    goToPage(ed.pageList[Math.min(Math.max(at+step,0),ed.pageList.length-1)]);
+  }
+
+  function wireStage(){
+    var prev=document.getElementById('edprev'), next=document.getElementById('ednext');
+    if(prev) prev.addEventListener('click',function(){ turnPage(-1); });
+    if(next) next.addEventListener('click',function(){ turnPage(1); });
+
+    var items=elementsOnPage();
+    var boxes=Array.prototype.slice.call(document.querySelectorAll('.ob'));
+    boxes.forEach(function(box,index){
+      var e=items[index];
+      box.addEventListener('focus',function(){ ed.focused=e.id; showType(e); });
+      box.addEventListener('click',function(){ box.focus(); });
+      box.addEventListener('keydown',function(ev){
+        if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
+        var key=(ev.key||'');
+        if(key==='Enter'){ ev.preventDefault(); openPalette(e.id); return; }
+        if(key===' '&&kindOf(e)==='Figure'){
+          ev.preventDefault();
+          var box2=document.getElementById('altnow');
+          if(box2) box2.focus();
+          return;
+        }
+        if(key==='['||key===']'){ ev.preventDefault(); turnPage(key===']'?1:-1); return; }
+        if(key==='ArrowDown'||key==='ArrowUp'){
+          var to=boxes[index+(key==='ArrowDown'?1:-1)];
+          if(to){ ev.preventDefault(); to.focus(); }
+        }
+      });
+    });
+    if(ed.focused){
+      var again=document.querySelector('[data-box="'+ed.focused+'"]');
+      if(again) again.focus();
     }
   }
 
-  // Setting a type redraws, then puts focus back on the same row so a run of corrections is one
-  // uninterrupted pass: Tab, key, Tab, key.
+  // ---- The floating hotkey palette ------------------------------------------------------------
+  function openPalette(elementId){
+    closePalette();
+    var e=null;
+    ed.elements.forEach(function(x){ if(x.id===elementId) e=x; });
+    if(!e) return;
+    var current=kindOf(e);
+    var host=document.createElement('div');
+    host.className='palette';
+    host.id='palette';
+    host.setAttribute('role','dialog');
+    host.setAttribute('aria-modal','true');
+    host.setAttribute('aria-label','Change what this element is');
+    host.innerHTML='<div class="card"><h2>What is this?</h2>'+
+      '<p class="sub">Press a key. Esc leaves it as it is.</p><ul class="keys">'+
+      ed.keys.map(function(k){
+        return '<li'+(k.tag===current?' class="current"':'')+'><kbd>'+esc(k.key)+'</kbd>'+
+          '<span><span class="lab">'+esc(k.label)+'</span><br>'+
+          '<span class="what">'+esc(k.what||'')+'</span></span></li>';
+      }).join('')+'</ul></div>';
+    document.body.appendChild(host);
+    ed.palette=true;
+    host.tabIndex=-1;
+    host.focus();
+    host.addEventListener('keydown',function(ev){
+      if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
+      if(ev.key==='Escape'){ ev.preventDefault(); closePalette(); focusBox(elementId); return; }
+      var pressed=(ev.key||'').toLowerCase();
+      var hit=null;
+      ed.keys.forEach(function(k){ if(k.key===pressed) hit=k.tag; });
+      if(hit){ ev.preventDefault(); closePalette(); setKind(elementId, hit); }
+    });
+    host.addEventListener('click',function(ev){
+      if(ev.target===host){ closePalette(); focusBox(elementId); }
+    });
+  }
+
+  function closePalette(){
+    var host=document.getElementById('palette');
+    if(host && host.parentNode) host.parentNode.removeChild(host);
+    ed.palette=false;
+  }
+
+  // Setting a type redraws the page and puts focus back on the same element, so a run of
+  // corrections is one uninterrupted pass: Tab, Enter, key, Tab, Enter, key.
   function setKind(elementId, tag){
     if(tag==='Artifact') delete ed.tags_edit[elementId]; else ed.tags_edit[elementId]=tag;
     // "Not read" on something Rebind did tag means removing it; on furniture it means leave it.
@@ -608,110 +747,25 @@ a.reset{display:inline-block;margin-top:1.4rem;color:var(--cloth);font-size:.9re
     ed.elements.forEach(function(e){ if(e.id===elementId) known=e; });
     if(tag==='Artifact' && known && known.kind!=='Artifact') ed.removed[elementId]=true;
     else delete ed.removed[elementId];
-    drawEditor();
-    var row=document.querySelector('.elrow[data-row="'+elementId+'"]');
-    if(row){ row.focus(); }
-    say(tagLabel(tag)+' set.');
-  }
-
-  function turnPage(step){
-    var at=ed.pageList.indexOf(ed.page);
-    var next=ed.pageList[Math.min(Math.max(at+step,0),ed.pageList.length-1)];
-    if(next===ed.page) return;
-    ed.page=next; drawEditor();
-    var first=document.querySelector('.elrow');
-    if(first) first.focus();
-  }
-
-  function tagLabel(t){
-    var names={Artifact:'Not read (page furniture)'};
-    ed.keys.forEach(function(k){ names[k.tag]=k.label; });
-    return names[t]||t;
-  }
-
-  function wireEditor(){
-    var host=document.getElementById('editor');
-    if(!host) return;
-    var prev=document.getElementById('edprev'), next=document.getElementById('ednext');
-    if(prev) prev.addEventListener('click',function(){ turnPage(-1); });
-    if(next) next.addEventListener('click',function(){ turnPage(1); });
-
-    host.querySelectorAll('select.kind').forEach(function(sel){
-      sel.addEventListener('change',function(){ setKind(sel.getAttribute('data-id'), sel.value); });
-    });
-    host.querySelectorAll('textarea.alt').forEach(function(t){
-      t.addEventListener('input',function(){
-        ed.alts[t.getAttribute('data-id')]=t.value;
-        var apply=document.getElementById('edapply'); if(apply) apply.disabled=false;
-      });
-    });
-    // Focusing a row lights up its region on the page in the middle column, so tabbing through
-    // the list walks the page. Typing a key while a row has focus sets what it is, at once.
-    var rows=Array.prototype.slice.call(host.querySelectorAll('.elrow'));
-    rows.forEach(function(row,index){
-      row.addEventListener('focusin',function(){
-        ed.focused=row.getAttribute('data-row');
-        highlight(ed.focused);
-      });
-      row.addEventListener('keydown',function(ev){
-        if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
-        var key=(ev.key||'').toLowerCase();
-        if(key==='arrowdown'||key==='arrowup'){
-          var next=rows[index+(key==='arrowdown'?1:-1)];
-          if(next){ ev.preventDefault(); next.focus(); }
-          return;
-        }
-        if(key==='['||key===']'){
-          ev.preventDefault(); turnPage(key===']'?1:-1); return;
-        }
-        var hit=null;
-        ed.keys.forEach(function(k){ if(k.key===key) hit=k.tag; });
-        if(hit){ ev.preventDefault(); setKind(row.getAttribute('data-row'), hit); }
-      });
-    });
-
+    ed.focused=elementId;
+    drawStage();
+    // Deliberately NOT redrawing the right column: it holds description boxes the user may be
+    // half way through typing into, and rebuilding it would throw that text away.
     var apply=document.getElementById('edapply');
-    if(apply) apply.addEventListener('click',function(){
-      var removed=Object.keys(ed.removed).filter(function(k){ return ed.removed[k]; });
-      renderWorking(ed.name, Date.now()); say('Applying your changes…');
-      fetch('/jobs/'+ed.id+'/edits',{method:'POST',headers:{'content-type':'application/json'},
-        body:JSON.stringify({tags:ed.tags_edit, removed:removed, alts:ed.alts})})
-        .then(function(r){return r.json();}).then(function(j){
-          if(j.error){ showError(j.error); return; }
-          watch(ed.id, ed.name, Date.now());
-        }).catch(function(){ showError('Could not apply your changes.'); });
-    });
-  }
-
-  function renderQueue(review){
-    if(!review) return '';
-    var out='<div class="panel queue">';
-    if(review.summary){ out+='<p class="sub" style="margin:0">'+esc(review.summary)+'</p>'; }
-    if(review.clean){
-      out+='</div>';
-      return out;
-    }
-    out+='<h2 id="queue-h" style="margin-top:.9rem">Needs a look</h2>'+
-      '<ul class="conditions">';
-    review.items.forEach(function(it){
-      var pages = it.pages && it.pages.length ? '<p class="pages"><b>pages</b> '+it.pages.join(', ')+'</p>' : '';
-      out+='<li class="cond attention">'+
-        '<div class="top"><span class="title">'+esc(it.title)+'</span></div>'+
-        '<p class="detail">'+esc(it.detail)+'</p>'+pages+'</li>';
-    });
-    out+='</ul></div>';
-    return out;
+    if(apply) apply.disabled=false;
+    say(tagLabel(tag)+' set.');
   }
 
   function showError(msg){
     if(elapsedTimer) clearInterval(elapsedTimer);
     if(poll) clearInterval(poll);
+    document.body.classList.remove('wide');
     document.getElementById('intake').hidden=true;
     work.hidden=false;
     work.innerHTML='<h2 class="visually-hidden">Problem</h2>'+
-      '<div class="panel error"><div class="cond attention" style="border:none;padding:0">'+
-      '<div class="top"><span class="title">That didn\'t work</span></div>'+
-      '<p class="detail">'+esc(msg)+'</p></div>'+
+      '<div class="panel error">'+
+      '<div class="title" style="font-weight:600">That didn\'t work</div>'+
+      '<p class="detail">'+esc(msg)+'</p>'+
       '<a class="reset" href="/">Try another document</a></div>';
     say('Error: '+msg);
   }

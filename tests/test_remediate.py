@@ -368,13 +368,16 @@ def test_every_offered_tag_produces_a_conformant_document(tag: str, tmp_path: Pa
 def test_every_hotkey_names_a_tag_that_exists():
     from rebind.remediate import TAG_KEYS
 
-    keys = [key for key, _tag, _label in TAG_KEYS]
+    keys = [key for key, _tag, _label, _what in TAG_KEYS]
     assert len(keys) == len(set(keys)), "hotkeys must be unique"
-    for key, tag, label in TAG_KEYS:
+    for key, tag, label, what in TAG_KEYS:
         assert len(key) == 1, f"{tag}: a hotkey should be one keystroke, got {key!r}"
         assert tag in EDITABLE_TAGS or tag == "Artifact", tag
         assert label, tag
-    assert set(EDITABLE_TAGS) <= {tag for _k, tag, _l in TAG_KEYS}, (
+        # The editor shows this when the element has focus. A tag with no explanation is a tag a
+        # librarian has to already understand to use, which defeats the point of the editor.
+        assert what and what != label, f"{tag}: needs an explanation of what it means"
+    assert set(EDITABLE_TAGS) <= {tag for _k, tag, _l, _w in TAG_KEYS}, (
         "every offered tag needs a key, or it cannot be reached from the keyboard")
 
 

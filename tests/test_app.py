@@ -56,6 +56,10 @@ def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
     keys = {entry["key"] for entry in body["keys"]}
     assert len(keys) == len(body["keys"]), "every hotkey must be unique"
     assert {"p", "1", "q", "c", "f", "t", "x"} <= keys, sorted(keys)
+    # Every key carries an explanation: the editor shows what a type *means* when it has focus,
+    # because "BlockQuote" tells a librarian nothing on its own.
+    for entry in body["keys"]:
+        assert entry["what"], f"{entry['tag']} has no explanation"
     for element in body["elements"]:
         assert 0 <= element["left"] <= 100 and 0 <= element["top"] <= 100, element
 
@@ -72,6 +76,23 @@ def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
     # A removed element is not read, but it is still offered -- listed as untagged, so the same
     # control that removed it can put it back.
     assert after[ids[3]] == "Artifact"
+
+
+def test_a_finished_job_carries_the_adobe_checklist(tmp_path: Path):
+    # The left column of the result view is Adobe's own rule list, judged against the produced
+    # document. It has to reach the page from the job, and it has to be honest: the two checks
+    # Adobe always defers to a human are reported as manual, never as passes.
+    source = born_digital_pdf("<h1>Title</h1><p>Body text here.</p>", tmp_path / "in.pdf")
+    client = TestClient(create_app())
+    job_id = client.post("/convert?filename=in.pdf", content=source.read_bytes()).json()["job_id"]
+    status = _run(client, job_id)
+    assert status["status"] == "done", status.get("error")
+
+    checks = {c["title"]: c for c in status["checklist"]}
+    assert checks["Tagged PDF"]["status"] == "pass"
+    assert checks["Logical reading order"]["status"] == "manual"
+    assert checks["Colour contrast"]["status"] == "manual"
+    assert {c["group"] for c in status["checklist"]} >= {"Document", "Tables", "Headings"}
 
 
 def test_the_idle_watchdog_is_off_unless_asked_for():

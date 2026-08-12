@@ -63,9 +63,23 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
 - **Bookmarks** — an outline built from the recovered headings, nested by level, each entry a real
   PDF 2.0 structure destination into the heading itself.
 
+A scan that arrives having already been through another OCR tool carries its own invisible text
+layer. That layer is removed before Rebind's tagged one goes on — otherwise the document holds two
+copies of every word, and Tesseract's stand-in font declares a character map veraPDF rejects. Only
+invisible text goes; every visible mark is left exactly as it was, so the page is not re-rendered
+and looks identical.
+
 Text is never fabricated: every text node traces to recognizer output with a confidence score.
 Below threshold it becomes an explicit placeholder — `[text not recoverable from source scan,
 p. 214]` — rather than a guess.
+
+## The accessibility report
+
+Rebind walks Adobe's Accessibility Checker rule list against its own output and says, for each
+rule, what is true of the document. Four verdicts, and only one of them is a tick: *passes*,
+*needs you* (with what it needs), *needs your eye* (the two below, which are unconditional), and
+*not applicable* (the document has none of the thing being checked). Nothing is asserted; each
+verdict is read off the produced PDF.
 
 ## The two checks no tool can pass for you
 
@@ -91,17 +105,26 @@ pass, but it hands you the evidence instead of leaving you to gather it page by 
 
 **App.** Install with the Windows installer (`rebind-setup.exe`, built from `packaging/`) or run
 `rebind serve`, then use the local browser page it opens. Drop a PDF in, convert, and download the
-result. Images that need a description are listed so you can type one in the app. The result view
-shows a structure badge: a fast, dependency-free check of what remediation is expected to have
-built (not independent conformance validation — that's veraPDF, dev/CI-only; see ADR 0006). Nothing
-is uploaded. Closing the tab quits Rebind — the page sends a heartbeat, and the server exits when
-it stops.
+result. The result view also shows a structure badge: a fast, dependency-free check of what
+remediation is expected to have built (not independent conformance validation — that's veraPDF,
+dev/CI-only; see ADR 0006). Nothing is uploaded. Closing the tab quits Rebind — the page sends a
+heartbeat, and the server exits when it stops.
 
-### The page editor
+### The result view
 
-Three columns: the keys on the left, the page in the middle, and every element Rebind tagged on
-the right, listed in the order a screen reader will read them. Tab moves one element at a time and
-the matching region lights up on the page; a single keystroke sets what that element is.
+Three columns, with the document at twice the width of either side of it.
+
+**Left — the accessibility report.** Adobe's own rule list, in Adobe's own groups, ticked off one
+at a time against the document Rebind actually produced. Every verdict is read off the finished
+PDF — the structure tree, the fonts, the annotations — never inferred from what remediation
+intended, because a green tick is a claim. A rule the document has nothing to test (no forms, no
+tables) is marked *not applicable* rather than passed.
+
+**Middle — the document.** Each element Rebind tagged is drawn over the page and is a tab stop, in
+reading order, so tabbing through the page is meeting it as a screen reader will. The element's
+type appears in big letters above the page with an explanation of what that type *means*, so
+`BlockQuote` is not something you have to already know. `Enter` opens a floating list of every
+type; one keystroke sets it.
 
 | key | | key | | key | |
 |---|---|---|---|---|---|
@@ -113,9 +136,14 @@ the matching region lights up on the page; a single keystroke sets what that ele
 | `n` | No structure | `x` | Not read | `[` `]` | Previous / next page |
 
 Removing an element (`x`) marks its content as an artifact rather than untagging it — untagged
-content is a conformance failure, not a fix. Page furniture and text inside figures are listed
-greyed as "not read"; giving one a type puts it into the reading order, so nothing is one-way. A
-figure's alt text is editable in place.
+content is a conformance failure, not a fix. Page furniture and text inside figures are drawn
+hatched as "not read"; giving one a type puts it into the reading order, so nothing is one-way. A
+figure's description is typed in place, above the page (`Space` while it has focus).
+
+**Right — what needs you.** Every rule that could not be ticked, each next to the one thing that
+would tick it: the images that need describing, with a thumbnail and a box; the measured contrast
+failures, with the button that darkens exactly those colours; the pages where the reading order was
+a real decision, as buttons that put that page in the middle column.
 
 Applying rebuilds the document from the corrected plan rather than patching the structure tree
 afterwards, so grouping decisions change too. Every offered type has a test that applies it and
@@ -135,7 +163,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.15.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.16.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,

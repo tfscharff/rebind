@@ -52,6 +52,8 @@ class _Job:
     alt_texts: dict = field(default_factory=dict)  # descriptions the user has supplied so far
     # Set only when the user explicitly asks: the one option that changes the document's look.
     darken_contrast: bool = False
+    # Adobe's own rule list, judged against the produced PDF (see rebind.checklist)
+    checklist: list = field(default_factory=list)
     elements: list = field(default_factory=list)     # every tagged element, for the page editor
     page_images: dict = field(default_factory=dict)  # page number -> data URI of the page
     edits: dict = field(default_factory=dict)        # the user's corrections, kept across re-runs
@@ -85,6 +87,7 @@ def _run_conversion(job: _Job, source: Path) -> None:
     # Absolute imports, not relative: when PyInstaller freezes app.py as the __main__ entry
     # script, a relative import has no parent package and raises ImportError (see /render-smoke,
     # which uses the same absolute form for the same reason).
+    from rebind.checklist import build_checklist
     from rebind.extract import ExtractionError
     from rebind.remediate import Edits, remediate
     from rebind.ui import build_review
@@ -107,6 +110,12 @@ def _run_conversion(job: _Job, source: Path) -> None:
         job.contrast = result.contrast
         job.elements = list(result.elements)
         job.page_images = result.page_images
+        # Read off the finished document, not off what remediation meant to do: this is the list
+        # the librarian will be judged by, so every tick has to be earned by the actual bytes.
+        job.checklist = build_checklist(
+            result.pdf_path, page_count=result.page_count, empty_pages=result.empty_pages,
+            undescribed_figures=tuple(result.figures), reading_order=result.reading_order,
+            contrast=result.contrast)
         job.status = "done"
     except ExtractionError as exc:
         job.status = "error"
@@ -171,6 +180,7 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
             body["structure_issues"] = list(job.structure_issues)
             body["reading_order"] = job.reading_order
             body["contrast"] = job.contrast
+            body["checklist"] = job.checklist
         if job.status == "error":
             body["error"] = job.error
         return JSONResponse(body)
@@ -207,7 +217,8 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         return JSONResponse({
             "elements": job.elements, "pages": job.page_images,
             "tags": list(EDITABLE_TAGS), "edits": job.edits,
-            "keys": [{"key": key, "tag": tag, "label": label} for key, tag, label in TAG_KEYS],
+            "keys": [{"key": key, "tag": tag, "label": label, "what": what}
+                     for key, tag, label, what in TAG_KEYS],
         })
 
     async def job_edits(request: Request) -> JSONResponse:

@@ -49,8 +49,36 @@ def test_every_function_the_page_calls_is_defined():
     # Names that are properties/locals rather than free calls slip through the regex; keep the
     # assertion to names that look like our own helpers.
     ours = {name for name in missing if name in {
-        "renderFigures", "renderQueue", "renderReadingOrder", "renderContrast", "renderWorking",
-        "wireFigures", "wireContrast", "wireEditor", "loadEditor", "drawEditor", "tagLabel",
+        "renderFigures", "renderReadingOrder", "renderContrast", "renderWorking", "drawReport",
+        "drawTodo", "drawStage", "wireTodo", "wireStage", "loadEditor", "tagLabel", "keyFor",
         "elementsOnPage", "kindOf", "structureBadge", "showError", "watch", "done", "say",
-        "start", "tick", "esc"}}
+        "start", "tick", "esc", "openPalette", "closePalette", "setKind", "showType", "boxHtml",
+        "focusBox", "goToPage", "turnPage", "revealChecks", "statusWord", "idleBanner",
+        "actionFor", "applyEdits", "applyDescriptions"}}
     assert not ours, f"called but never defined: {sorted(ours)}"
+
+
+def test_the_workspace_is_report_document_todo():
+    # The three columns the result view is built from. Renaming one without renaming its CSS is a
+    # silently broken layout, which no other test would catch.
+    page = index_html()
+    for marker in ('id="report"', 'id="stage"', 'id="todo"', 'class="workspace"'):
+        assert marker in page, marker
+    assert ".workspace{display:grid" in page
+    # The document column is the wide one -- that is the whole point of the layout.
+    assert "minmax(0,2.2fr)" in page
+
+
+def test_every_element_on_the_page_is_a_tab_stop():
+    # The elements are tabbed through on the page itself, not in a list beside it, so each overlay
+    # box has to be focusable and named for a screen reader.
+    script = _script()
+    assert 'tabindex="0"' in script and 'role="button"' in script
+    assert "aria-label=" in script
+
+
+def test_enter_opens_the_hotkey_palette_and_escape_leaves_it_alone():
+    script = _script()
+    assert "if(key==='Enter'){ ev.preventDefault(); openPalette(" in script
+    assert "ev.key==='Escape'" in script
+    assert "'aria-modal','true'" in script, "the palette must trap a screen reader inside it"
