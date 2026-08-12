@@ -90,8 +90,11 @@ def test_a_finished_job_carries_the_adobe_checklist(tmp_path: Path):
 
     checks = {c["title"]: c for c in status["checklist"]}
     assert checks["Tagged PDF"]["status"] == "pass"
+    # Reading order is the one verdict no measurement can settle, so it stays with the person.
     assert checks["Logical reading order"]["status"] == "manual"
-    assert checks["Colour contrast"]["status"] == "manual"
+    # Contrast is measured and corrected, so it can be ticked -- on a document with black text on
+    # white, it passes without anything needing to be changed.
+    assert checks["Colour contrast"]["status"] == "pass"
     assert {c["group"] for c in status["checklist"]} >= {"Document", "Tables", "Headings"}
 
 
@@ -125,19 +128,42 @@ def test_a_finished_job_reports_the_two_manual_check_findings(tmp_path: Path):
     assert status["status"] == "done", status.get("error")
 
     assert status["reading_order"]["checked"] == 1
+    # Contrast is corrected as part of remediation now, not offered as homework: the pale grey
+    # paragraph is darkened, and the verdict is a re-measurement of the corrected document rather
+    # than a claim that the correction worked.
     contrast = status["contrast"]
     assert contrast["measured"] > 0
-    assert contrast["ok"] is False
-    assert any("grey small print" in f["text"] for f in contrast["failures"])
-    assert contrast["lowest"]["ratio"] < 4.5
+    assert contrast["ok"] is True, contrast["failures"]
+    assert contrast["darkened"] > 0
+    assert contrast["lowest"]["ratio"] >= 4.5
+    assert {c["title"]: c["status"] for c in status["checklist"]}["Colour contrast"] == "pass"
 
-    # The correction is opt-in: it changes how the document looks, so it only happens on request.
-    client.post(f"/jobs/{job_id}/contrast")
-    for _ in range(120):
-        status = client.get(f"/jobs/{job_id}").json()
-        if status["status"] in ("done", "error"):
-            break
-        time.sleep(0.5)
-    assert status["status"] == "done", status.get("error")
-    assert status["contrast"]["ok"] is True, status["contrast"]["failures"]
-    assert status["contrast"]["darkened"] > 0
+
+def test_a_report_fix_is_applied_and_survives_a_later_rebuild(tmp_path: Path):
+    # Every check the report can fix carries a fix id, and applying one rebuilds the document with
+    # it. It has to stick: a fix undone by the next retag would be worse than no fix at all.
+    source = born_digital_pdf("<h1>Title</h1><p>Body text.</p>", tmp_path / "in.pdf")
+    client = TestClient(create_app())
+    job_id = client.post("/convert?filename=in.pdf", content=source.read_bytes()).json()["job_id"]
+    assert _run(client, job_id)["status"] == "done"
+
+    assert client.post(f"/jobs/{job_id}/fix", json={"fix": "set-title", "value": ""}).status_code \
+        == 400
+    assert client.post(f"/jobs/{job_id}/fix", json={"fix": "invent"}).status_code == 400
+
+    client.post(f"/jobs/{job_id}/fix", json={"fix": "set-title", "value": "A Better Title"})
+    assert _run(client, job_id)["status"] == "done"
+
+    import pikepdf
+    from rebind.app import _JobStore  # noqa: F401  (documents where the job lives)
+    pdf_bytes = client.get(f"/jobs/{job_id}/pdf").content
+    (tmp_path / "out.pdf").write_bytes(pdf_bytes)
+    with pikepdf.open(tmp_path / "out.pdf") as pdf:
+        assert str(pdf.open_metadata()["dc:title"]) == "A Better Title"
+
+    # A later edit rebuilds from source; the title must come through it unchanged.
+    client.post(f"/jobs/{job_id}/edits", json={"tags": {}, "removed": [], "alts": {}})
+    assert _run(client, job_id)["status"] == "done"
+    (tmp_path / "out2.pdf").write_bytes(client.get(f"/jobs/{job_id}/pdf").content)
+    with pikepdf.open(tmp_path / "out2.pdf") as pdf:
+        assert str(pdf.open_metadata()["dc:title"]) == "A Better Title"

@@ -53,14 +53,47 @@ def test_a_remediated_document_passes_the_mechanical_checks(remediated: Path):
     assert checks["Appropriate nesting"]["status"] == PASS
 
 
-def test_the_two_checks_no_tool_can_pass_are_reported_as_manual(remediated: Path):
-    # Adobe reports these as "needs manual check" on every document, always. Claiming a pass here
-    # would be the single most dishonest thing this file could do.
-    checks = _by_title(build_checklist(remediated))
-    assert checks["Logical reading order"]["status"] == "manual"
-    assert checks["Colour contrast"]["status"] == "manual"
-    assert checks["Logical reading order"]["action"] == "reading-order"
-    assert checks["Colour contrast"]["action"] == "contrast"
+def test_reading_order_stays_with_the_person_and_names_every_page(remediated: Path):
+    # Adobe reports this as "needs manual check" on every document, always, and no measurement can
+    # settle it. The app turns it into something finishable -- tab through every page -- so the
+    # check carries every page as a location and is never claimed as a pass here.
+    checks = _by_title(build_checklist(remediated, page_count=3))
+    order = checks["Logical reading order"]
+    assert order["status"] == "manual"
+    assert order["action"] == "reading-order"
+    assert [loc["page"] for loc in order["locations"]] == [1, 2, 3]
+
+
+def test_contrast_passes_only_on_a_measurement_of_the_corrected_document(remediated: Path):
+    # Contrast is fixed automatically, so this check can be ticked -- but only by re-measuring.
+    # A pass asserted from "we ran the correction" would be a claim, not a finding.
+    passing = _by_title(build_checklist(remediated, contrast={
+        "measured": 40, "ok": True, "darkened": 3, "failures": [],
+        "lowest": {"ratio": 4.8}}))["Colour contrast"]
+    assert passing["status"] == PASS
+    assert "3 text colours were darkened" in passing["detail"]
+
+    # What darkening cannot fix -- text on imagery, where no single colour is behind it -- is
+    # still reported, with the pages to look at.
+    failing = _by_title(build_checklist(remediated, contrast={
+        "measured": 40, "ok": False, "darkened": 2,
+        "failures": [{"page": 7, "ratio": 2.1}, {"page": 9, "ratio": 3.0}],
+        "lowest": {"ratio": 2.1}}))["Colour contrast"]
+    assert failing["status"] == NEEDS_YOU
+    assert [loc["page"] for loc in failing["locations"]] == [7, 9]
+    assert failing["need"]
+
+
+def test_nothing_is_reported_without_a_way_to_act_on_it(remediated: Path):
+    # The rule the report lives by: naming a fault without a route to fixing it leaves a librarian
+    # to work out the remedy and then find the place themselves. Every open item must offer either
+    # a fix Rebind can perform, somewhere in the document to go, or an instruction.
+    checks = build_checklist(remediated, page_count=1, undescribed_figures=({"id": "f", "page": 1},),
+                             contrast={"measured": 5, "ok": False, "darkened": 0,
+                                       "failures": [{"page": 1, "ratio": 2.0}]})
+    for check in checks:
+        if check["status"] in (NEEDS_YOU, "manual"):
+            assert check["action"] or check["locations"] or check["need"], check["title"]
 
 
 def test_absent_features_are_not_applicable_rather_than_passing(remediated: Path):

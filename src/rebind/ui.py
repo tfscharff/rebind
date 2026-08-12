@@ -145,6 +145,14 @@ li.check.needs-you .name,li.check.manual .name{font-weight:600}
 li.check.na{opacity:.45}
 li.check.na.shown{opacity:.45}
 li.check .name{min-width:0}
+/* An item with a place in the document is a button that takes you there. */
+li.check button.where{font:inherit;font-size:.86rem;background:none;border:none;padding:0;
+  color:inherit;text-align:left;cursor:pointer;display:flex;gap:.4rem;align-items:baseline;
+  min-width:0;font-weight:600}
+li.check button.where:hover{text-decoration:underline}
+li.check button.where:focus-visible{outline:2px solid var(--stamp);outline-offset:2px;
+  border-radius:3px}
+li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:none;font-weight:400}
 
 /* ---- Middle: the document ---- */
 .typebar{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);
@@ -192,6 +200,9 @@ li.check .name{min-width:0}
   border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ink);
   resize:vertical}
 .pagejump{display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.45rem}
+.fixfield{display:flex;gap:.4rem;margin-top:.5rem}
+.fixfield input{flex:1;min-width:0;font:inherit;font-size:.85rem;padding:.3rem .45rem;
+  border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ink)}
 .ratios{list-style:none;margin:.5rem 0 0;padding:0;font-size:.82rem}
 .ratios li{display:flex;gap:.4rem;align-items:baseline;padding:.25rem 0;
   border-top:1px solid var(--line)}
@@ -338,7 +349,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // ---- State ---------------------------------------------------------------------------------
   var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
           tags_edit:{},removed:{},alts:{},focused:null,figures:[],checks:[],status:null,
-          palette:false};
+          palette:false,walked:{}};
 
   function done(id, name, s){
     if(elapsedTimer) clearInterval(elapsedTimer);
@@ -352,7 +363,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       '<aside class="col-todo" id="todo" aria-labelledby="todo-h"></aside>'+
       '</div>';
     drawReport();
-    drawTodo();
+    // The right column is drawn by loadEditor, once the page list is known: the reading-order
+    // item counts pages, and it cannot count them before they have arrived.
     loadEditor(id, name);
     say('Done. Your accessible PDF is ready.');
   }
@@ -370,22 +382,75 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     });
     var h='<section class="panel report"><h2 id="rep-h">Accessibility report</h2>'+
       '<p class="score">'+passed+' of '+total+' checks pass</p>';
-    var n=0;
     groups.forEach(function(g){
       h+='<div class="group"><h3>'+esc(g)+'</h3><ul class="checks">';
-      byGroup[g].forEach(function(c){
-        var cls=c.status==='n/a'?'na':c.status;
-        var mark=c.status==='pass'?'✓':(c.status==='n/a'?'–':'!');
-        h+='<li class="check '+cls+'" data-step="'+(n++)+'">'+
-          '<span class="mark" aria-hidden="true">'+mark+'</span>'+
-          '<span class="name">'+esc(c.title)+
-          '<span class="visually-hidden">: '+esc(statusWord(c.status))+'</span></span></li>';
-      });
+      byGroup[g].forEach(function(c){ h+=checkRow(c); });
       h+='</ul></div>';
     });
     h+='</section>';
     host.innerHTML=h;
+    // Clicking an item that has a place in the document takes you there, rather than leaving you
+    // to find it: the middle column turns to the page and focuses the first element on it.
+    Array.prototype.slice.call(host.querySelectorAll('.check button')).forEach(function(b){
+      b.addEventListener('click',function(){
+        goToPage(parseInt(b.getAttribute('data-goto'),10));
+      });
+    });
     revealChecks(host);
+  }
+
+  function checkRow(c){
+    var status=effectiveStatus(c);
+    var cls=status==='n/a'?'na':status;
+    var mark=status==='pass'?'✓':(status==='n/a'?'–':'!');
+    var where=(c.locations&&c.locations.length)? c.locations[0].page : null;
+    var label=esc(c.title)+'<span class="visually-hidden">: '+esc(statusWord(status))+'</span>';
+    var body=(where&&status!=='pass')
+      ? '<button type="button" class="where" data-goto="'+where+'">'+label+
+        '<span class="at">p. '+where+'</span></button>'
+      : '<span class="name">'+label+'</span>';
+    return '<li class="check '+cls+'" data-check="'+esc(c.key)+'">'+
+      '<span class="mark" aria-hidden="true">'+mark+'</span>'+body+'</li>';
+  }
+
+  // Reading order is the one check whose verdict lives in the browser: it passes when the person
+  // has actually walked every page, which is a thing only the page can know.
+  function effectiveStatus(c){
+    if(c.key==='logical-reading-order') return allPagesWalked()? 'pass' : 'manual';
+    return c.status;
+  }
+
+  function allPagesWalked(){
+    return ed.pageList.length>0 && ed.pageList.every(function(p){ return ed.walked[p]; });
+  }
+
+  function walkedCount(){
+    return ed.pageList.filter(function(p){ return ed.walked[p]; }).length;
+  }
+
+  // Called whenever a page is tabbed into. Only the two places that show reading order are
+  // repainted -- redrawing the whole report would replay its tick-through animation on every page
+  // turn, and redrawing the right column would discard half-typed descriptions.
+  function noteWalked(page){
+    if(ed.walked[page]) return;
+    ed.walked[page]=true;
+    var check=null;
+    ed.checks.forEach(function(c){ if(c.key==='logical-reading-order') check=c; });
+    if(!check) return;
+    var row=document.querySelector('.check[data-check="logical-reading-order"]');
+    if(row){
+      var done=allPagesWalked();
+      row.className='check '+(done?'pass':'manual')+' shown';
+      var mark=row.querySelector('.mark');
+      if(mark) mark.textContent=done?'✓':'!';
+    }
+    var progress=document.getElementById('roprogress');
+    if(progress) progress.textContent=readingOrderProgress();
+    if(allPagesWalked()) say('Every page walked — reading order checked off.');
+  }
+
+  function readingOrderProgress(){
+    return walkedCount()+' of '+ed.pageList.length+' pages walked.';
   }
 
   function statusWord(status){
@@ -413,7 +478,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var host=document.getElementById('todo');
     if(!host) return;
     var open=ed.checks.filter(function(c){
-      return c.status==='needs-you'||c.status==='manual'; });
+      var s=effectiveStatus(c);
+      return s==='needs-you'||s==='manual'; });
     var dirty=Object.keys(ed.tags_edit).length||Object.keys(ed.removed).length||
               Object.keys(ed.alts).length;
     var h='<section class="panel todo"><h2 id="todo-h">What needs you</h2>'+
@@ -426,7 +492,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       h+='<p class="allclear">Everything Rebind can check passes.</p>';
     }
     open.forEach(function(c){
-      h+='<div class="item'+(c.status==='manual'?' manual':'')+'">'+
+      h+='<div class="item'+(effectiveStatus(c)==='manual'?' manual':'')+'">'+
         '<div class="title">'+esc(c.title)+'</div>'+
         '<p class="detail">'+esc(c.detail)+'</p>'+
         (c.need? '<p class="need">'+esc(c.need)+'</p>':'')+
@@ -437,11 +503,59 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     wireTodo();
   }
 
+  // Every open item gets a control. A fix Rebind can perform is a button; a fault that can only
+  // be corrected by retagging gets the buttons that take you to it. Nothing is reported without
+  // a way to act on it -- an issue with no route to a fix is just a complaint.
   function actionFor(c){
     if(c.action==='describe') return renderFigures();
-    if(c.action==='contrast') return renderContrast(ed.status.contrast);
-    if(c.action==='reading-order') return renderReadingOrder(ed.status.reading_order);
-    return '';
+    if(c.action==='reading-order') return renderWalk();
+    if(c.action==='set-title') return renderFixField(c, 'A short, meaningful title');
+    if(c.action==='set-language') return renderFixField(c, 'e.g. en, en-GB, fr');
+    if(c.action==='strip-scripts') return renderFixButton(c, 'Remove the scripts');
+    return renderGoto(c);
+  }
+
+  function renderGoto(c){
+    if(!c.locations || !c.locations.length) return '';
+    var out='<div class="pagejump">';
+    c.locations.slice(0,24).forEach(function(loc){
+      out+='<button type="button" class="btn ghost small jump" data-page="'+esc(loc.page)+
+        '">Show me · p. '+esc(loc.page)+'</button>';
+    });
+    if(c.locations.length>24){ out+='<span class="caveat">…and '+(c.locations.length-24)+
+      ' more pages.</span>'; }
+    return out+'</div>';
+  }
+
+  function renderWalk(){
+    return '<p class="need" id="roprogress">'+esc(readingOrderProgress())+'</p>'+
+      '<div class="pagejump">'+
+      '<button type="button" class="btn ghost small jump" data-page="'+
+      (ed.pageList[0]||1)+'">Start walking</button></div>'+
+      '<span class="caveat">Tab moves through the page and on to the next one at the end, so '+
+      'this is one long walk, not a page at a time.</span>';
+  }
+
+  function renderFixField(c, placeholder){
+    return '<div class="fixfield"><input type="text" id="fix-'+esc(c.key)+'" '+
+      'aria-label="'+esc(c.title)+'" placeholder="'+esc(placeholder)+'">'+
+      '<button type="button" class="btn small dofix" data-fix="'+esc(c.action)+'" '+
+      'data-field="fix-'+esc(c.key)+'">Set</button></div>';
+  }
+
+  function renderFixButton(c, label){
+    return '<button type="button" class="btn small dofix" data-fix="'+esc(c.action)+'" '+
+      'style="margin-top:.5rem">'+esc(label)+'</button>';
+  }
+
+  function applyFix(fix, value){
+    renderWorking(ed.name, Date.now()); say('Applying the fix…');
+    fetch('/jobs/'+ed.id+'/fix',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({fix:fix, value:value||''})})
+      .then(function(r){return r.json();}).then(function(j){
+        if(j.error){ showError(j.error); return; }
+        watch(ed.id, ed.name, Date.now());
+      }).catch(function(){ showError('Could not apply that fix.'); });
   }
 
   function structureBadge(ok, issues){
@@ -464,50 +578,18 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       'style="margin-top:.6rem">Add descriptions</button>';
   }
 
-  // Rebind cannot pass this one -- nothing can -- so it points at the pages where the order was a
-  // real decision, and the button puts that page in the middle column to be tabbed through.
-  function renderReadingOrder(ro){
-    if(!ro || !ro.pages || !ro.pages.length) return '';
-    var out='<div class="pagejump">';
-    ro.pages.forEach(function(p){
-      out+='<button type="button" class="btn ghost small jump" data-page="'+esc(p.page)+'" '+
-        'title="'+esc(p.reason)+'">p. '+esc(p.page)+'</button>';
-    });
-    return out+'</div><span class="caveat">Tab through the page to hear the order Rebind '+
-      'chose.</span>';
-  }
-
-  function renderContrast(c){
-    if(!c || !c.measured || c.ok) return '';
-    var out='<ul class="ratios">';
-    c.failures.slice(0,6).forEach(function(f){
-      out+='<li><span class="swatch" style="background:'+esc(f.paper)+';color:'+esc(f.ink)+
-        '">Aa</span><span class="ratio">'+esc(f.ratio)+':1</span>'+
-        '<span class="where">p. '+esc(f.page)+'</span>'+
-        '<span class="sample">'+esc(f.text)+'</span></li>';
-    });
-    if(c.failures.length>6){ out+='<li class="sample">…and '+(c.failures.length-6)+' more.</li>'; }
-    out+='</ul><button type="button" class="btn small" id="darkenbtn" '+
-      'style="margin-top:.5rem">Darken this text to meet AA</button>'+
-      '<span class="caveat">The only thing Rebind will change about how the document looks. '+
-      'Each colour keeps its hue, and no colour the artwork also uses is touched.</span>';
-    return out;
-  }
-
   function wireTodo(){
     var apply=document.getElementById('edapply');
     if(apply) apply.addEventListener('click', applyEdits);
     var alts=document.getElementById('applyalts');
     if(alts) alts.addEventListener('click', applyDescriptions);
-    var darken=document.getElementById('darkenbtn');
-    if(darken) darken.addEventListener('click', function(){
-      darken.disabled=true;
-      renderWorking(ed.name, Date.now()); say('Darkening the faint text…');
-      fetch('/jobs/'+ed.id+'/contrast',{method:'POST'})
-        .then(function(r){return r.json();}).then(function(j){
-          if(j.error){ showError(j.error); return; }
-          watch(ed.id, ed.name, Date.now());
-        }).catch(function(){ showError('Could not adjust the contrast.'); });
+    Array.prototype.slice.call(document.querySelectorAll('.dofix')).forEach(function(b){
+      b.addEventListener('click', function(){
+        var field=b.getAttribute('data-field');
+        var input=field? document.getElementById(field) : null;
+        if(input && !input.value.trim()){ say('Type something first.'); input.focus(); return; }
+        applyFix(b.getAttribute('data-fix'), input? input.value.trim() : '');
+      });
     });
     Array.prototype.slice.call(document.querySelectorAll('.jump')).forEach(function(b){
       b.addEventListener('click', function(){
@@ -531,11 +613,19 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       }).catch(function(){ showError('Could not apply descriptions.'); });
   }
 
+  // /Artifact is not a structure type, so it never goes to the server as a tag: the same element
+  // is in `removed`, which is what actually keeps it out of the reading order.
+  function stripArtifacts(tags){
+    var out={};
+    Object.keys(tags).forEach(function(k){ if(tags[k]!=='Artifact') out[k]=tags[k]; });
+    return out;
+  }
+
   function applyEdits(){
     var removed=Object.keys(ed.removed).filter(function(k){ return ed.removed[k]; });
     renderWorking(ed.name, Date.now()); say('Applying your changes…');
     fetch('/jobs/'+ed.id+'/edits',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({tags:ed.tags_edit, removed:removed, alts:ed.alts})})
+      body:JSON.stringify({tags:stripArtifacts(ed.tags_edit), removed:removed, alts:ed.alts})})
       .then(function(r){return r.json();}).then(function(j){
         if(j.error){ showError(j.error); return; }
         watch(ed.id, ed.name, Date.now());
@@ -556,6 +646,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       ed.pageList=Object.keys(ed.pages).map(Number).sort(function(a,b){return a-b;});
       if(ed.pageList.indexOf(ed.page)<0) ed.page=ed.pageList[0]||1;
       drawStage();
+      drawTodo();
     }).catch(function(){ host.innerHTML=''; });
   }
 
@@ -649,16 +740,21 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     if(box) box.focus();
   }
 
-  function goToPage(page){
+  function goToPage(page, landOnLast){
     if(ed.pageList.indexOf(page)<0) return;
     ed.page=page; ed.focused=null; drawStage();
-    var first=document.querySelector('.ob');
-    if(first) first.focus();
+    var boxes=document.querySelectorAll('.ob');
+    var target=landOnLast? boxes[boxes.length-1] : boxes[0];
+    if(target) target.focus();
+    else noteWalked(page);   // a page with nothing on it is still a page you have been to
   }
 
-  function turnPage(step){
+  function turnPage(step, landOnLast){
     var at=ed.pageList.indexOf(ed.page);
-    goToPage(ed.pageList[Math.min(Math.max(at+step,0),ed.pageList.length-1)]);
+    var next=ed.pageList[Math.min(Math.max(at+step,0),ed.pageList.length-1)];
+    if(next===ed.page) return false;
+    goToPage(next, landOnLast);
+    return true;
   }
 
   function wireStage(){
@@ -670,11 +766,23 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var boxes=Array.prototype.slice.call(document.querySelectorAll('.ob'));
     boxes.forEach(function(box,index){
       var e=items[index];
-      box.addEventListener('focus',function(){ ed.focused=e.id; showType(e); });
+      box.addEventListener('focus',function(){
+        ed.focused=e.id; showType(e); noteWalked(ed.page);
+      });
       box.addEventListener('click',function(){ box.focus(); });
       box.addEventListener('keydown',function(ev){
         if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
         var key=(ev.key||'');
+        // Tabbing off the end of a page carries on to the next one, so checking a whole document
+        // is one unbroken run of Tab rather than a page turn every dozen presses.
+        if(key==='Tab' && !ev.shiftKey && index===boxes.length-1){
+          if(turnPage(1)){ ev.preventDefault(); }
+          return;
+        }
+        if(key==='Tab' && ev.shiftKey && index===0){
+          if(turnPage(-1, true)){ ev.preventDefault(); }
+          return;
+        }
         if(key==='Enter'){ ev.preventDefault(); openPalette(e.id); return; }
         if(key===' '&&kindOf(e)==='Figure'){
           ev.preventDefault();
@@ -741,12 +849,12 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // Setting a type redraws the page and puts focus back on the same element, so a run of
   // corrections is one uninterrupted pass: Tab, Enter, key, Tab, Enter, key.
   function setKind(elementId, tag){
-    if(tag==='Artifact') delete ed.tags_edit[elementId]; else ed.tags_edit[elementId]=tag;
-    // "Not read" on something Rebind did tag means removing it; on furniture it means leave it.
-    var known=null;
-    ed.elements.forEach(function(e){ if(e.id===elementId) known=e; });
-    if(tag==='Artifact' && known && known.kind!=='Artifact') ed.removed[elementId]=true;
-    else delete ed.removed[elementId];
+    // "Not read" is a type like any other as far as the editor is concerned -- it has to show as
+    // the element's type, or pressing x looks like it did nothing. It reaches the server as a
+    // removal rather than as a tag (there is no /Artifact structure element; content that should
+    // not be read is drawn as an artifact instead), which stripArtifacts() below takes care of.
+    ed.tags_edit[elementId]=tag;
+    if(tag==='Artifact') ed.removed[elementId]=true; else delete ed.removed[elementId];
     ed.focused=elementId;
     drawStage();
     // Deliberately NOT redrawing the right column: it holds description boxes the user may be

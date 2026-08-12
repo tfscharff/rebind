@@ -1311,7 +1311,8 @@ def _rebuild_page(pdf: pikepdf.Pdf, page: pikepdf.Page, page_image, overlay: byt
 
 def remediate(source: Path, target: Path, *, title: str | None = None, lang: str = "en",
               dpi: int = 300, alt_texts: dict[str, str] | None = None,
-              darken_contrast: bool = False, edits: Edits | None = None) -> RemediationResult:
+              darken_contrast: bool = True, strip_scripts: bool = False,
+              edits: Edits | None = None) -> RemediationResult:
     """Write `target`: the source made accessible, looking exactly like the original.
 
     The original pages are kept verbatim (vector text stays crisp, a scan stays a scan) and marked
@@ -1320,9 +1321,12 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     (keyed by the figure ids in a prior result's `.figures`) to promote a figure to a tagged
     `/Figure` with that description.
 
-    `darken_contrast` is the one option that changes how the document *looks*: text failing WCAG
-    AA is darkened just enough to pass, keeping its hue (see `recolor`). Off by default, and the
-    app only offers it once it has measured a real failure to offer it about.
+    `darken_contrast` is the one thing that changes how the document *looks*: text failing WCAG AA
+    is darkened just enough to pass, keeping its hue (see `recolor`). On by default -- an
+    accessible document is the job, and a contrast failure Rebind can fix is not worth handing back
+    as homework. It is conservative by construction: only colours used exclusively by text are
+    touched, never one the artwork also uses, and a page with nothing failing keeps its original
+    bytes. Pass False to measure and report without correcting.
     """
     source, target = Path(source), Path(target)
     edits = edits or Edits()
@@ -1356,6 +1360,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     # loop only ever sees the annotations that survive -- the external links it goes on to tag into
     # the structure tree -- never the legacy-destination ones this call is about to remove.
     _strip_legacy_destinations(pdf)
+    if strip_scripts:
+        _strip_scripts(pdf)
 
     # Recolouring happens before the page's own content is wrapped as an artifact. Anything that
     # rasterizes a page (a rebuilt page, a figure crop, the contrast re-measurement) reads from a
@@ -1733,6 +1739,39 @@ def _link_alt(annot: pikepdf.Object) -> str:
         if action.get("/S") == Name.GoToR and "/F" in action:
             return f"Link to {action.F}"
     return "Link"
+
+
+def _strip_scripts(pdf: pikepdf.Pdf) -> int:
+    """Remove every script the document carries. Returns how many were removed.
+
+    Not done automatically: a script is behaviour the author put there, and removing behaviour
+    without being asked is precisely what Rebind does not do. The app offers this as the fix
+    alongside the check that reports it, so it happens because someone chose it.
+    """
+    removed = 0
+    names = pdf.Root.get("/Names")
+    if names is not None and "/JavaScript" in names:
+        del names.JavaScript
+        removed += 1
+    if "/OpenAction" in pdf.Root:
+        del pdf.Root.OpenAction
+        removed += 1
+    if "/AA" in pdf.Root:
+        del pdf.Root.AA
+        removed += 1
+    for page in pdf.pages:
+        if "/AA" in page.obj:
+            del page.obj.AA
+            removed += 1
+        for annot in page.obj.get("/Annots") or []:
+            if "/AA" in annot:
+                del annot.AA
+                removed += 1
+            action = annot.get("/A")
+            if action is not None and action.get("/S") == Name.JavaScript:
+                del annot["/A"]
+                removed += 1
+    return removed
 
 
 def _strip_legacy_destinations(pdf: pikepdf.Pdf) -> None:

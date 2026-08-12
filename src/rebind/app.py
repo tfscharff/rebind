@@ -50,8 +50,10 @@ class _Job:
     contrast: dict = field(default_factory=dict)
     figures: list = field(default_factory=list)   # figures still needing a description
     alt_texts: dict = field(default_factory=dict)  # descriptions the user has supplied so far
-    # Set only when the user explicitly asks: the one option that changes the document's look.
-    darken_contrast: bool = False
+    # Fixes the user has asked for from the report, each kept so it survives every later re-run.
+    title_override: str | None = None
+    lang: str = "en"
+    strip_scripts: bool = False
     # Adobe's own rule list, judged against the produced PDF (see rebind.checklist)
     checklist: list = field(default_factory=list)
     elements: list = field(default_factory=list)     # every tagged element, for the page editor
@@ -95,8 +97,9 @@ def _run_conversion(job: _Job, source: Path) -> None:
     try:
         job.stage = "Making it accessible (scanned pages are read page by page)..."
         stem = Path(job.filename).stem
-        result = remediate(source, job.workdir / (stem + ".accessible.pdf"), title=stem,
-                           alt_texts=job.alt_texts, darken_contrast=job.darken_contrast,
+        result = remediate(source, job.workdir / (stem + ".accessible.pdf"),
+                           title=job.title_override or stem, lang=job.lang,
+                           alt_texts=job.alt_texts, strip_scripts=job.strip_scripts,
                            edits=Edits.from_payload(job.edits))
         job.pdf_path = result.pdf_path
         job.figures = list(result.figures)
@@ -242,15 +245,35 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         threading.Thread(target=_run_conversion, args=(job, job.source_path), daemon=True).start()
         return JSONResponse({"job_id": job.id})
 
-    async def job_contrast(request: Request) -> JSONResponse:
-        """Re-run remediation with the contrast correction on -- the one change to the document's
-        appearance Rebind will make, and only ever because the user asked for it here."""
+    async def job_fix(request: Request) -> JSONResponse:
+        """Apply one of the fixes the accessibility report offers, then rebuild the document.
+
+        A report that names a fault without offering the fix leaves a librarian to work out the
+        remedy themselves, so every check that can be fixed from here has a `fix` id it sends.
+        Faults that can only be fixed by retagging are not handled here -- the report points at
+        the element in the document instead, which is the fix for those.
+        """
         job = jobs.get(request.path_params["job_id"])
         if job is None or job.source_path is None:
             return JSONResponse({"error": "No such job."}, status_code=404)
-        job.darken_contrast = True
+        payload = await request.json()
+        fix, value = str(payload.get("fix") or ""), str(payload.get("value") or "").strip()
+        if fix == "set-title":
+            if not value:
+                return JSONResponse({"error": "Type a title first."}, status_code=400)
+            job.title_override = value
+            job.stage = "Setting the document title..."
+        elif fix == "set-language":
+            if not value:
+                return JSONResponse({"error": "Type a language first."}, status_code=400)
+            job.lang = value
+            job.stage = "Setting the document language..."
+        elif fix == "strip-scripts":
+            job.strip_scripts = True
+            job.stage = "Removing the document's scripts..."
+        else:
+            return JSONResponse({"error": f"Rebind has no fix called {fix!r}."}, status_code=400)
         job.status = "running"
-        job.stage = "Darkening the text that was too faint to read..."
         job.started = time.monotonic()
         threading.Thread(target=_run_conversion, args=(job, job.source_path), daemon=True).start()
         return JSONResponse({"job_id": job.id})
@@ -325,7 +348,7 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         Route("/convert", convert_endpoint, methods=["POST"]),
         Route("/jobs/{job_id}", job_status),
         Route("/jobs/{job_id}/describe", job_describe, methods=["POST"]),
-        Route("/jobs/{job_id}/contrast", job_contrast, methods=["POST"]),
+        Route("/jobs/{job_id}/fix", job_fix, methods=["POST"]),
         Route("/jobs/{job_id}/elements", job_elements),
         Route("/jobs/{job_id}/edits", job_edits, methods=["POST"]),
         Route("/jobs/{job_id}/pdf", job_pdf),

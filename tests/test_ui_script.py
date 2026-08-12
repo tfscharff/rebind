@@ -49,12 +49,14 @@ def test_every_function_the_page_calls_is_defined():
     # Names that are properties/locals rather than free calls slip through the regex; keep the
     # assertion to names that look like our own helpers.
     ours = {name for name in missing if name in {
-        "renderFigures", "renderReadingOrder", "renderContrast", "renderWorking", "drawReport",
+        "renderFigures", "renderWalk", "renderGoto", "renderWorking", "drawReport", "checkRow",
         "drawTodo", "drawStage", "wireTodo", "wireStage", "loadEditor", "tagLabel", "keyFor",
         "elementsOnPage", "kindOf", "structureBadge", "showError", "watch", "done", "say",
         "start", "tick", "esc", "openPalette", "closePalette", "setKind", "showType", "boxHtml",
         "focusBox", "goToPage", "turnPage", "revealChecks", "statusWord", "idleBanner",
-        "actionFor", "applyEdits", "applyDescriptions"}}
+        "actionFor", "applyEdits", "applyDescriptions", "applyFix", "stripArtifacts",
+        "renderFixField", "renderFixButton", "effectiveStatus", "allPagesWalked", "walkedCount",
+        "noteWalked", "readingOrderProgress"}}
     assert not ours, f"called but never defined: {sorted(ours)}"
 
 
@@ -75,6 +77,38 @@ def test_every_element_on_the_page_is_a_tab_stop():
     script = _script()
     assert 'tabindex="0"' in script and 'role="button"' in script
     assert "aria-label=" in script
+
+
+def test_not_read_shows_as_the_element_type_but_is_sent_as_a_removal():
+    # The x key looked broken because setting "Not read" deleted the type override instead of
+    # storing it: the element kept showing its old type, so the keystroke appeared to do nothing.
+    # It now shows as the type like any other -- and still reaches the server as a removal, since
+    # there is no /Artifact structure element to tag content with.
+    script = _script()
+    assert "ed.tags_edit[elementId]=tag;" in script
+    assert "function stripArtifacts(" in script
+    assert "tags:stripArtifacts(ed.tags_edit)" in script
+
+
+def test_tabbing_off_the_end_of_a_page_carries_on_to_the_next():
+    script = _script()
+    assert "key==='Tab' && !ev.shiftKey && index===boxes.length-1" in script
+    assert "key==='Tab' && ev.shiftKey && index===0" in script
+
+
+def test_clicking_a_failing_check_goes_to_it_in_the_document():
+    script = _script()
+    assert "data-goto=" in script
+    assert "goToPage(parseInt(b.getAttribute('data-goto'),10))" in script
+
+
+def test_reading_order_is_a_walk_the_person_completes():
+    # No measurement can settle reading order, so the check passes when every page has actually
+    # been tabbed through -- a verdict only the browser can reach.
+    script = _script()
+    assert "function allPagesWalked(" in script and "function noteWalked(" in script
+    assert "noteWalked(ed.page)" in script
+    assert "c.key==='logical-reading-order'" in script
 
 
 def test_enter_opens_the_hotkey_palette_and_escape_leaves_it_alone():

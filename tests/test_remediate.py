@@ -840,6 +840,31 @@ def test_invisible_mode_restored_by_Q_does_not_delete_visible_text():
     assert b"visible" in body, "text after a restored graphics state was wrongly deleted"
 
 
+def test_scripts_are_removed_only_when_asked_for():
+    # A script is behaviour the author put there. The report offers removing it as a fix, so it
+    # happens because someone chose it -- never silently, which is the same rule that governs
+    # every other change Rebind makes to what a document does.
+    from rebind.remediate import _strip_scripts
+
+    def with_scripts():
+        pdf = pikepdf.new()
+        page = pdf.add_blank_page(page_size=(200, 200))
+        pdf.Root.Names = pikepdf.Dictionary(JavaScript=pikepdf.Dictionary(Names=pikepdf.Array()))
+        pdf.Root.OpenAction = pikepdf.Dictionary(S=pikepdf.Name.JavaScript, JS=pikepdf.String("x"))
+        page.obj.AA = pikepdf.Dictionary(O=pikepdf.Dictionary(S=pikepdf.Name.JavaScript))
+        return pdf
+
+    untouched = with_scripts()
+    assert "/JavaScript" in untouched.Root.Names, "the fixture must actually carry scripts"
+
+    pdf = with_scripts()
+    assert _strip_scripts(pdf) == 3
+    assert "/JavaScript" not in pdf.Root.Names
+    assert "/OpenAction" not in pdf.Root
+    assert "/AA" not in pdf.pages[0].obj
+    assert _strip_scripts(pdf) == 0, "a document with no scripts left is untouched"
+
+
 def test_table_cells_sharing_a_column_are_all_owned():
     # Two cells in one row whose left edges fall within the column tolerance of each other snap to
     # the SAME column. Keeping only one of them (which is what dict.setdefault did) silently drops

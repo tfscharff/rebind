@@ -44,10 +44,21 @@ class Check:
     detail: str
     need: str = ""
     action: str = ""
+    # Where in the document the problem is: [{"page": n}]. Anything that is not a pass has to be
+    # findable -- a report that names a fault without saying where it is leaves a librarian to
+    # search a 300-page document for it, which is not a report, it is a riddle. The app makes
+    # every one of these clickable, jumping the middle column to the page.
+    locations: tuple = ()
+
+    @property
+    def key(self) -> str:
+        """A stable slug the page can address this check by, unaffected by wording changes."""
+        return self.title.lower().replace(" ", "-")
 
     def as_dict(self) -> dict:
-        return {"group": self.group, "title": self.title, "status": self.status,
-                "detail": self.detail, "need": self.need, "action": self.action}
+        return {"key": self.key, "group": self.group, "title": self.title, "status": self.status,
+                "detail": self.detail, "need": self.need, "action": self.action,
+                "locations": [dict(loc) for loc in self.locations]}
 
 
 @dataclass
@@ -57,6 +68,7 @@ class _Tree:
     kinds: dict[str, int] = field(default_factory=dict)
     elements: list = field(default_factory=list)        # every StructElem, in document order
     parents: dict[int, object] = field(default_factory=dict)   # objgen id -> parent element
+    pages: dict[int, int] = field(default_factory=dict)        # id(elem) -> 1-based page number
 
 
 def _walk(pdf: pikepdf.Pdf) -> _Tree:
@@ -64,27 +76,45 @@ def _walk(pdf: pikepdf.Pdf) -> _Tree:
     root = pdf.Root.get("/StructTreeRoot")
     if root is None:
         return tree
+    page_of = {page.obj.objgen: number for number, page in enumerate(pdf.pages, start=1)}
     seen: set = set()
 
-    def visit(elem, parent) -> None:
+    def visit(elem, parent, page) -> None:
         if not isinstance(elem, pikepdf.Dictionary) or elem.get("/Type") != pikepdf.Name.StructElem:
             return
         key = elem.objgen if elem.is_indirect else id(elem)
         if key in seen:
             return
         seen.add(key)
+        # /Pg is only set where it differs from the parent's, so an element inherits its parent's
+        # page -- without that, every cell of a table would report "no page".
+        own = elem.get("/Pg")
+        if own is not None and own.is_indirect:
+            page = page_of.get(own.objgen, page)
         tree.elements.append(elem)
         tree.parents[id(elem)] = parent
+        if page:
+            tree.pages[id(elem)] = page
         kind = str(elem.get("/S") or "")
         tree.kinds[kind] = tree.kinds.get(kind, 0) + 1
         kids = elem.get("/K")
         for kid in (kids if isinstance(kids, pikepdf.Array) else [kids]):
-            visit(kid, elem)
+            visit(kid, elem, page)
 
     top = root.get("/K")
     for kid in (top if isinstance(top, pikepdf.Array) else [top]):
-        visit(kid, None)
+        visit(kid, None, 0)
     return tree
+
+
+def _where(tree: _Tree, elements: list) -> tuple:
+    """The pages a set of structure elements sit on, in order and without repeats."""
+    pages: list[int] = []
+    for elem in elements:
+        page = tree.pages.get(id(elem))
+        if page and page not in pages:
+            pages.append(page)
+    return tuple({"page": page} for page in pages)
 
 
 def _children(elem) -> list:
@@ -139,8 +169,10 @@ def _document_checks(pdf: pikepdf.Pdf, tree: _Tree, *, page_count: int,
                          f"No text could be recovered from page{'s' if len(empty_pages) > 1 else ''}"
                          f" {pages}.",
                          need="These pages are images with no readable words in them. If they do "
-                              "carry meaning, describe them; if they are blank, nothing is wrong.",
-                         action="empty-pages"))
+                              "carry meaning, mark the picture as a figure and describe it; if "
+                              "they are blank, nothing is wrong.",
+                         action="goto",
+                         locations=tuple({"page": p} for p in empty_pages)))
     else:
         out.append(Check(DOCUMENT, "Image-only PDF", PASS,
                          f"All {page_count} pages carry readable text."))
@@ -151,14 +183,22 @@ def _document_checks(pdf: pikepdf.Pdf, tree: _Tree, *, page_count: int,
                      f"The document is tagged: {len(tree.elements)} structure elements."
                      if tagged else "The document has no structure tree."))
 
+    # No tool can pass this one, so the app turns it into something a person can actually finish:
+    # tab through every page, and it ticks when every page has been walked. `pages` is what that
+    # progress is measured against.
     out.append(Check(DOCUMENT, "Logical reading order", MANUAL,
-                     _reading_order_detail(reading_order), action="reading-order"))
+                     "Tab through each page to hear the order Rebind chose. This ticks when you "
+                     "have walked every page.",
+                     need="Only you can say whether the order reads correctly.",
+                     action="reading-order",
+                     locations=tuple({"page": p} for p in range(1, (page_count or 0) + 1))))
 
     lang = str(pdf.Root.get("/Lang") or "")
     out.append(Check(DOCUMENT, "Primary language", PASS if lang else NEEDS_YOU,
                      f"The document language is set to {lang}." if lang
                      else "The document does not say what language it is in.",
-                     need="" if lang else "Set the document language and convert again."))
+                     need="" if lang else "Type the language it is written in.",
+                     action="" if lang else "set-language"))
 
     title = str((pdf.open_metadata() or {}).get("dc:title", "") or "")
     prefs = pdf.Root.get("/ViewerPreferences") or pikepdf.Dictionary()
@@ -167,7 +207,8 @@ def _document_checks(pdf: pikepdf.Pdf, tree: _Tree, *, page_count: int,
                      f"The window title shows the document title ({title})."
                      if title and shows_title else
                      "The document has no title, or is set to show its filename instead.",
-                     need="" if title and shows_title else "Give the document a title."))
+                     need="" if title and shows_title else "Type the title it should carry.",
+                     action="" if title and shows_title else "set-title"))
 
     headings = sum(count for kind, count in tree.kinds.items()
                    if kind.startswith("/H") and kind[2:].isdigit())
@@ -176,35 +217,49 @@ def _document_checks(pdf: pikepdf.Pdf, tree: _Tree, *, page_count: int,
                      PASS if has_outline or not headings else NEEDS_YOU,
                      "Bookmarks were built from the document's headings." if has_outline
                      else "The document has no headings to build bookmarks from."
-                     if not headings else "The document has headings but no bookmarks."))
+                     if not headings else "The document has headings but no bookmarks.",
+                     need="" if has_outline or not headings else
+                     "Mark a line as a heading (press 1 to 6 on it) and bookmarks are rebuilt "
+                     "from the headings when you apply your changes.",
+                     action="" if has_outline or not headings else "goto",
+                     locations=() if has_outline or not headings else ({"page": 1},)))
 
-    out.append(Check(DOCUMENT, "Colour contrast", MANUAL, _contrast_detail(contrast),
-                     action="contrast"))
+    out.append(_contrast_check(contrast))
     return out
 
 
-def _reading_order_detail(reading_order: dict) -> str:
-    checked = reading_order.get("checked") or 0
-    flagged = len(reading_order.get("pages") or [])
-    if not checked:
-        return "Adobe always leaves this to a person. Tab through the page to hear the order."
-    if not flagged:
-        return (f"All {checked} pages read straight down a single column, so there was no ordering "
-                "decision to second-guess. Tab through a page to check it yourself.")
-    return (f"{checked - flagged} of {checked} pages read straight down. {flagged} had a real "
-            "choice in them — those are the ones worth your eye.")
+def _contrast_check(contrast: dict) -> Check:
+    """Contrast is measured, and anything failing has already been corrected, so this is one of
+    the two "manual" checks that Rebind can genuinely tick.
 
-
-def _contrast_detail(contrast: dict) -> str:
+    It is still measured rather than assumed: the verdict is a re-measurement of the corrected
+    document. What cannot be corrected -- text sitting on imagery, where no single colour describes
+    what is behind it -- is reported with where to find it, never quietly counted as fixed.
+    """
     if not contrast.get("measured"):
-        return "Adobe always leaves this to a person; Rebind measures it instead of guessing."
-    failures = contrast.get("failures") or []
+        return Check(DOCUMENT, "Colour contrast", NOT_APPLICABLE,
+                     "There is no text to measure.")
+    darkened = contrast.get("darkened") or 0
+    fixed = (f" {darkened} text colour{'s were' if darkened != 1 else ' was'} darkened to get "
+             "there, keeping each one's hue." if darkened else "")
     if contrast.get("ok"):
         lowest = (contrast.get("lowest") or {}).get("ratio")
-        return (f"All {contrast['measured']} lines of text meet WCAG AA against what is actually "
-                f"behind them" + (f"; the lowest measured is {lowest}:1." if lowest else "."))
-    return (f"{len(failures)} of {contrast['measured']} lines fall below WCAG AA. Rebind can "
-            "darken exactly those, keeping each colour's hue.")
+        return Check(DOCUMENT, "Colour contrast", PASS,
+                     f"All {contrast['measured']} lines of text meet WCAG AA against what is "
+                     "actually behind them" +
+                     (f"; the lowest measured is {lowest}:1." if lowest else ".") + fixed)
+    failures = contrast.get("failures") or []
+    pages = []
+    for failure in failures:
+        if failure.get("page") and failure["page"] not in pages:
+            pages.append(failure["page"])
+    return Check(DOCUMENT, "Colour contrast", NEEDS_YOU,
+                 f"{len(failures)} of {contrast['measured']} lines still fall below WCAG AA after "
+                 "correction." + fixed,
+                 need="These sit on imagery or a pattern, so no single colour describes what is "
+                      "behind them and darkening the text cannot be shown to fix it. They need a "
+                      "human eye.",
+                 action="goto", locations=tuple({"page": p} for p in pages))
 
 
 def _page_content_checks(pdf: pikepdf.Pdf, tree: _Tree) -> list[Check]:
@@ -233,18 +288,27 @@ def _page_content_checks(pdf: pikepdf.Pdf, tree: _Tree) -> list[Check]:
                          if not untagged_annots
                          else f"{len(untagged_annots)} annotations are not in the structure tree."))
 
-    tabs = [str(page.obj.get("/Tabs") or "") for page in pdf.pages]
-    out.append(Check(PAGE_CONTENT, "Tab order", PASS if all(t == "/S" for t in tabs) else NEEDS_YOU,
-                     "Every page follows the structure tree for tab order."
-                     if all(t == "/S" for t in tabs)
-                     else "Some pages do not follow the structure for tab order."))
+    bad_tabs = [n for n, page in enumerate(pdf.pages, start=1)
+                if str(page.obj.get("/Tabs") or "") != "/S"]
+    out.append(Check(PAGE_CONTENT, "Tab order", PASS if not bad_tabs else NEEDS_YOU,
+                     "Every page follows the structure tree for tab order." if not bad_tabs
+                     else f"{len(bad_tabs)} pages do not follow the structure for tab order.",
+                     need="" if not bad_tabs else "Rebind sets this on every page it writes; a "
+                                                  "page without it did not come through "
+                                                  "remediation. Convert the document again.",
+                     action="" if not bad_tabs else "goto",
+                     locations=tuple({"page": p} for p in bad_tabs)))
 
     fonts = _fonts(pdf)
     unmapped = [f for f in fonts if not _font_maps_to_unicode(f)]
     out.append(Check(PAGE_CONTENT, "Character encoding",
                      PASS if not unmapped else NEEDS_YOU,
                      f"All {len(fonts)} fonts map their characters to Unicode." if not unmapped
-                     else f"{len(unmapped)} fonts do not say what their characters mean."))
+                     else f"{len(unmapped)} fonts do not say what their characters mean, so their "
+                          "text cannot be read out or copied.",
+                     need="" if not unmapped else "The font comes from the source document and "
+                                                  "cannot be repaired from outside it. Re-export "
+                                                  "the original with fonts embedded properly."))
 
     for title, subtypes in (("Tagged multimedia", ("/Movie", "/Screen", "/Sound", "/RichMedia")),):
         present = [a for a in _annotations(pdf) if str(a.get("/Subtype")) in subtypes]
@@ -265,7 +329,9 @@ def _page_content_checks(pdf: pikepdf.Pdf, tree: _Tree) -> list[Check]:
     out.append(Check(PAGE_CONTENT, "Scripts", PASS if not has_scripts else NEEDS_YOU,
                      "The document runs no scripts." if not has_scripts
                      else "The document runs scripts, which must not interfere with assistive "
-                          "technology."))
+                          "technology.",
+                     need="" if not has_scripts else "Remove the scripts from the document.",
+                     action="" if not has_scripts else "strip-scripts"))
 
     out.append(Check(PAGE_CONTENT, "Timed responses", PASS,
                      "The document asks nothing of the reader on a timer."))
@@ -337,11 +403,13 @@ def _alt_text_checks(pdf: pikepdf.Pdf, tree: _Tree, undescribed: tuple) -> list[
                          "carry no description, so they are marked decorative.",
                          need="Describe what each one shows. A described image is read out; one "
                               "left blank stays decoration, which is honest but silent.",
-                         action="describe"))
+                         action="describe",
+                         locations=tuple({"page": p} for p in pages)))
     elif missing:
         out.append(Check(ALT_TEXT, "Figures alternate text", NEEDS_YOU,
                          f"{len(missing)} figures have no description.",
-                         need="Describe what each one shows.", action="describe"))
+                         need="Describe what each one shows.", action="describe",
+                         locations=_where(tree, missing)))
     elif figures:
         out.append(Check(ALT_TEXT, "Figures alternate text", PASS,
                          f"All {len(figures)} figures carry a description."))
@@ -355,12 +423,18 @@ def _alt_text_checks(pdf: pikepdf.Pdf, tree: _Tree, undescribed: tuple) -> list[
               if str(e.get("/Alt") or "") and any(str(k.get("/Alt") or "") for k in _children(e))]
     out.append(Check(ALT_TEXT, "Nested alternate text", PASS if not nested else NEEDS_YOU,
                      "No description hides another one beneath it." if not nested
-                     else f"{len(nested)} elements have a description nested inside another."))
+                     else f"{len(nested)} elements have a description nested inside another.",
+                     need="" if not nested else "Clear the description on the outer element, or "
+                                                "retag the inner one so it is not a figure.",
+                     action="" if not nested else "goto", locations=_where(tree, nested)))
 
     orphans = [e for e in tree.elements if str(e.get("/Alt") or "") and e.get("/K") is None]
     out.append(Check(ALT_TEXT, "Associated with content", PASS if not orphans else NEEDS_YOU,
                      "Every description belongs to something on the page." if not orphans
-                     else f"{len(orphans)} descriptions are attached to nothing."))
+                     else f"{len(orphans)} descriptions are attached to nothing.",
+                     need="" if not orphans else "Retag the element so it covers the content it "
+                                                 "describes.",
+                     action="" if not orphans else "goto", locations=_where(tree, orphans)))
 
     out.append(Check(ALT_TEXT, "Hides annotation", PASS,
                      "No description hides an annotation from a screen reader."))
@@ -386,26 +460,43 @@ def _table_checks(tree: _Tree) -> list[Check]:
                 if _kind(c) not in ("/TR", "/THead", "/TBody", "/TFoot", "/Caption")]
     bad_cells = [c for r in rows for c in _children(r) if _kind(c) not in ("/TH", "/TD")]
     headers = [c for r in rows for c in _children(r) if _kind(c) == "/TH"]
-    widths = {len(_children(r)) for r in rows}
     no_summary = [t for t in tables if not str(t.get("/Alt") or "")]
+    # Regularity is per table, not across the document: two tables with different column counts
+    # are both perfectly regular, and reporting that as a fault would be wrong.
+    ragged = [t for t in tables
+              if len({len(_children(r)) for r in _children(t) if _kind(r) == "/TR"}) > 1]
+    # Every one of these is fixed the same way -- go to the table and retag it -- so each carries
+    # the page it is on, and the app turns that into a button that puts the table on screen.
+    retag = ("Go to the table and retag it: press t on the first line of the grid to rebuild it, "
+             "or p to read it as ordinary paragraphs instead.")
 
     return [
         Check(TABLES, "Rows", PASS if not bad_rows else NEEDS_YOU,
               f"All {len(rows)} table rows are proper rows." if not bad_rows
-              else f"{len(bad_rows)} things inside a table are not rows."),
+              else f"{len(bad_rows)} things inside a table are not rows.",
+              need="" if not bad_rows else retag,
+              action="" if not bad_rows else "goto", locations=_where(tree, bad_rows)),
         Check(TABLES, "TH and TD", PASS if not bad_cells else NEEDS_YOU,
               "Every cell in every row is a header or data cell." if not bad_cells
-              else f"{len(bad_cells)} cells are neither header nor data cells."),
+              else f"{len(bad_cells)} cells are neither header nor data cells.",
+              need="" if not bad_cells else retag,
+              action="" if not bad_cells else "goto", locations=_where(tree, bad_cells)),
         Check(TABLES, "Headers", PASS if headers else NEEDS_YOU,
               f"{len(headers)} header cells are scoped to their column." if headers
               else "No table has header cells, so data cannot be read against a header.",
-              need="" if headers else "Mark the header row of each table."),
-        Check(TABLES, "Regularity", PASS if len(widths) <= 1 else NEEDS_YOU,
-              "Every row has the same number of cells." if len(widths) <= 1
-              else "Rows have differing numbers of cells, so the grid is irregular."),
+              need="" if headers else retag,
+              action="" if headers else "goto", locations=_where(tree, tables)),
+        Check(TABLES, "Regularity", PASS if not ragged else NEEDS_YOU,
+              "Every row of every table has the same number of cells." if not ragged
+              else f"{len(ragged)} tables have rows with differing numbers of cells, so the grid "
+                   "is irregular.",
+              need="" if not ragged else retag,
+              action="" if not ragged else "goto", locations=_where(tree, ragged)),
         Check(TABLES, "Summary", PASS if not no_summary else NEEDS_YOU,
               f"All {len(tables)} tables carry a summary." if not no_summary
-              else f"{len(no_summary)} tables have no summary."),
+              else f"{len(no_summary)} tables have no summary.",
+              need="" if not no_summary else retag,
+              action="" if not no_summary else "goto", locations=_where(tree, no_summary)),
     ]
 
 
@@ -417,26 +508,36 @@ def _list_checks(tree: _Tree) -> list[Check]:
     items = [i for lst in lists for i in _children(lst)]
     bad_items = [i for i in items if _kind(i) != "/LI"]
     bad_bodies = [c for i in items for c in _children(i) if _kind(c) not in ("/Lbl", "/LBody")]
+    retag = "Go to the list and retag it: press l on its first line to rebuild it, or p to read " \
+            "it as ordinary paragraphs."
     return [
         Check(LISTS, "List items", PASS if not bad_items else NEEDS_YOU,
               f"All {len(items)} list items are proper list items." if not bad_items
-              else f"{len(bad_items)} things inside a list are not list items."),
+              else f"{len(bad_items)} things inside a list are not list items.",
+              need="" if not bad_items else retag,
+              action="" if not bad_items else "goto", locations=_where(tree, bad_items)),
         Check(LISTS, "Lbl and LBody", PASS if not bad_bodies else NEEDS_YOU,
               "Every list item holds only a label and a body." if not bad_bodies
-              else f"{len(bad_bodies)} things inside a list item are neither label nor body."),
+              else f"{len(bad_bodies)} things inside a list item are neither label nor body.",
+              need="" if not bad_bodies else retag,
+              action="" if not bad_bodies else "goto", locations=_where(tree, bad_bodies)),
     ]
 
 
 def _heading_checks(tree: _Tree) -> list[Check]:
-    levels = [int(_kind(e)[2:]) for e in tree.elements
-              if _kind(e).startswith("/H") and _kind(e)[2:].isdigit()]
-    if not levels:
+    headings = [e for e in tree.elements
+                if _kind(e).startswith("/H") and _kind(e)[2:].isdigit()]
+    if not headings:
         return [Check(HEADINGS, "Appropriate nesting", NOT_APPLICABLE,
                       "The document has no headings.")]
-    skips = [(a, b) for a, b in zip(levels, levels[1:]) if b > a + 1]
-    return [Check(HEADINGS, "Appropriate nesting", PASS if not skips else NEEDS_YOU,
-                  f"{len(levels)} headings, nested without skipping a level." if not skips
-                  else f"{len(skips)} headings skip a level.")]
+    levels = [int(_kind(e)[2:]) for e in headings]
+    skipped = [headings[i + 1] for i, (a, b) in enumerate(zip(levels, levels[1:])) if b > a + 1]
+    return [Check(HEADINGS, "Appropriate nesting", PASS if not skipped else NEEDS_YOU,
+                  f"{len(levels)} headings, nested without skipping a level." if not skipped
+                  else f"{len(skipped)} headings skip a level.",
+                  need="" if not skipped else "Go to each one and press the digit for the level it "
+                                              "should be — a heading may not jump from 1 to 3.",
+                  action="" if not skipped else "goto", locations=_where(tree, skipped))]
 
 
 def build_checklist(pdf_path: Path, *, page_count: int = 0, empty_pages: tuple = (),

@@ -77,29 +77,34 @@ p. 214]` — rather than a guess.
 
 Rebind walks Adobe's Accessibility Checker rule list against its own output and says, for each
 rule, what is true of the document. Four verdicts, and only one of them is a tick: *passes*,
-*needs you* (with what it needs), *needs your eye* (the two below, which are unconditional), and
-*not applicable* (the document has none of the thing being checked). Nothing is asserted; each
-verdict is read off the produced PDF.
+*needs you* (with what it needs), *needs your eye*, and *not applicable* (the document has none of
+the thing being checked). Nothing is asserted; each verdict is read off the produced PDF.
 
-## The two checks no tool can pass for you
+**Nothing is reported without a way to act on it.** Naming a fault and leaving the remedy to the
+reader is a complaint, not a report, so every open item carries either a fix Rebind can perform
+(darken the text, set the title or language, remove the scripts, describe the images) or the place
+in the document to go and correct it by hand — one click, and the middle column turns to that page.
+There is a test asserting this holds for every check.
 
-Adobe's checker reports **Logical Reading Order** and **Colour contrast** as *needs manual check* on
-every document, always — both are ultimately about what a person perceives. Rebind can't make them
-pass, but it hands you the evidence instead of leaving you to gather it page by page:
+## Colour contrast, and the one check that stays with you
 
-- **Reading order** — the order Rebind chose is shown as numbered blocks over a picture of the
-  page, but only for the pages where the order was a real decision (columns, a figure in the text
-  flow, an ambiguous layout). Pages that read straight down are reported in bulk, so a 300-page
-  document is a handful of pages to check, not 300.
-- **Colour contrast** — measured, not guessed, and scored against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1
-  for large text). The ink comes from the page's own declaration, which is exact; the paper is
-  sampled from the rendered page, because what sits *behind* text — a filled box, a shaded row, a
-  photograph — is not stated anywhere. Anything below threshold is listed with its real ratio and a
-  swatch of the two colours. Text inside a figure, text over imagery too busy for one colour to
-  describe, and invisible same-colour text are all left to a human rather than scored against a
-  fiction. If there are failures, Rebind offers to darken exactly those text colours — keeping each
-  one's hue, never touching a colour the artwork also uses. That is the only thing Rebind will ever
-  do to change how a document looks, and it only happens if you ask.
+Adobe reports **Logical Reading Order** and **Colour contrast** as *needs manual check* on every
+document, always. Rebind settles one of them and hands you a way to finish the other.
+
+- **Colour contrast** is measured against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1 for large text) and
+  anything failing is corrected as part of remediation. The ink comes from the page's own
+  declaration, which is exact; the paper is sampled from the rendered page, because what sits
+  *behind* text — a filled box, a shaded row, a photograph — is not stated anywhere. Failing text
+  is darkened just enough to pass, keeping its hue, and only colours used *exclusively* by text are
+  touched, never one the artwork also uses. This is the one thing Rebind changes about how a
+  document looks, and it does it because an accessible document is the job. The check is then ticked
+  by **re-measuring the corrected document** — never by assuming the correction worked. What
+  darkening cannot honestly fix (text over imagery, where no single colour is behind it) is
+  reported with the pages to look at.
+- **Reading order** cannot be settled by any measurement, so it stays with you — but as something
+  finishable rather than a permanent asterisk. Every element is a tab stop, and Tab runs off the
+  end of one page onto the next, so checking a document is one unbroken walk. The report counts the
+  pages you have walked and ticks the check when you have seen them all.
 
 ## Running it
 
@@ -118,11 +123,13 @@ Three columns, with the document at twice the width of either side of it.
 at a time against the document Rebind actually produced. Every verdict is read off the finished
 PDF — the structure tree, the fonts, the annotations — never inferred from what remediation
 intended, because a green tick is a claim. A rule the document has nothing to test (no forms, no
-tables) is marked *not applicable* rather than passed.
+tables) is marked *not applicable* rather than passed. Anything that did not pass is a button:
+click it and the middle column turns to the page the problem is on.
 
 **Middle — the document.** Each element Rebind tagged is drawn over the page and is a tab stop, in
-reading order, so tabbing through the page is meeting it as a screen reader will. The element's
-type appears in big letters above the page with an explanation of what that type *means*, so
+reading order, so tabbing through the page is meeting it as a screen reader will. Tab past the last
+element and the next page opens, so a whole document is one unbroken walk. The element's type
+appears in big letters above the page with an explanation of what that type *means*, so
 `BlockQuote` is not something you have to already know. `Enter` opens a floating list of every
 type; one keystroke sets it.
 
@@ -163,7 +170,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.16.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.17.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,
