@@ -226,7 +226,13 @@ def test_landing_on_an_undescribed_picture_asks_for_a_description():
     assert "if(needsAlt(e) && !ed.altAsked[e.id]) openAltPrompt(e.id);" in script
     prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
     assert "altGuess(e)" in prompt, "the guess must be pre-filled, not an empty box"
-    assert "'aria-modal','true'" in prompt, "the prompt must trap a screen reader inside it"
+    # It asks in the right column, not in a sheet over the page: the picture being described is in
+    # the middle column, and a dialog on top of it hides the one thing you look at to answer.
+    assert "getElementById('typebody')" in prompt
+    assert "'aria-modal'" not in prompt, "an inline panel must not claim to be a modal"
+    # The keys are no use while a sentence is being written, and the column is only so tall.
+    assert "setKeysCollapsed(true);" in prompt
+    assert "function setKeysCollapsed(" in script
     # Accepting is one key, and it carries on with the walk; skipping leaves the document alone.
     assert "ev.key==='Enter' && !ev.shiftKey" in prompt
     assert "function focusNext(" in script

@@ -108,3 +108,17 @@ def test_two_separate_pictures_stay_separate():
 def test_an_empty_page_yields_nothing():
     assert _find(_blank_page(), []) == []
     assert find_picture_regions(None, [], page_width=PAGE_W, page_height=PAGE_H) == []
+
+
+def test_two_pictures_side_by_side_are_found_left_to_right():
+    # Two pictures on one row are never level to the point. On a real scanned page a photograph and
+    # the coin printed beside it differed by a few points, and ordering on the top edge alone put
+    # the right-hand one first -- so a screen reader met the page's pictures back to front.
+    page = _blank_page()
+    _draw(page, (72, 480, 280, 700))            # the left-hand picture...
+    _draw(page, (330, 484, 540, 704))           # ...and the right-hand one, a shade higher
+
+    regions = _find(page, [])
+
+    assert len(regions) == 2, regions
+    assert regions[0].bbox[0] < regions[1].bbox[0], "the left-hand picture is read first"

@@ -96,6 +96,13 @@ CAPTION_MARKER_RE = re.compile(
     r"|exhibit|map|panel)\b\.?\s*(\d+)?",
     re.IGNORECASE)
 CAPTION_MAX_GAP_PT = 20.0
+# How far into the margin beside a figure its caption may sit. Much wider than the gap allowed
+# above or below, for two reasons: a caption set in the outer margin is separated by the margin
+# itself, and a picture found from a scan's pixels is measured from its ink, so its box stops short
+# of where the photograph visually ends. Measured on the real sample the two together come to about
+# 52pt. What keeps this safe is not the distance but the caller's rule -- a side caption is used
+# only when exactly one unclaimed one is beside the figure.
+CAPTION_SIDE_MAX_GAP_PT = 60.0
 CAPTION_CONTINUATION_GAP_PT = 10.0
 CAPTION_MAX_LINES = 24
 # A caption that's just its own label ("Fig. 8", or "Fig. 8 (Continued)" -- a page-break artifact)
@@ -119,6 +126,9 @@ FIGURE_TEXT_TOLERANCE_PT = 12.0
 # Picture-hunting on a scan works from a render of its own; 150 dpi is ample for finding where the
 # ink is and costs a fraction of the 300 dpi the page itself is rebuilt at.
 REGION_SCAN_DPI = 150
+# How much of the shorter box a figure and an element must share vertically to be on one row, and
+# so be ordered by which is further left rather than by which starts a shade higher.
+FIGURE_SAME_ROW_FRACTION = 0.5
 # The longest a callout label runs to ("Ventral", "2-10 ml glass syringe", "3 mm"). Longer than
 # this, inside a guessed figure box, is a sentence -- prose the picture sits around, not part of it.
 FIGURE_LABEL_MAX_WORDS = 6
@@ -366,7 +376,29 @@ def _caption_block(ordered: list[TextLine]) -> str | None:
     # than top-to-bottom -- re-sort by position so the joined text always reads in the document's
     # true top-to-bottom order regardless of which direction found it.
     block.sort(key=lambda ln: -ln.bbox[3])
-    return " ".join(ln.text.strip() for ln in block)
+    return _join_caption_lines([ln.text.strip() for ln in block])
+
+
+def _join_caption_lines(parts: list[str]) -> str:
+    """Join a caption's lines, healing the hyphen the typesetter put in to break a word.
+
+    A line ending in "-" was broken mid-word, so joining with a space produces "iconograph- ical
+    elements" -- which is what a screen reader then says, one syllable at a time. The hyphen and
+    the space both go. Anything else joins with a space as before.
+
+    Only a *trailing* hyphen is touched, and only when the next line starts lowercase: a real
+    compound ("Greco-Roman") never carries its hyphen at the end of the line, and a line ending in
+    a dash before a capital is far more likely to be an em-dash aside than a broken word.
+    """
+    out = ""
+    for part in parts:
+        if not out:
+            out = part
+        elif out.endswith("-") and part[:1].islower():
+            out = out[:-1] + part
+        else:
+            out += " " + part
+    return out
 
 
 def _caption_is_substantial(text: str) -> bool:
@@ -406,6 +438,35 @@ def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, floa
     if above and (above[0].bbox[1] - fy1) <= CAPTION_MAX_GAP_PT:
         return _caption_block(above)
     return None
+
+
+def _side_captions(lines: list[TextLine],
+                   bbox: tuple[float, float, float, float]) -> list[str]:
+    """Every caption block sitting *beside* a figure, in the margin to its left or right.
+
+    A book with a wide outer margin stacks its captions there rather than under the pictures, and
+    a search that only looks up and down finds nothing at all on such a page. Each caption-marker
+    line clear of the figure horizontally, whose own vertical span overlaps the figure's, starts a
+    block; the caller decides what to do when more than one comes back, because several figures
+    can share one vertical span and their captions are stacked beside all of them.
+    """
+    fx0, fy0, fx1, fy1 = bbox
+    out: list[str] = []
+    for line in sorted(lines, key=lambda ln: -ln.bbox[3]):
+        lx0, ly0, lx1, ly1 = line.bbox
+        if not _is_caption_marker(line.text):
+            continue
+        gap = (lx0 - fx1) if lx0 >= fx1 else (fx0 - lx1)
+        if not 0 <= gap <= CAPTION_SIDE_MAX_GAP_PT:
+            continue
+        if min(ly1, fy1) - max(ly0, fy0) <= 0:
+            continue        # not beside it at all -- above or below, which the caller handles
+        block = _caption_block(
+            sorted((ln for ln in lines if ln.bbox[3] <= ly1 and _horizontally_overlaps(
+                ln.bbox, (lx0, ly0, lx1, ly1))), key=lambda ln: -ln.bbox[3]))
+        if block:
+            out.append(block)
+    return out
 
 
 def _nearby_caption_number(lines: list[TextLine],
@@ -1758,6 +1819,25 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
 
         effective_alt = {fid: alt_texts.get(fid) or caption_for(fid, bbox)
                          for fid, bbox in figures}
+        # A caption does not always sit under its picture. In a book laid out with a wide outer
+        # margin the captions are stacked *beside* the pictures, which is how a real page's
+        # photograph came out with "Rebind found no caption to guess from" while its caption --
+        # "Fig. 2. Head of the statue in figure 1..." -- sat two inches to its right.
+        #
+        # Reaching sideways is much more dangerous than reaching down, because several figures
+        # share one vertical span and their captions are stacked in the margin beside all of them.
+        # So it is taken only when the answer is unambiguous: exactly one caption block beside this
+        # figure that no other figure has already claimed. Anything else leaves it undescribed and
+        # asks the person, which is the honest outcome -- the wrong caption is a fabrication, and
+        # worse than an empty box.
+        claimed = {text for text in effective_alt.values() if text}
+        for fid, bbox in figures:
+            if effective_alt[fid]:
+                continue
+            beside = [text for text in _side_captions(lines, bbox) if text not in claimed]
+            if len(beside) == 1 and _caption_is_substantial(beside[0]):
+                effective_alt[fid] = beside[0]
+                claimed.add(beside[0])
         described = [(fid, bbox) for fid, bbox in figures if effective_alt[fid]]
         undescribed = [(fid, bbox) for fid, bbox in figures if not effective_alt[fid]]
         rebuild = _has_marked_content(page)
@@ -1964,10 +2044,27 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # it to a real /Figure on the next rebuild.
         editor_figures = list(figure_specs) + [
             (None, "", bbox, None) for _fid, bbox in undescribed]
+        # Placed left to right within a row, so two pictures side by side are met the way they are
+        # read. Inserting each one purely by its top edge cannot do this: the two are never level to
+        # the point, and whichever sits a hair higher wins regardless of which side of the page it
+        # is on -- which is how a page's photograph came after the coin printed beside it.
+        editor_figures.sort(key=lambda spec: (-spec[2][3], spec[2][0]))
         for fmcid, alt, bbox, _anchor in editor_figures:
-            position = next((i for i, elem in enumerate(page_elements)
-                             if elem["page"] == src_page.number
-                             and elem["top"] > 100 * (src_page.height - bbox[3]) / src_page.height),
+            fig_top = 100 * (src_page.height - bbox[3]) / src_page.height
+            fig_bottom = 100 * (src_page.height - bbox[1]) / src_page.height
+            fig_left = 100 * bbox[0] / src_page.width
+
+            def after(elem, top=fig_top, bottom=fig_bottom, left=fig_left) -> bool:
+                """Whether `elem` is read after this figure: on a later row, or beside it and
+                further right."""
+                if elem["page"] != src_page.number:
+                    return False
+                shared = min(bottom, elem["top"] + elem["height"]) - max(top, elem["top"])
+                same_row = shared > FIGURE_SAME_ROW_FRACTION * min(
+                    bottom - top, max(elem["height"], 0.01))
+                return elem["left"] > left if same_row else elem["top"] > top
+
+            position = next((i for i, elem in enumerate(page_elements) if after(elem)),
                             len(page_elements))
             page_elements.insert(position, {
                 "id": next(fid for fid, fbox in figures if fbox == bbox),

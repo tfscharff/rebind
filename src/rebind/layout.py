@@ -42,6 +42,11 @@ BLOCK_GAP_MIN_FRACTION = 0.02       # a block break must be this tall (fraction 
 # split into the same recurring column positions. These separate a grid of short cells from prose
 # (one long line per row) and from a single-column list. Tuned against Failure.pdf's Table 7.5.
 ROW_BAND_FRACTION = 0.6        # lines whose centers are within this * median height share a row
+# How much of the shorter box two lines must share vertically to be *literally* on one line, and so
+# read left to right rather than by whichever box happens to start a shade higher. Well above half:
+# two stacked lines of prose can graze each other through ascenders and descenders, and joining a
+# pair of those would swap them, which is a worse error than the one this fixes.
+ROW_SAME_LINE_FRACTION = 0.6
 COLUMN_ALIGN_TOLERANCE_PT = 12.0   # cell left-edges within this are the same column
 # A table is distinguished from flowing multi-column text by REGULARITY, not by cell width (a wide
 # gutter defeats any width test). A real table has several rows that each span the same set of
@@ -250,8 +255,7 @@ def _xy_cut(lines: list[TextLine], bbox: BBox, marginal: list[bool] | None = Non
             _xy_cut(top, (x0, split_y, x1, y1), marginal),
             _xy_cut(bottom, (x0, y0, x1, split_y), marginal),
         ])
-    ordered = sorted(lines, key=lambda ln: (-ln.bbox[3], ln.bbox[0]))
-    return Region(bbox=bbox, kind="block", lines=ordered)
+    return Region(bbox=bbox, kind="block", lines=rows_left_to_right(lines))
 
 
 def _reading_order(region: Region) -> list[PlacedLine]:
@@ -298,7 +302,7 @@ def _splice_figure_text(placed: list[PlacedLine], in_figure: list[TextLine]) -> 
     if not in_figure:
         return placed
     out = list(placed)
-    for line in sorted(in_figure, key=lambda ln: (-ln.bbox[3], ln.bbox[0])):
+    for line in rows_left_to_right(in_figure):
         column = next((p.column for p in out if p.line.bbox[3] <= line.bbox[3]), 0)
         index = next((i for i, p in enumerate(out) if p.line.bbox[3] < line.bbox[3]), len(out))
         out.insert(index, PlacedLine(line=line, column=max(column, 0)))
@@ -340,11 +344,43 @@ def order_page(page: Page, profile: TypographicProfile,
     # short-cell guards are what keep a genuine multi-column *layout* from being read as a table.
     table_line_ids = detect_table_lines(body)
 
-    artifacts_ordered = sorted(artifacts, key=lambda ln: (-ln.bbox[3], ln.bbox[0]))
+    artifacts_ordered = rows_left_to_right(artifacts)
     placed.extend(PlacedLine(line=ln, column=-1) for ln in artifacts_ordered)
 
     flags = ["multi-column-suspected"] if any(marginal) else []
     return PageLayout(lines=placed, flags=flags, table_line_ids=table_line_ids)
+
+
+def rows_left_to_right(lines: list[TextLine]) -> list[TextLine]:
+    """Lines top to bottom, and within one visual row, left to right.
+
+    Sorting on the top edge alone is not the same thing, and the difference is visible on every
+    page: a footer line and the folio beside it sit on one row but their boxes differ by a point or
+    two, so the key `-bbox[3]` decides the reading order on that difference. Whichever happens to
+    be typeset a hair higher is read first, and it is routinely the one on the right -- a screen
+    reader announcing the page number before the line it belongs beside.
+
+    Two lines belong to the same row when their boxes overlap vertically by most of the shorter
+    one's height. That is stricter than `_rows_by_band` (which groups a table's cells, whose
+    baselines vary much more) and is deliberately so: this must join things that are literally on
+    one line and nothing else, because joining two stacked lines would swap them.
+    """
+    ordered = sorted(lines, key=lambda ln: (-ln.bbox[3], ln.bbox[0]))
+    out: list[TextLine] = []
+    row: list[TextLine] = []
+    for line in ordered:
+        if row:
+            top = min(r.bbox[3] for r in row)
+            bottom = max(r.bbox[1] for r in row)
+            overlap = min(top, line.bbox[3]) - max(bottom, line.bbox[1])
+            shorter = min(line.bbox[3] - line.bbox[1],
+                          min(r.bbox[3] - r.bbox[1] for r in row))
+            if overlap < ROW_SAME_LINE_FRACTION * max(shorter, 1.0):
+                out.extend(sorted(row, key=lambda ln: ln.bbox[0]))
+                row = []
+        row.append(line)
+    out.extend(sorted(row, key=lambda ln: ln.bbox[0]))
+    return out
 
 
 def _rows_by_band(lines: list[TextLine]) -> list[list[TextLine]]:

@@ -57,6 +57,9 @@ CLOSE_FRACTION = 0.02
 WORK_WIDTH_PX = 900
 # Anything whose box comes within this fraction of the page edge is the scan's own border.
 EDGE_MARGIN_FRACTION = 0.02
+# How much of the shorter picture two of them must share vertically to count as side by side, and
+# so be read left to right rather than by whichever sits a few points higher.
+SAME_ROW_FRACTION = 0.5
 
 
 @dataclass(frozen=True)
@@ -139,5 +142,27 @@ def find_picture_regions(page_image: np.ndarray, text_boxes: list[tuple], *,
         out.append(Region(
             bbox=(x / sx, page_height - (y + bh) / sy, (x + bw) / sx, page_height - y / sy),
             density=round(density, 3)))
-    out.sort(key=lambda r: (-r.bbox[3], r.bbox[0]))
+    # Down the page, and across it left to right -- not by top edge alone. Two pictures side by side
+    # are never level to the point: on a real page a photograph and the coin beside it differed by
+    # a few points, so the top edge alone put the right-hand one first and a screen reader met the
+    # page's pictures back to front.
+    return _rows_left_to_right(out)
+
+
+def _rows_left_to_right(regions: list[Region]) -> list[Region]:
+    ordered = sorted(regions, key=lambda r: (-r.bbox[3], r.bbox[0]))
+    out: list[Region] = []
+    row: list[Region] = []
+    for region in ordered:
+        if row:
+            top = min(r.bbox[3] for r in row)
+            bottom = max(r.bbox[1] for r in row)
+            overlap = min(top, region.bbox[3]) - max(bottom, region.bbox[1])
+            shorter = min(region.bbox[3] - region.bbox[1],
+                          min(r.bbox[3] - r.bbox[1] for r in row))
+            if overlap < SAME_ROW_FRACTION * max(shorter, 1.0):
+                out.extend(sorted(row, key=lambda r: r.bbox[0]))
+                row = []
+        row.append(region)
+    out.extend(sorted(row, key=lambda r: r.bbox[0]))
     return out

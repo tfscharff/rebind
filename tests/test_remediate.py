@@ -879,6 +879,35 @@ def test_a_picture_guessed_from_a_scan_never_swallows_prose():
     assert prose not in _figure_text(lines, picture)
 
 
+def test_a_caption_beside_a_figure_is_found_and_an_ambiguous_one_is_not():
+    # A book with a wide outer margin stacks its captions there rather than under the pictures. A
+    # search that only looks up and down finds nothing on such a page: a real photograph came out
+    # with "Rebind found no caption to guess from" while its caption sat two inches to its right.
+    #
+    # Reaching sideways is riskier than reaching down, because several figures share one vertical
+    # span and their captions are stacked beside all of them. So this returns everything it finds
+    # and lets the caller refuse when there is more than one -- the wrong caption is a fabrication,
+    # which is worse than an empty box and a question.
+    from rebind.extract import TextLine
+    from rebind.remediate import _side_captions
+
+    def line(text: str, box: tuple) -> TextLine:
+        return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False)
+
+    picture = (100.0, 500.0, 300.0, 700.0)
+    beside = line("Fig. 2.  Head of the statue, in profile.", (340.0, 600.0, 520.0, 612.0))
+    far_away = line("Fig. 9.  Something on the other side of the page.",
+                    (560.0, 600.0, 720.0, 612.0))
+    below_unrelated = line("Ordinary prose under the picture.", (100.0, 470.0, 300.0, 482.0))
+
+    found = _side_captions([beside, far_away, below_unrelated], picture)
+    assert len(found) == 1 and found[0].startswith("Fig. 2."), found
+
+    # Two captions stacked in the margin beside one picture: both come back, so the caller declines.
+    second = line("Fig. 3.  A coin, obverse.", (340.0, 660.0, 520.0, 672.0))
+    assert len(_side_captions([beside, second], picture)) == 2
+
+
 def test_a_figure_with_no_description_is_still_an_element_in_the_editor(tmp_path: Path):
     # In the document an undescribed figure is a decorative artifact, and has to be: tagging one
     # with no /Alt is a conformance failure. In the EDITOR it must still be an element, because it
@@ -1223,3 +1252,20 @@ def test_split_caption_is_found_on_a_different_page(tmp_path: Path):
         alt = str(figs[0].get("/Alt"))
     assert "Mounting zebrafish embryos" in alt, alt
     assert "(Continued)" not in alt, "should use the fuller caption, not the bare local marker"
+
+
+def test_a_caption_broken_across_lines_is_healed_not_hyphenated():
+    # A typesetter's line-break hyphen is not part of the word. Joined naively the caption reads
+    # "iconograph- ical elements", which is what a screen reader then says -- and that string goes
+    # into the document as the picture's /Alt, so it is the reader's only description of it.
+    from rebind.remediate import _join_caption_lines
+
+    assert _join_caption_lines(
+        ["Fig. 2.  Head of the statue. Hairstyle and facial features show the same iconograph-",
+         "ical elements as Hellenistic ruler portraits."]
+    ) == ("Fig. 2.  Head of the statue. Hairstyle and facial features show the same "
+          "iconographical elements as Hellenistic ruler portraits.")
+    # A dash before a capital is an aside, not a broken word, and a plain line break is a space.
+    assert _join_caption_lines(["Fig. 3.  The forum -", "Rome, that is."]) == \
+        "Fig. 3.  The forum - Rome, that is."
+    assert _join_caption_lines(["Fig. 4.  A coin,", "obverse."]) == "Fig. 4.  A coin, obverse."

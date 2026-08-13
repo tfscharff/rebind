@@ -201,8 +201,11 @@ li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:non
 .sheet img{display:block;height:100%;width:auto}
 /* The chooser sits under the page: the element's name in large type, what it is, and its nearest
    HTML equivalent, which is the part most people recognise on sight. */
+/* Content sits at the TOP of the panel. Centring it looked deliberate while the panel held two
+   short lines, and left a hand's width of empty panel above the heading once it grew a picture and
+   a description box -- the heading floating in the middle of nothing. */
 .typebar{border:1px solid var(--line);border-radius:var(--radius);background:var(--panel);
-  padding:.55rem .9rem;display:flex;flex-direction:column;justify-content:center}
+  padding:.55rem .9rem;display:flex;flex-direction:column;justify-content:flex-start}
 .typebar .what{font-family:var(--serif);font-size:1.9rem;line-height:1.1;margin:0;
   letter-spacing:-.02em;display:flex;align-items:baseline;gap:.55rem;flex-wrap:wrap}
 .typebar .what kbd.tag{font-size:.95rem;padding:.1rem .45rem;border-color:var(--stamp);
@@ -268,15 +271,18 @@ li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:non
   border-top:1px solid var(--line)}
 .palette .keys .lab{font-size:.88rem}
 .palette .keys .what{font-size:.76rem;color:var(--muted)}
-/* ---- The description prompt, opened by landing on a picture with no description ---- */
-.palette .card.alt{max-width:32rem}
-.palette .card.alt .sub{margin:.3rem 0 .7rem;font-size:.84rem;color:var(--muted)}
-.altshot{display:block;max-width:100%;max-height:11rem;object-fit:contain;margin:0 0 .7rem;
+/* ---- The description prompt: in the right column, where the element panel already is ---- */
+.altprompt .sub{margin:.2rem 0 .6rem;font-size:.82rem;color:var(--muted)}
+.altshot{display:block;max-width:100%;max-height:9rem;object-fit:contain;margin:0 0 .6rem;
   border:1px solid var(--line);border-radius:6px;background:var(--paper)}
-#altinput{width:100%;font:inherit;font-size:.9rem;padding:.45rem .6rem;border-radius:6px;
+#altinput{width:100%;font:inherit;font-size:.86rem;padding:.4rem .55rem;border-radius:6px;
   border:1px solid var(--line);background:var(--paper);color:var(--ink);resize:vertical}
-.altact{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.6rem}
-.altact .hint{font-size:.76rem;color:var(--muted);margin-left:auto}
+.altact{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.5rem}
+.altprompt .hint{font-size:.74rem;color:var(--muted);margin:.45rem 0 0}
+/* Folded while a description is being written: the keys are no use then, and the column is only
+   so tall. The heading stays so the panel does not vanish out from under the eye. */
+.keys.folded .keylist,.keys.folded .sub{display:none}
+.keys.folded{padding-top:.6rem;padding-bottom:.6rem}
 kbd{font-family:var(--mono);font-size:.72rem;background:var(--paper);border:1px solid var(--line);
   border-bottom-width:2px;border-radius:4px;padding:.05rem .32rem;color:var(--ink);flex:none;
   min-width:1.35rem;text-align:center}
@@ -604,7 +610,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       esc(readingOrderProgress())+'</span></div>'+
       '<div id="typebody">'+idleBanner()+'</div>'+
       '</section>'+
-      '<section class="panel keys"><h2>Keys</h2>'+
+      '<section class="panel keys" id="keys"><h2>Keys</h2>'+
       '<p class="sub"><b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
       '<b>+</b> add · <b>−</b> remove · <b>[</b> <b>]</b> turn the page · '+
       '<b>Enter</b> lists every type</p>'+
@@ -810,10 +816,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     wireStage();
   }
 
+  // Nothing until you land on something. The panel used to open with a paragraph explaining what
+  // the walk is; it was read once and then sat in the way of the thing it was explaining.
   function idleBanner(){
-    return '<p class="what idle">Tab into the page to walk its elements</p>'+
-      '<p class="why">Every block Rebind tagged is a stop, and the order you meet them in is the '+
-      'order a screen reader reads them in. Tab past the last one and the next page opens.</p>';
+    return '<p class="what idle">Tab into the page</p>';
   }
 
   function boxHtml(e,i){
@@ -1050,23 +1056,25 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     ed.altAsked[elementId]=true;
     var guess=(ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'')) || altGuess(e);
     var thumb=figThumb(elementId);
-    var host=document.createElement('div');
-    host.className='palette';
-    host.id='altprompt';
-    host.setAttribute('role','dialog');
-    host.setAttribute('aria-modal','true');
-    host.setAttribute('aria-label','Describe this picture');
-    host.innerHTML='<div class="card alt"><h2>What does this picture show?</h2>'+
+    // In the right column, where the element you are standing on is already described -- not in a
+    // sheet over the page. The picture being described is in the middle column, and a dialog on
+    // top of it covers the one thing you need to look at to answer the question.
+    var host=document.getElementById('typebody');
+    if(!host) return;
+    host.innerHTML='<div class="altprompt" id="altprompt" role="group" '+
+      'aria-label="Describe this picture">'+
+      '<p class="what">Describe this</p>'+
       '<p class="sub">'+(guess? 'Rebind guessed from the page. Accept it or change it.'
                               : 'Rebind found no caption to guess from.')+'</p>'+
       (thumb? '<img class="altshot" src="'+esc(thumb)+'" alt="The picture being described">':'')+
       '<textarea id="altinput" rows="3" placeholder="A short description of the picture">'+
       esc(guess)+'</textarea>'+
-      '<div class="altact"><button type="button" class="btn" id="altok">Use this</button>'+
-      '<button type="button" class="btn ghost" id="altskip">Skip for now</button>'+
-      '<span class="hint">Enter accepts · Shift+Enter for a new line · Esc skips</span></div></div>';
-    document.body.appendChild(host);
-    ed.palette=true;
+      '<div class="altact"><button type="button" class="btn small" id="altok">Use this</button>'+
+      '<button type="button" class="btn ghost small" id="altskip">Skip</button></div>'+
+      '<p class="hint">Enter accepts · Shift+Enter for a new line · Esc skips</p></div>';
+    // The keys are of no use while the question on screen is a sentence, and the column is only so
+    // tall: folding them away is what makes room for the picture and the box without scrolling.
+    setKeysCollapsed(true);
 
     var input=document.getElementById('altinput');
     input.focus();
@@ -1091,13 +1099,17 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       if(ev.key==='Escape'){ ev.preventDefault(); skip(); return; }
       if(ev.key==='Enter' && !ev.shiftKey){ ev.preventDefault(); accept(); }
     });
-    host.addEventListener('click',function(ev){ if(ev.target===host) skip(); });
   }
 
   function closeAltPrompt(){
     var host=document.getElementById('altprompt');
     if(host && host.parentNode) host.parentNode.removeChild(host);
-    ed.palette=false;
+    setKeysCollapsed(false);
+  }
+
+  function setKeysCollapsed(collapsed){
+    var keys=document.getElementById('keys');
+    if(keys) keys.classList.toggle('folded', !!collapsed);
   }
 
   // The next element in the walk, carrying on to the next page at the end of this one -- what Tab

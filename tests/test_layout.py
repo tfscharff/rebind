@@ -208,3 +208,36 @@ def test_order_page_flags_a_real_table_grid():
     profile = build_profile([page])
     layout = order_page(page, profile)
     assert len(layout.table_line_ids) == 12, f"expected 12 table cells, got {len(layout.table_line_ids)}"
+
+
+def test_two_things_on_one_line_read_left_to_right():
+    # A footer line and the folio beside it sit on one row, but their boxes differ by a point or
+    # two. Ordering on the top edge alone decides the reading order on that difference, and it was
+    # routinely deciding for the one on the right -- a page number announced before the line it
+    # belongs next to. Same row means left to right, whatever the tops say.
+    lines = [_line(400, 100, 460, 111, "right", size=10.0),
+             _line(72, 99, 300, 110, "left", size=10.0)]
+    region = _xy_cut(lines, (72, 99, 460, 111))
+    placed = _reading_order(region)
+    assert [p.line.text for p in placed] == ["left", "right"]
+
+
+def test_a_stacked_pair_that_grazes_is_not_treated_as_one_line():
+    # The guard on the rule above. Two lines of prose can overlap slightly through a descender and
+    # an ascender; joining a pair of those and sorting them by x would swap them, which is worse
+    # than the fault being fixed. Only real overlap counts as one line.
+    lines = [_line(200, 690, 500, 702, "upper"),
+             _line(72, 679, 400, 691, "lower")]
+    region = _xy_cut(lines, (72, 679, 500, 702))
+    placed = _reading_order(region)
+    assert [p.line.text for p in placed] == ["upper", "lower"]
+
+
+def test_two_columns_are_still_columns_not_one_row_each():
+    # The rule must never reach across a gutter: in real two-column text the whole left column is
+    # read before the right one, and rows shared across the gutter mean nothing.
+    left = [_line(72, 700, 260, 711, "L1"), _line(72, 680, 260, 691, "L2")]
+    right = [_line(320, 701, 500, 712, "R1"), _line(320, 681, 500, 692, "R2")]
+    region = _xy_cut(left + right, (72, 680, 500, 712))
+    placed = _reading_order(region)
+    assert [p.line.text for p in placed] == ["L1", "L2", "R1", "R2"]

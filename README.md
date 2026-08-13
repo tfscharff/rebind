@@ -24,6 +24,13 @@ including the ordinary article layout where a full-width heading sits above the 
 the gutter from a naive cut. A figure's own callout labels are held out of that cut and spliced
 back in at the height they sit at, so a labelled diagram cannot invent column structure.
 
+Within a block, things that sit on **one line are read left to right** — not by which box starts a
+shade higher. A footer and the folio beside it, or two pictures side by side, are never level to
+the point, so ordering on the top edge alone decides the reading order on a rounding difference and
+routinely decides for the one on the right. The rule is deliberately strict about what counts as
+one line (boxes sharing most of the shorter one's height) and never reaches across a gutter: in
+real two-column text the whole left column is read before the right, and shared rows mean nothing.
+
 A born-digital page carries markup (font size, tags) that names its own structure directly. A
 scanned page, after OCR, does not — recognition returns only text and a bounding box per line. For
 those pages, structure is recovered by **inference from geometry**: line height relative to the
@@ -73,7 +80,14 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
   happens to sit under a picture is never used: alt text has to be the document's own description
   of the figure. A caption that is only a bare label ("Fig. 8", "Fig. 8 (Continued)") is never
   accepted as alt text either — it would tick a checker's box while telling a screen-reader user
-  nothing — but it *is* offered in the editor as a starting point to finish.
+  nothing — but it *is* offered in the editor as a starting point to finish. A caption does not
+  always sit under its picture: a book with a wide outer margin stacks them *beside* the figures,
+  so the margin is searched too — but only when the answer is unambiguous, since several figures
+  share one vertical span and their captions are stacked beside all of them. Exactly one unclaimed
+  caption beside a figure is taken; more than one leaves it for the person, because the wrong
+  caption is a fabrication and worse than an empty box. A line-break hyphen is healed on the way
+  in, so a caption reads "iconographical elements", not "iconograph- ical elements" — that string
+  becomes the picture's `/Alt`, and is the reader's only description of it.
 
   A figure's own callout labels ("A", "B", "3 mm") always belong to the figure, described or not.
   Left loose they became elements in their own right, and a picture entered the reading order as a
@@ -204,13 +218,15 @@ key sets the type and moves you straight to the next element, so correcting a pa
 keystrokes with no Tab in between. `Enter` is only for when you cannot remember which key you want:
 it opens a floating list of every type.
 
-Land on a **figure that has no description** and the walk stops: a prompt opens over the page,
-showing the picture with Rebind's best guess already in the box — the document's own caption where
-there is one — and the cursor at the end of it, ready to edit. `Enter` accepts and carries straight
-on to the next element; `Esc` skips and leaves the document alone. It asks once per picture, not
-every time you pass; `Space` on a figure asks again, and the same box stays in the right column for
-editing a description you have already given. Nothing is invented: with no caption to draw on, the
-box starts empty, and nothing is written into the document unless you leave it there.
+Land on a **figure that has no description** and the walk stops: the right column becomes a prompt
+with Rebind's best guess already in the box — the document's own caption where there is one — and
+the cursor at the end of it, ready to edit. It asks there rather than in a sheet over the page,
+because the picture you are being asked about is in the middle column and a dialog on top of it
+hides the one thing you look at to answer; the key legend folds away while you write, to make room.
+`Enter` accepts and carries straight on to the next element; `Esc` skips and leaves the document
+alone. It asks once per picture, not every time you pass; `Space` on a figure asks again. Nothing
+is invented: with no caption to draw on, the box starts empty, and nothing is written into the
+document unless you leave it there.
 
 | key | | key | | key | |
 |---|---|---|---|---|---|
@@ -257,7 +273,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.26.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.27.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,
