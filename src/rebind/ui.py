@@ -993,9 +993,14 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
           if(to){ ev.preventDefault(); to.focus(); }
           return;
         }
-        // On a picture, typing writes the description -- you should not have to press Enter first
-        // to start saying what the picture is. This does mean the type keys do not retag a figure;
-        // the way back is "−" (which the hint above says), and then "+" to add it as a paragraph.
+        // "This is not a picture" has to stay one keystroke, and it is the same keystroke
+        // everywhere else in the app. Checked before typing, so x means x on a figure too.
+        if(kindOf(e)==='Figure' && key.toLowerCase()===(ed.artifact&&ed.artifact.key||'x')){
+          ev.preventDefault(); setKind(e.id, 'Artifact'); return;
+        }
+        // Otherwise, on a picture, typing writes the description -- you should not have to press
+        // Enter first to start saying what the picture is. This does mean the other type keys do
+        // not retag a figure; "x" takes it out, and "+" then adds it back as a paragraph.
         if(kindOf(e)==='Figure' && key.length===1){
           ev.preventDefault();
           openAltPrompt(e.id, true);

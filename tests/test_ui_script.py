@@ -295,3 +295,12 @@ def test_a_picture_is_named_as_a_figure_with_its_key():
     assert "var fkey=keyFor('Figure');" in prompt
     assert "Describe this<" not in prompt and "'Describe this'" not in prompt
     assert "<kbd class=\"tag\">" in prompt
+
+
+def test_x_takes_a_picture_out_of_the_reading_order_like_anywhere_else():
+    # Typing on a picture writes its description, which swallowed the one key that means "this is
+    # not a picture". It is checked first, so x means x on a figure too.
+    script = _script()
+    handler = script[script.index("box.addEventListener('keydown'"):script.index("var hit=null;")]
+    assert handler.index("ed.artifact&&ed.artifact.key") < handler.index("key.length===1")
+    assert "setKind(e.id, 'Artifact'); return;" in handler

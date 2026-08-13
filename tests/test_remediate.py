@@ -1320,3 +1320,79 @@ def test_a_line_level_with_a_caption_across_the_page_does_not_join_it():
     groups = _caption_groups([caption, far], roles, {id(caption): 0}, [[caption]])
     assert groups == [0, None], groups
     assert roles[1] == "P"
+
+
+def test_a_guessed_picture_with_no_caption_anywhere_is_not_a_picture():
+    # A picture guessed from a scan's pixels is ink that is not text. On a page of maps and plans
+    # that is mostly the drawing's own hatching, and two real pages produced a scatter of figures
+    # that are not there. A picture the document never captions is one Rebind has nothing to say
+    # about and no way to check, so it goes back to being part of the page.
+    from rebind.extract import TextLine
+    from rebind.remediate import _side_captions
+
+    # The rule itself is one line in the page loop; what it depends on is that nothing anywhere
+    # offered a caption. This pins the "nothing offered" half, which is what makes it safe.
+    def line(text: str, box: tuple) -> TextLine:
+        return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False)
+
+    plan_drawing = (100.0, 400.0, 400.0, 700.0)
+    prose = line("Ordinary prose, which is not a caption and must never be taken for one.",
+                 (100.0, 380.0, 400.0, 392.0))
+    assert _side_captions([prose], plan_drawing) == []
+
+
+def test_a_figure_can_be_taken_out_by_an_edit(tmp_path: Path):
+    # Figures live outside the plan, so the edit that removes an element never reached them:
+    # pressing "x" on a wrongly-found picture did nothing at all. On a page with two of them that
+    # is a wall the walk cannot get past.
+    import base64
+    import io
+
+    from PIL import Image
+
+    from rebind.remediate import Edits
+    from tests.fixtures import born_digital_pdf
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (160, 100), (60, 60, 60)).save(buffer, format="PNG")
+    data_uri = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
+    source = born_digital_pdf(
+        f'<p>Above.</p><img src="{data_uri}" style="width:200px;height:125px"><p>Below.</p>',
+        tmp_path / "in.pdf")
+
+    before = remediate(source, tmp_path / "a.pdf", title="T")
+    figure = next(e for e in before.elements if e["kind"] == "Figure")
+
+    after = remediate(source, tmp_path / "b.pdf", title="T",
+                      edits=Edits(removed={figure["id"]}))
+    assert not [e for e in after.elements if e["kind"] == "Figure"], \
+        "a figure the person took out must stay out"
+
+
+def test_text_inside_a_figure_is_not_also_an_element_of_its_own(tmp_path: Path):
+    # A figure's own text is drawn inside it and read as part of it. Listing it again puts the
+    # picture's insides into the walk as separate stops -- on a scanned architectural plan, 175 of
+    # them from one figure, and getting past that page meant 175 presses of Tab.
+    from tests.fixtures import born_digital_pdf
+
+    import base64
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (240, 140), (90, 90, 90)).save(buffer, format="PNG")
+    data_uri = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
+    source = born_digital_pdf(
+        '<div style="position:relative">'
+        f'<img src="{data_uri}" style="width:300px;height:170px">'
+        '<span style="position:absolute;left:30px;top:60px">A</span>'
+        '<span style="position:absolute;left:200px;top:60px">B</span></div>'
+        "<p>Fig. 1.  A schematic of the apparatus, with its two chambers marked.</p>",
+        tmp_path / "in.pdf")
+    result = remediate(source, tmp_path / "out.pdf", title="T")
+
+    figures = [e for e in result.elements if e["kind"] == "Figure"]
+    assert figures, [(e["kind"], e["text"][:30]) for e in result.elements]
+    loose = [e for e in result.elements if e["text"].strip() in {"A", "B"}]
+    assert not loose, f"a figure's callout labels must not be elements too: {loose}"

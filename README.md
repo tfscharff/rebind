@@ -7,6 +7,37 @@ validates with veraPDF (zero failures). It preserves each page as it is and adds
 the source is missing: a selectable text layer and a structure tree. It runs entirely on the local
 machine — no API key, no GPU, no network at runtime.
 
+On a scanned book chapter that scored **0%** in Yuja's accessibility checker — and **69%, with 27
+issues left for a person to fix**, after Yuja's own remediation — the document Rebind produced
+scored **100%**.
+
+## Install
+
+**Windows.** Download `rebind-setup.exe` from the
+[latest release](https://github.com/tfscharff/rebind/releases/latest) and run it. No admin rights
+are needed; it installs for you alone. The installer is unsigned, so SmartScreen shows a warning on
+first run — choose *More info* → *Run anyway*.
+
+Then open Rebind from the Start menu. It opens a page in your browser: that is the whole app.
+Nothing is uploaded anywhere, and closing the tab quits it.
+
+**From source** (any platform with Python 3.12):
+
+```bash
+git clone https://github.com/tfscharff/rebind
+cd rebind
+uv sync                # https://docs.astral.sh/uv/ -- installs Python 3.12 and everything else
+uv run rebind serve    # opens the app in your browser
+```
+
+On Windows, double-clicking `rebind.cmd` in the clone does the same thing.
+
+To convert a file without the app:
+
+```bash
+uv run rebind convert in.pdf out.pdf
+```
+
 ## What it does
 
 Per page:
@@ -107,12 +138,23 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
 
   A figure's own callout labels ("A", "B", "3 mm") always belong to the figure, described or not.
   Left loose they became elements in their own right, and a picture entered the reading order as a
-  scatter of fragments read out as if they were prose.
+  scatter of fragments read out as if they were prose — and, in the editor, as a scatter of tab
+  stops. On a scanned architectural plan that is what the recogniser makes of hatching and rules:
+  one page came to 181 elements, 175 of them one- and two-character scraps from inside a single
+  figure, so getting past it meant 175 presses of Tab. It is 7 now.
 
   **On a scan there are no images to find.** The whole sheet is one raster, and an illustration
   printed on it is a patch of that raster — not an object in the file — so every picture in a
   scanned book was invisible. They are found from the pixels instead, the way a reader finds them:
   OCR says where the words are, those are masked out, and what is left is closed up into blobs.
+  **And a guess the document never captions is discarded.** The guess comes from ink that is not
+  text, which on a page of maps and plans is largely the drawing's own hatching; two real pages
+  produced a scatter of figures that are not there. A picture with no caption anywhere is one
+  Rebind has nothing to say about and no way to check, so it goes back to being part of the page —
+  no element, no held-out text, nothing to answer. What that costs is a genuinely uncaptioned
+  illustration, which the person can still mark by hand with `f`. This applies only to guesses: an
+  image the *file* declares really is there, whatever the document says about it, and stays.
+
   A blob becomes a figure only if it is large (≥1.5% of the page), solid enough to be a picture
   rather than a stray mark, not mostly overlapping text, and does not reach three page edges —
   anything printed on the sheet has a margin on at least two adjacent sides, and what reaches three
@@ -190,12 +232,15 @@ that asks for your eye.
 
 ## Running it
 
-**App.** Install with the Windows installer (`rebind-setup.exe`, built from `packaging/`) or run
-`rebind serve`, then use the local browser page it opens. Drop a PDF in, convert, and download the
-result. The result view also shows a structure badge: a fast, dependency-free check of what
-remediation is expected to have built (not independent conformance validation — that's veraPDF,
-dev/CI-only; see ADR 0006). Nothing is uploaded. Closing the tab quits Rebind — the page sends a
-heartbeat, and the server exits when it stops.
+**App.** Drop a PDF in, wait, and the result view opens. The result view also shows a structure
+badge: a fast, dependency-free check of what remediation is expected to have built (not independent
+conformance validation — that's veraPDF, dev/CI-only; see ADR 0006). Nothing is uploaded.
+
+Closing the tab quits Rebind, since it has no window of its own: the page sends a heartbeat and the
+server exits when it stops. A *reload* does not, though the browser reports it the same way — the
+beacon that says "this page is going away" only starts a short countdown, and the reloaded page's
+first heartbeat cancels it. Without that, refreshing Rebind killed the server it was refreshing
+into, and closing a stale tab from a previous run took the newly started one down with it.
 
 ### The result view
 
@@ -252,8 +297,9 @@ the first element of the document to the last, whether or not there are pictures
 takes the guess as it stands and moves on. `Enter` goes into the box to edit it — as does simply
 starting to type, since you should not have to ask permission to say what a picture is. From inside
 the box, `Enter` or `Tab` accepts and moves to the next element, and `Esc` goes back to the page.
-(The cost of typing straight into the box is that the type keys no longer retag a figure: `−` takes
-it out of the reading order and `+` puts it back as a paragraph.) Nothing is invented: with no
+(The cost of typing straight into the box is that the *type* keys no longer retag a figure. `x` is
+the exception, checked before the typing: it means "this is not a picture" here exactly as it does
+everywhere else, and `+` then puts the region back as a paragraph.) Nothing is invented: with no
 caption to draw on the box starts empty, and nothing is written into the document unless you leave
 it there. Accepting a guess unchanged costs nothing — only a real change saves, so tabbing through
 a page of pictures is as quick as tabbing through prose.
@@ -303,15 +349,25 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.29.0). Born-digital and scanned inputs both work end to end.
+**1.0.0.** Born-digital and scanned inputs both work end to end, and a real scanned book chapter
+goes through the whole path — convert, walk, describe, download — to a document that validates
+PDF/UA-2 with zero failures and scores 100% in Yuja.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
-structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,
-links, bookmarks).
+structure tree above (headings, paragraphs, page furniture, captions, lists, tables, figures with
+caption-based alt text, links, bookmarks), plus the keyboard-first editor for the judgements a
+machine should not make alone.
 
-Not implemented: full page dewarp for spine-curved scans, detection of an *uncaptioned* drawn
-figure, and mathematics/chemistry/music recognition.
-Output is not byte-reproducible (see ADR 0003).
+Not implemented, and known rough:
+
+- Full page dewarp for spine-curved scans.
+- Detection of an **uncaptioned** figure. A picture guessed from a scan's pixels is only kept when
+  the document captions it somewhere — see *Figures* above for why, and what that costs.
+- Mathematics, chemistry and music recognition.
+- A source document's own internal navigation is dropped rather than rebuilt (ADR 0006).
+- Single-character OCR specks out in the body text — where no figure or caption claims them —
+  still become elements of their own.
+- Output is not byte-reproducible (ADR 0003).
 
 ## Runtime
 

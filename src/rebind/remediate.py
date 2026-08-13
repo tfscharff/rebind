@@ -1977,6 +1977,23 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                 claimed.add(beside[0][0])
                 if beside[0][1]:
                     caption_blocks.append(beside[0][1])
+        # A picture guessed from a scan's pixels, with no caption anywhere in the document to say
+        # what it is, is treated as no picture at all. The guess comes from ink that is not text,
+        # and on a page of maps and plans that is mostly the drawing's own hatching and rules --
+        # pages 20 and 25 of a real scanned book produced a scatter of them. A picture the document
+        # never captions is one Rebind has nothing to say about and no way to check, so it goes
+        # back to being part of the page: no element, no held-out text, nothing to answer. What is
+        # lost is a genuinely uncaptioned illustration, which the person can still mark by hand.
+        #
+        # This applies only to guesses. An image the FILE declares really is there, whatever the
+        # document says about it, and stays -- undescribed and asking.
+        figures = [(fid, bbox) for fid, bbox in figures
+                   if effective_alt[fid] or fid not in scan_regions]
+        # ...and a figure the person has taken out stays out. Figures live outside the plan, so the
+        # edit that removes an element never reached them: pressing "x" on a picture did nothing at
+        # all, which on a page with two wrongly-found ones is a wall the walk cannot get past.
+        figures = [(fid, bbox) for fid, bbox in figures if fid not in edits.removed]
+
         described = [(fid, bbox) for fid, bbox in figures if effective_alt[fid]]
         undescribed = [(fid, bbox) for fid, bbox in figures if not effective_alt[fid]]
         rebuild = _has_marked_content(page)
@@ -2067,11 +2084,20 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         records = _element_records(src_page, plan, content_lines, mcid_of)
         # Lines Rebind set aside are listed too, marked as untagged, so the editor can offer them.
         # They sit at the position they occupy on the page, so the list stays the page's order.
+        #
+        # Except the ones that belong to a figure. Those are already part of it -- drawn inside its
+        # marked content, and read out as part of it -- so listing them again puts the picture's
+        # own insides into the walk as separate stops. On a scanned architectural plan that is what
+        # the recogniser makes of hatching and rules: page 25 of a real book came to 181 elements,
+        # 175 of them one- and two-character scraps from inside a single figure, and getting past
+        # that page meant 175 presses of Tab.
         for index, line in enumerate(lines):
             if line_ids[index] in {entry["id"] for entry in plan} or not line.text.strip():
                 continue
             if index in {content_source[e] for e in range(len(content_source))
                          if mcid_of[e] is not None}:
+                continue
+            if id(line) in owner_figure or id(line) in inside_undescribed:
                 continue
             records.append(_untagged_record(src_page, line_ids[index], line))
         page_elements.extend(_records_in_reading_order(records))
