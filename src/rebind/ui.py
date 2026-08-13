@@ -1096,11 +1096,17 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     // top of it covers the one thing you need to look at to answer the question.
     var host=document.getElementById('typebody');
     if(!host) return;
+    // Named like every other element, with its key beside it. The panel used to say "Describe
+    // this", which told you what to do but not what Rebind had decided this was -- and the type is
+    // exactly what you are being asked to confirm by describing it.
+    var fkey=keyFor('Figure');
     host.innerHTML='<div class="altprompt" id="altprompt" role="group" '+
       'aria-label="Describe this picture">'+
-      '<p class="what">Describe this</p>'+
-      '<p class="sub">'+(guess? 'Rebind guessed from the page. Accept it or change it.'
-                              : 'Rebind found no caption to guess from.')+'</p>'+
+      '<p class="what">'+esc(fkey? fkey.label : 'Figure')+
+      (fkey&&fkey.key? '<kbd class="tag">'+esc(fkey.key)+'</kbd>' : '')+'</p>'+
+      '<p class="sub">'+(guess? 'A picture. Describe it — Rebind guessed from the page.'
+                              : 'A picture. Describe it — Rebind found no caption to guess from.')+
+      '</p>'+
       (thumb? '<img class="altshot" src="'+esc(thumb)+'" alt="The picture being described">':'')+
       '<textarea id="altinput" rows="7" placeholder="A short description of the picture">'+
       esc(guess)+'</textarea>'+

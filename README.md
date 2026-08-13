@@ -63,7 +63,15 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
   does not break the match. The bar is a quarter of the document's pages, not half, because a
   book's running head alternates: the chapter title on the verso, the section title on the recto,
   neither able to appear on more than about half the pages.
-- **Captions** (`/Caption`). A caption Rebind was willing to use as a picture's description is, by
+- **Captions** (`/Caption`) — whole captions, one element each. Which lines make up a caption was
+  settled when the caption was found, and that decision is carried through rather than re-derived:
+  the paragraph rule cannot hold a caption together, because one set in a narrow margin column has
+  no measure to run out to, and on a scan the recogniser drops stray marks between its lines, each
+  of which breaks a run of consecutive lines. Those strays are folded into the caption they sit
+  inside — near in *both* directions, or a line level with the caption on the far side of the page
+  would join it, which is the same mistake as reading across a gutter.
+
+  A caption Rebind was willing to use as a picture's description is, by
   its own reckoning, a caption — so it is tagged as one rather than left as ordinary prose. Two
   PDF/UA-2 rules shape where it goes, both learned by failing them: a figure may hold **at most one**
   caption (Table 5, Figure-Caption), and a caption must be the **first or last child** of its parent
@@ -232,8 +240,9 @@ key sets the type and moves you straight to the next element, so correcting a pa
 keystrokes with no Tab in between. `Enter` is only for when you cannot remember which key you want:
 it opens a floating list of every type.
 
-Land on a **figure** and the right column becomes its description, with Rebind's best guess already
-in the box — the document's own caption where there is one. It asks there rather than in a sheet
+Land on a **figure** and the right column names it — *Figure*, with the `f` key beside it, like
+every other element — and becomes its description, with Rebind's best guess already in the box: the
+document's own caption where there is one. It asks there rather than in a sheet
 over the page, because the picture you are being asked about is in the middle column and a dialog
 on top of it hides the one thing you look at to answer; the key legend folds away to make room for
 a box worth writing in.
@@ -294,7 +303,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.28.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.29.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,

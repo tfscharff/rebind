@@ -1269,3 +1269,54 @@ def test_a_caption_broken_across_lines_is_healed_not_hyphenated():
     assert _join_caption_lines(["Fig. 3.  The forum -", "Rome, that is."]) == \
         "Fig. 3.  The forum - Rome, that is."
     assert _join_caption_lines(["Fig. 4.  A coin,", "obverse."]) == "Fig. 4.  A coin, obverse."
+
+
+def test_a_caption_is_one_element_even_when_the_scan_drops_marks_between_its_lines():
+    # A caption cannot be held together by the paragraph rule. Set in a narrow margin column it has
+    # no measure to run out to, and on a scan the recogniser leaves stray marks between its lines --
+    # a "~" here, a "|" there -- each of which breaks a run of "consecutive lines with the same
+    # role" and splits one caption into three elements. Which lines are one caption was settled
+    # when the caption was found; this carries that decision through.
+    from rebind.extract import TextLine
+    from rebind.remediate import _caption_groups, plan_page
+
+    def line(text: str, box: tuple) -> TextLine:
+        return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False)
+
+    first = line("Fig. 3.  Tetradrachm with portrait of the last", (385.0, 600.0, 520.0, 612.0))
+    stray = line("~", (367.0, 586.0, 369.0, 597.0))
+    second = line("Macedonian king, Perseus V.", (385.0, 585.0, 500.0, 597.0))
+    prose = line("Ordinary body text far below.", (72.0, 300.0, 540.0, 312.0))
+    lines = [first, stray, second, prose]
+    roles = ["Caption", "P", "Caption", "P"]
+    caption_of = {id(first): 0, id(second): 0}
+
+    groups = _caption_groups(lines, roles, caption_of, [[first, second]])
+    assert groups == [0, 0, 0, None], groups
+    assert roles[1] == "Caption", "the stray between the caption's lines joins the caption"
+
+    plan = plan_page(lines, roles, groups)
+    captions = [entry for entry in plan if entry["kind"] == "Caption"]
+    assert len(captions) == 1, plan
+    assert (captions[0]["first"], captions[0]["last"]) == (0, 2)
+    # ...and prose well clear of it is untouched, whatever else is on the page.
+    assert {"kind": "P", "first": 3, "last": 3} in plan
+
+
+def test_a_line_level_with_a_caption_across_the_page_does_not_join_it():
+    # The guard: nearness has to hold both ways. A line sharing the caption's vertical span but
+    # sitting on the other side of the page is a different column, and reaching across for it is
+    # the same mistake as reading across a gutter.
+    from rebind.extract import TextLine
+    from rebind.remediate import _caption_groups
+
+    def line(text: str, box: tuple) -> TextLine:
+        return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False)
+
+    caption = line("Fig. 3.  A coin.", (385.0, 600.0, 520.0, 612.0))
+    far = line("Text in the left column, level with it.", (72.0, 599.0, 300.0, 611.0))
+    roles = ["Caption", "P"]
+
+    groups = _caption_groups([caption, far], roles, {id(caption): 0}, [[caption]])
+    assert groups == [0, None], groups
+    assert roles[1] == "P"

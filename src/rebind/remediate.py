@@ -103,6 +103,10 @@ CAPTION_MAX_GAP_PT = 20.0
 # 52pt. What keeps this safe is not the distance but the caller's rule -- a side caption is used
 # only when exactly one unclaimed one is beside the figure.
 CAPTION_SIDE_MAX_GAP_PT = 60.0
+# How far a stray mark may sit from a caption's own text and still be read as part of it rather
+# than as something in its own right. Small: this is for the specks a recogniser drops between a
+# caption's lines, not for reaching out and claiming a neighbour.
+CAPTION_STRAY_MAX_GAP_PT = 30.0
 CAPTION_CONTINUATION_GAP_PT = 10.0
 CAPTION_MAX_LINES = 24
 # A caption that's just its own label ("Fig. 8", or "Fig. 8 (Continued)" -- a page-break artifact)
@@ -453,6 +457,39 @@ def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, floa
     if above and (above[0].bbox[1] - fy1) <= CAPTION_MAX_GAP_PT:
         return _caption_block(above, used)
     return None
+
+
+def _caption_groups(content_lines: list[TextLine], content_roles: list[str],
+                    caption_of: dict[int, int], blocks: list[list[TextLine]]) -> list[int | None]:
+    """Which caption each content line belongs to, with the strays in between folded in.
+
+    A caption's own lines are known exactly. What is not is what the recogniser dropped between
+    them: on a real scan a stray "~" and "|" sat between the lines of a caption in the margin, and
+    since a plan entry is a contiguous run, those two marks split one caption into three elements.
+
+    A line is folded into a caption when it sits inside that caption's vertical span and within
+    arm's length of it horizontally. It has to be near in both, or an unrelated line level with the
+    caption on the other side of the page would join it -- which is the same mistake as reading
+    across a gutter.
+    """
+    groups: list[int | None] = [caption_of.get(id(line)) for line in content_lines]
+    if not blocks:
+        return groups
+    extents = [(min(ln.bbox[0] for ln in b), min(ln.bbox[1] for ln in b),
+                max(ln.bbox[2] for ln in b), max(ln.bbox[3] for ln in b)) for b in blocks]
+    for index, (line, role) in enumerate(zip(content_lines, content_roles)):
+        if groups[index] is not None or role != "P":
+            continue
+        centre = (line.bbox[1] + line.bbox[3]) / 2
+        for group, (bx0, by0, bx1, by1) in enumerate(extents):
+            if not by0 <= centre <= by1:
+                continue
+            gap = max(0.0, max(bx0 - line.bbox[2], line.bbox[0] - bx1))
+            if gap <= CAPTION_STRAY_MAX_GAP_PT:
+                groups[index] = group
+                content_roles[index] = "Caption"
+                break
+    return groups
 
 
 def _records_in_reading_order(records: list[dict]) -> list[dict]:
@@ -1303,7 +1340,8 @@ def _untagged_record(src_page, element_id: str, line: TextLine) -> dict:
     }
 
 
-def plan_page(lines: list[TextLine], page_roles: list[str]) -> list[dict]:
+def plan_page(lines: list[TextLine], page_roles: list[str],
+              caption_groups: list[int | None] | None = None) -> list[dict]:
     """Group a page's content lines into the elements the structure tree will hold.
 
     This is the whole of Rebind's per-page structural judgement, expressed as plain data before any
@@ -1311,8 +1349,16 @@ def plan_page(lines: list[TextLine], page_roles: list[str]) -> list[dict]:
     inclusive indices into `lines`. Separating it out is what lets the app show a page's elements,
     let a person correct them, and rebuild from the corrected plan -- the alternative, editing a
     structure tree after the fact, cannot change which lines belong together.
+
+    `caption_groups[i]` names the caption a line belongs to, or None. Captions are grouped by that
+    rather than by the paragraph rule, because the paragraph rule cannot hold them together: a
+    caption set in a narrow margin column has no measure to run out to, and on a scan the
+    recogniser drops stray marks between its lines, each of which breaks a run of "consecutive
+    lines with the same role". The caption search already decided which lines are one caption --
+    this just carries that decision through instead of trying to re-derive it from geometry.
     """
     n = len(lines)
+    groups = caption_groups if caption_groups is not None else [None] * n
     table_line_ids = detect_table_lines(lines)
     is_table = [id(line) in table_line_ids for line in lines]
     measures = _column_measures(lines, page_roles)
@@ -1344,8 +1390,15 @@ def plan_page(lines: list[TextLine], page_roles: list[str]) -> list[dict]:
 
         # Body text runs on until something says the paragraph has ended. Everything else -- a
         # heading, a caption, page furniture -- is one element per line by nature.
-        # A caption runs on exactly as a paragraph does -- it wraps over several lines and is one
-        # element -- so the two share the rule. They are kept apart only in what they are called.
+        # A caption is one element, and which lines it is made of was settled when it was found.
+        if page_roles[i] == "Caption" and groups[i] is not None:
+            j = i
+            while j + 1 < n and groups[j + 1] == groups[i]:
+                j += 1
+            plan.append({"kind": "Caption", "first": i, "last": j})
+            i = j + 1
+            continue
+
         if page_roles[i] in ("P", "Caption"):
             j = i
             while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == page_roles[i]
@@ -1883,14 +1936,16 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # nothing about the image, which is the exact failure WCAG 1.1.1 is about. Silence that
         # prompts a human beats a placeholder that suppresses the prompt.
         # Which of this page's lines each accepted caption was built from, so they can be tagged
-        # /Caption rather than left as ordinary prose.
-        caption_ids: set[int] = set()
+        # /Caption rather than left as ordinary prose -- one list per caption, because they are
+        # grouped into elements by which caption they belong to, not by being adjacent.
+        caption_blocks: list[list[TextLine]] = []
 
         def caption_for(fid: str, bbox: tuple) -> str | None:
             used: list[TextLine] = []
             local = anchored.get(fid) or _figure_caption(lines, bbox, used)
             if local and _caption_is_substantial(local):
-                caption_ids.update(id(ln) for ln in used)
+                if used:
+                    caption_blocks.append(used)
                 return local
             number = (_caption_number(local) if local else None) or _nearby_caption_number(lines, bbox)
             elsewhere = document_captions.get(number) if number else None
@@ -1920,7 +1975,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             if len(beside) == 1 and _caption_is_substantial(beside[0][0]):
                 effective_alt[fid] = beside[0][0]
                 claimed.add(beside[0][0])
-                caption_ids.update(id(ln) for ln in beside[0][1])
+                if beside[0][1]:
+                    caption_blocks.append(beside[0][1])
         described = [(fid, bbox) for fid, bbox in figures if effective_alt[fid]]
         undescribed = [(fid, bbox) for fid, bbox in figures if not effective_alt[fid]]
         rebuild = _has_marked_content(page)
@@ -1971,6 +2027,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # already had to be recognised to become the /Alt; not carrying that through to the tag
         # threw the knowledge away at the last step, and a screen reader met the document's own
         # captions as unremarkable prose sitting between the paragraphs.
+        caption_of = {id(line): group
+                      for group, block in enumerate(caption_blocks) for line in block}
+
         content_lines: list[TextLine] = []
         content_roles: list[str] = []
         content_source: list[int] = []      # content index -> index into `lines`
@@ -1978,13 +2037,16 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             if artifact or (id(line) in owner_figure and index not in promoted):
                 continue
             content_lines.append(line)
-            content_roles.append("Caption" if id(line) in caption_ids and role == "P" else role)
+            content_roles.append(
+                "Caption" if id(line) in caption_of and role == "P" else role)
             content_source.append(index)
+
+        caption_groups = _caption_groups(content_lines, content_roles, caption_of, caption_blocks)
 
         # The page's structural judgement as data, then the user's corrections on top of it. Ids
         # are keyed to the *source* line index, not to a position in the element list, so they
         # survive a re-run in which earlier elements were retagged, merged or removed.
-        plan = plan_page(content_lines, content_roles)
+        plan = plan_page(content_lines, content_roles, caption_groups)
         for entry in plan:
             entry["id"] = f"p{src_page.number}n{content_source[entry['first']]}"
             entry["kind"] = edits.tags.get(entry["id"], entry["kind"])

@@ -284,3 +284,14 @@ def test_a_description_is_saved_when_it_changes_not_on_every_keystroke():
     assert "if(text!==before){" in script, "accepting the guess unchanged must not rebuild"
     # And redrawing a page that has not changed must not re-decode its picture.
     assert "sheet.getAttribute('data-page')===String(ed.page)" in script
+
+
+def test_a_picture_is_named_as_a_figure_with_its_key():
+    # The panel used to say "Describe this", which told you what to do but not what Rebind had
+    # decided this was -- and the type is exactly what describing it confirms. Named like every
+    # other element, with the key that sets it beside the name.
+    script = _script()
+    prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
+    assert "var fkey=keyFor('Figure');" in prompt
+    assert "Describe this<" not in prompt and "'Describe this'" not in prompt
+    assert "<kbd class=\"tag\">" in prompt
