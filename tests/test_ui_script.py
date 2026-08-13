@@ -183,6 +183,17 @@ def test_nothing_has_to_be_saved_by_hand():
                                          script.index("function refreshElements(")]
 
 
+def test_descriptions_are_asked_for_in_the_walk_and_nowhere_else():
+    # Two places to type the same description is one place too many, and the report is the wrong
+    # one: a column of thumbnails stripped of the page they came from, asking for work the walk is
+    # already about to ask for on the picture itself.
+    script = _script()
+    assert "renderFigures" not in script
+    assert "applyDescriptions" not in script
+    assert "figlist" not in script and "figthumb" not in script
+    assert "'describe'" not in script, "the report must not offer a describe control"
+
+
 def test_landing_on_an_undescribed_picture_asks_for_a_description():
     # A picture is the one thing the machine cannot finish, so the walk stops for it rather than
     # leaving a list of homework behind. It asks where the person is already looking -- on the

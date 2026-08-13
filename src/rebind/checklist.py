@@ -318,7 +318,7 @@ def _page_content_checks(pdf: pikepdf.Pdf, tree: _Tree) -> list[Check]:
                          "The document has no audio or video." if not present
                          else f"{len(present)} multimedia objects need a description.",
                          need="" if not present else "Describe what each clip conveys.",
-                         action="" if not present else "describe"))
+                         action=""))   # nothing Rebind can do about a movie: it says so and stops
 
     out.append(Check(PAGE_CONTENT, "Screen flicker", PASS,
                      "Nothing in the document animates, so nothing can flicker."))
@@ -402,15 +402,16 @@ def _alt_text_checks(pdf: pikepdf.Pdf, tree: _Tree, undescribed: tuple) -> list[
                          f"{count} image{'s' if count > 1 else ''} on page"
                          f"{'s' if len(pages) > 1 else ''} {', '.join(str(p) for p in pages)} "
                          "carry no description, so they are marked decorative.",
-                         need="Describe what each one shows. A described image is read out; one "
-                              "left blank stays decoration, which is honest but silent.",
-                         action="describe",
+                         need="Rebind asks you to describe each one as you reach it in the reading "
+                              "order, with its own guess ready to accept. A described image is "
+                              "read out; one left blank stays decoration, honest but silent.",
+                         action="goto",
                          locations=tuple({"page": p} for p in pages)))
     elif missing:
         out.append(Check(ALT_TEXT, "Figures alternate text", NEEDS_YOU,
                          f"{len(missing)} figures have no description.",
-                         need="Describe what each one shows.", action="describe",
-                         locations=_where(tree, missing)))
+                         need="Tab to each one in the reading order and describe it there.",
+                         action="goto", locations=_where(tree, missing)))
     elif figures:
         out.append(Check(ALT_TEXT, "Figures alternate text", PASS,
                          f"All {len(figures)} figures carry a description."))

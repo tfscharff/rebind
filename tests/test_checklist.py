@@ -115,9 +115,13 @@ def test_undescribed_figures_ask_the_user_for_what_only_they_can_give(remediated
         remediated, undescribed_figures=({"id": "p2f0", "page": 2},)))
     figures = checks["Figures alternate text"]
     assert figures["status"] == NEEDS_YOU
-    assert figures["action"] == "describe"
     assert figures["need"], "a needs-you check must say what it needs"
     assert "page 2" in figures["detail"]
+    # The report says which pages and takes you there; the describing itself happens in the walk,
+    # on the picture, at the moment you reach it. Two places to type the same description is one
+    # place too many, and the report is the wrong one -- it is a list of thumbnails out of context.
+    assert figures["action"] == "goto"
+    assert figures["locations"] == [{"page": 2}]
 
 
 def test_an_untagged_document_fails_the_tagged_checks(tmp_path: Path):

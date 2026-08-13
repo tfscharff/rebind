@@ -210,8 +210,10 @@ figures are drawn hatched as "not read"; giving one a type puts it into the read
 nothing is one-way.
 
 Everything that did not pass sits under the report on the left, each next to the one thing that
-would fix it — the images that need describing, with a thumbnail and a box; a field for a missing
-title or language; the pages to go and look at.
+would fix it — a field for a missing title or language; the pages to go and look at. Descriptions
+are not among them: the report says which pages carry an undescribed picture and takes you there,
+but the describing happens in the walk, on the picture, at the moment you reach it. A column of
+thumbnails asking for the same descriptions out of context is a second place to do one job.
 
 Every change rebuilds the document from the corrected plan rather than patching the structure tree
 afterwards, so grouping decisions change too. Every offered type has a test that applies it and
@@ -233,7 +235,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.23.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.24.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,

@@ -236,12 +236,6 @@ li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:non
 .todo .item .detail{color:var(--muted);font-size:.85rem;margin:.25rem 0 0}
 .todo .item .need{font-size:.85rem;margin:.4rem 0 0}
 .todo .allclear{color:var(--pass);font-weight:600}
-.figrow{display:flex;gap:.6rem;align-items:flex-start;margin-top:.6rem}
-.figthumb{width:64px;height:auto;max-height:64px;object-fit:contain;border:1px solid var(--line);
-  border-radius:4px;background:#fff;flex:none}
-.figrow textarea{flex:1;min-width:0;font:inherit;font-size:.85rem;padding:.35rem .45rem;
-  border:1px solid var(--line);border-radius:5px;background:var(--paper);color:var(--ink);
-  resize:vertical}
 .pagejump{display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.45rem}
 .fixfield{display:flex;gap:.4rem;margin-top:.5rem}
 .fixfield input{flex:1;min-width:0;font:inherit;font-size:.85rem;padding:.3rem .45rem;
@@ -593,7 +587,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // be corrected by retagging gets the buttons that take you to it. Nothing is reported without
   // a way to act on it -- an issue with no route to a fix is just a complaint.
   function actionFor(c){
-    if(c.action==='describe') return renderFigures();
+    // Describing a picture is not done here. It is asked for in the walk, on the picture itself,
+    // at the moment you reach it -- so what the report offers is the way into the walk at the page
+    // that needs it, not a second place to type the same descriptions from a list of thumbnails.
     if(c.action==='set-title') return renderFixField(c, 'A short, meaningful title');
     if(c.action==='set-language') return renderFixField(c, 'e.g. en, en-GB, fr');
     if(c.action==='strip-scripts') return renderFixButton(c, 'Remove the scripts');
@@ -640,23 +636,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       issues.map(function(i){return esc(i);}).join(', ')+'</p>';
   }
 
-  function renderFigures(){
-    if(!ed.figures.length) return '';
-    var out='<div id="figlist">';
-    ed.figures.forEach(function(f){
-      out+='<div class="figrow">'+
-        '<img class="figthumb" src="'+esc(f.thumb)+'" alt="Preview of an image on page '+
-        esc(f.page)+'">'+
-        '<textarea data-fid="'+esc(f.id)+'" rows="2" aria-label="Description for the image on '+
-        'page '+esc(f.page)+'" placeholder="What does this picture show?"></textarea></div>';
-    });
-    return out+'</div><button type="button" class="btn small" id="applyalts" '+
-      'style="margin-top:.6rem">Add descriptions</button>';
-  }
-
   function wireActions(){
-    var alts=document.getElementById('applyalts');
-    if(alts) alts.addEventListener('click', applyDescriptions);
     Array.prototype.slice.call(document.querySelectorAll('.dofix')).forEach(function(b){
       b.addEventListener('click', function(){
         var field=b.getAttribute('data-field');
@@ -670,21 +650,6 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         goToPage(parseInt(b.getAttribute('data-page'),10));
       });
     });
-  }
-
-  function applyDescriptions(){
-    var alts={};
-    Array.prototype.slice.call(document.querySelectorAll('#figlist textarea')).forEach(function(t){
-      if(t.value.trim()) alts[t.getAttribute('data-fid')]=t.value.trim();
-    });
-    if(!Object.keys(alts).length){ say('Type a description first.'); return; }
-    renderWorking(ed.name, Date.now()); say('Adding your descriptions…');
-    fetch('/jobs/'+ed.id+'/describe',{method:'POST',
-      headers:{'content-type':'application/json'},body:JSON.stringify({alts:alts})})
-      .then(function(r){return r.json();}).then(function(j){
-        if(j.error){ showError(j.error); return; }
-        watch(ed.id, ed.name, Date.now());
-      }).catch(function(){ showError('Could not apply descriptions.'); });
   }
 
   // /Artifact is not a structure type, so it never goes to the server as a tag: the same element
