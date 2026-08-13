@@ -19,7 +19,8 @@ hand, and a fabricated one is a picture that does not exist being announced to a
   to be solid ink, and an earlier limit of 0.95 rejected every one of them;
 * it must not be **mostly text**: a region overlapping recognized lines by more than
   `MAX_TEXT_OVERLAP` is a paragraph the mask failed to cover, not a diagram;
-* it must not hug the **page edge**, where a scan's dark border lives.
+* it must not reach three **page edges**, where a scan's dark border lives -- anything printed on
+  the sheet has a margin on at least two adjacent sides.
 """
 
 from __future__ import annotations
@@ -34,11 +35,16 @@ MIN_REGION_COVERAGE = 0.015
 MAX_REGION_COVERAGE = 0.85
 # How much of its own bounding box a region must ink to be a picture rather than a stray mark.
 MIN_INK_DENSITY = 0.04
-# A near-solid block pressed against three or more page edges is the scan's own border -- the
-# shadow at the spine, the dark strip past the edge of the platen -- not something printed on the
-# sheet. Density alone cannot tell the two apart, because a photograph is solid ink too.
+# A blob reaching three or more page edges is the scan's own border -- the shadow at the spine, the
+# dark strip past the edge of the platen, the tilted sheet's dark corner -- not something printed
+# on the sheet. Anything actually printed has a margin on at least two adjacent sides.
+#
+# This used to also require the blob to be near-solid, on the theory that the border is a solid
+# black bar. Real ones are not: the spine shadow and the strip along the top are one thin L, only
+# 39% of its own bounding box, so the density test never fired -- and that bounding box, covering
+# the left third of the sheet, then vetoed the photograph sitting inside it. A page lost its first
+# figure to a mark that was not on the page. Reaching three edges is the whole test now.
 BORDER_EDGES = 3
-BORDER_MIN_DENSITY = 0.9
 # A region this much covered by recognized text is text, whatever shape its ink makes.
 MAX_TEXT_OVERLAP = 0.30
 # Text boxes are grown by this (in page points) before masking, so ascenders, descenders and the
@@ -124,8 +130,8 @@ def find_picture_regions(page_image: np.ndarray, text_boxes: list[tuple], *,
             continue
         edges = ((x <= margin_x) + (y <= margin_y)
                  + (x + bw >= w - margin_x) + (y + bh >= h - margin_y))
-        if edges >= BORDER_EDGES and density >= BORDER_MIN_DENSITY:
-            continue        # the sheet's own border, or the scan itself -- not a picture on it
+        if edges >= BORDER_EDGES:
+            continue        # the sheet's own edge, or the scan itself -- not a picture on it
         covered = float(np.count_nonzero(text_mask[y:y + bh, x:x + bw])) / float(max(bw * bh, 1))
         if covered > MAX_TEXT_OVERLAP:
             continue

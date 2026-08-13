@@ -879,6 +879,40 @@ def test_a_picture_guessed_from_a_scan_never_swallows_prose():
     assert prose not in _figure_text(lines, picture)
 
 
+def test_a_figure_with_no_description_is_still_an_element_in_the_editor(tmp_path: Path):
+    # In the document an undescribed figure is a decorative artifact, and has to be: tagging one
+    # with no /Alt is a conformance failure. In the EDITOR it must still be an element, because it
+    # is the one thing that needs a person and the walk is where they are asked. When it was left
+    # out, the only way to reach it was a list of thumbnails in the report -- and once that list
+    # was removed, a real photograph on a real scanned page became unreachable and looked for all
+    # the world like a figure Rebind had failed to find.
+    from tests.fixtures import born_digital_pdf
+
+    import base64
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (160, 100), (60, 60, 60)).save(buffer, format="PNG")
+    data_uri = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode()
+
+    source = born_digital_pdf(
+        "<p>Text above the picture.</p>"
+        f'<img src="{data_uri}" style="width:200px;height:125px">'
+        "<p>Text below it, with no caption anywhere, so nothing can describe it.</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T")
+
+    figures = [e for e in result.elements if e["kind"] == "Figure"]
+    assert figures, [(e["kind"], e["text"][:30]) for e in result.elements]
+    undescribed = [e for e in figures if not e["alt"]]
+    assert undescribed, "a figure with no description must still be reachable in the walk"
+    # And it is the same figure the app asks about, by id -- the prompt is keyed on it.
+    assert {f["id"] for f in undescribed} >= {f["id"] for f in result.figures}
+
+
 def test_a_paragraph_is_one_element_not_one_per_line(tmp_path: Path):
     # Tagging each line as its own /P is wrong in a way that matters: a screen reader pauses at
     # every element boundary, so a page of prose comes out as a stream of fragments. Lines are

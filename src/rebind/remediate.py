@@ -1954,13 +1954,23 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # Figures join the element list at the position they are read, so the editor's order is
         # the document's order. Their alt text is editable in place, which is the one correction
         # only a person can make.
-        for fmcid, alt, bbox, _anchor in figure_specs:
+        #
+        # Undescribed ones are here too, with an empty /Alt. In the DOCUMENT they are decorative
+        # artifacts and must be -- tagging a figure with no description is a conformance failure --
+        # but in the EDITOR they have to be visible, because a picture nobody can see is a picture
+        # nobody will describe. They used to reach the person only through a list of thumbnails in
+        # the report; with that list gone they became invisible, which read exactly like a missed
+        # figure. Tabbing onto one is what opens the description prompt, and a description promotes
+        # it to a real /Figure on the next rebuild.
+        editor_figures = list(figure_specs) + [
+            (None, "", bbox, None) for _fid, bbox in undescribed]
+        for fmcid, alt, bbox, _anchor in editor_figures:
             position = next((i for i, elem in enumerate(page_elements)
                              if elem["page"] == src_page.number
                              and elem["top"] > 100 * (src_page.height - bbox[3]) / src_page.height),
                             len(page_elements))
             page_elements.insert(position, {
-                "id": next(fid for fid, fbox in described if fbox == bbox),
+                "id": next(fid for fid, fbox in figures if fbox == bbox),
                 "page": src_page.number, "kind": "Figure", "text": "", "alt": alt,
                 "left": round(100 * bbox[0] / src_page.width, 2),
                 "top": round(100 * (src_page.height - bbox[3]) / src_page.height, 2),

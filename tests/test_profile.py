@@ -82,21 +82,75 @@ def test_body_style_recurring_at_edge_is_never_an_artifact_key():
     shape a document with generous margins (or simply no running header) produces routinely.
     Nothing here is a running header: there is no recurring *text*, just a recurring style and
     position, which is not enough to call it an artifact once the fix is in place.
+
+    The first lines are distinct prose, which is what the docstring above always claimed and what
+    real body text is. They used to be one sentence with the page number substituted in -- which
+    the text-recurrence rule added later reads, correctly, as a running head, because that is
+    exactly the shape of one. The style+position collision this test exists to defend is unchanged.
     """
+    openers = ["Consider the harbour", "Rain fell for a week", "The treaty was signed",
+               "Nobody expected the verdict", "Winter closed the pass", "She kept the ledger",
+               "A second survey followed", "The mill stood empty", "Letters arrived monthly",
+               "His account differs"]
     pages = []
     for number in range(1, 11):
-        first_line_text = f"This is body text starting page {number}."
-        lines = [line(first_line_text, page=number, y=760.0)]
+        lines = [line(f"{openers[number - 1]}, and the account continues.",
+                      page=number, y=760.0)]
         lines += [line("more body text", page=number, y=400.0 - i) for i in range(10)]
         pages.append(page_of(lines, number=number))
 
     profile = build_profile(pages)
 
     for number in range(1, 11):
-        first_line = line(f"This is body text starting page {number}.", page=number, y=760.0)
+        first_line = line(f"{openers[number - 1]}, and the account continues.",
+                          page=number, y=760.0)
         assert profile.role_of(first_line, page_height=792.0) != "artifact", (
             f"page {number}'s first line is ordinary body text and must not be an artifact"
         )
+
+
+def test_a_running_head_in_the_body_style_is_furniture():
+    """The signal the style rule cannot see: the same *words* at the same page edge, page after page.
+
+    On a scan there is only one style -- the recognizer reports a height per line, not a typeface --
+    so a running head shares the body style by construction and the style rule can never condemn
+    it. It was coming out as a heading on every page of a real scanned book: 29 phantom entries in
+    the outline, and the chapter title read aloud before each page's first sentence.
+    """
+    pages = []
+    for number in range(1, 11):
+        # On the verso only, as a book's running head is -- the recto carries a different one. This
+        # is why the threshold cannot be half the document: neither side can ever reach it.
+        # The folio changes page to page; the words do not. That is what makes it a running head.
+        body = [line(f"Body sentence {i} on page {number}.", page=number, y=400.0 - i * 12)
+                for i in range(10)]
+        head = [line(f"{number}  The Power of Images in the Age of Augustus",
+                     page=number, y=760.0)] if number % 2 == 0 else []
+        pages.append(page_of(head + body, number=number))
+
+    profile = build_profile(pages)
+
+    for number in (2, 6, 10):
+        head = line(f"{number}  The Power of Images in the Age of Augustus", page=number, y=760.0)
+        assert profile.role_of(head, page_height=792.0) == "artifact", number
+    # ...and the body it sits above is untouched.
+    body = line("Body sentence 3 on page 5.", page=5, y=400.0)
+    assert profile.role_of(body, page_height=792.0) == "body"
+
+
+def test_a_line_that_merely_repeats_mid_page_is_not_furniture():
+    """Recurrence only counts at a page edge. A phrase that happens to repeat in the middle of the
+    text is prose, and dropping it would delete real content on the strength of a coincidence."""
+    pages = []
+    for number in range(1, 11):
+        lines = [line("The Power of Images in the Age of Augustus", page=number, y=400.0)]
+        lines += [line(f"Body {i} on {number}", page=number, y=300.0 - i * 12) for i in range(10)]
+        pages.append(page_of(lines, number=number))
+
+    profile = build_profile(pages)
+
+    repeated = line("The Power of Images in the Age of Augustus", page=5, y=400.0)
+    assert profile.role_of(repeated, page_height=792.0) == "body"
 
 
 def test_first_page_title_at_top_is_not_an_artifact():

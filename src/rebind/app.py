@@ -134,6 +134,13 @@ def _run_conversion(job: _Job, source: Path) -> None:
 # setInterval to roughly once a minute), so a minimised window is not mistaken for a closed one.
 IDLE_SHUTDOWN_SECONDS = 150.0
 HEARTBEAT_CHECK_SECONDS = 5.0
+# How long after a page says it is going away before the process follows it out. Long enough that a
+# reload's first heartbeat (sent as the script runs) arrives first and cancels it; short enough
+# that closing the tab still feels like quitting the app.
+CLOSING_GRACE_SECONDS = 4.0
+# The watchdog has to tick faster than that grace period, or the grace period is whatever the tick
+# happens to round it up to.
+WATCHDOG_TICK_SECONDS = 1.0
 
 
 def create_app(*, exit_when_idle: bool = False) -> Starlette:
@@ -148,7 +155,7 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
     that no one is sending.
     """
     jobs = _JobStore()
-    watching = {"last_seen": time.monotonic(), "armed": False}
+    watching = {"last_seen": time.monotonic(), "armed": False, "closing": 0.0}
 
     async def index(request: Request) -> HTMLResponse:
         from rebind.ui import index_html  # absolute: relative imports fail in the frozen __main__
@@ -303,21 +310,37 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         server never exits during the second or two before the browser has finished starting."""
         watching["last_seen"] = time.monotonic()
         watching["armed"] = True
+        watching["closing"] = 0.0   # somebody is still here: cancel any pending exit
         return JSONResponse({"status": "ok"})
 
     async def shutdown(request: Request) -> JSONResponse:
-        """The page closing, reported by `navigator.sendBeacon`. This is only a courtesy -- it
-        makes quitting instant -- and the heartbeat watchdog is what actually guarantees the
-        process goes away, since a beacon is not delivered from a crashed or killed browser."""
+        """A page going away, reported by `navigator.sendBeacon`. This is only a courtesy -- it
+        makes quitting quick -- and the heartbeat watchdog is what actually guarantees the process
+        goes away, since a beacon is not delivered from a crashed or killed browser.
+
+        It asks, it does not order. `pagehide` fires on every reload and every navigation, not only
+        on the close of the last tab, so exiting on the beacon alone meant Rebind killed itself
+        whenever the page was refreshed -- and, worse, whenever a stale tab left over from an
+        earlier run was closed, which took the *new* server down with it. That is the
+        "Could not reach the converter" nobody could reproduce. Instead a short grace period
+        starts, and any heartbeat inside it cancels the exit: a reload beats it comfortably, and a
+        genuinely closed last tab has nothing left to send one.
+        """
         if exit_when_idle:
-            threading.Timer(0.3, lambda: os._exit(0)).start()
+            watching["closing"] = time.monotonic()
         return JSONResponse({"status": "ok"})
 
     def _watchdog() -> None:
         while True:
-            time.sleep(HEARTBEAT_CHECK_SECONDS)
-            if watching["armed"] and time.monotonic() - watching["last_seen"] > IDLE_SHUTDOWN_SECONDS:
-                os._exit(0)
+            time.sleep(WATCHDOG_TICK_SECONDS)
+            now, last = time.monotonic(), float(watching["last_seen"])
+            if not watching["armed"]:
+                continue
+            closing = watching["closing"]
+            if closing and last <= float(closing) and now - float(closing) > CLOSING_GRACE_SECONDS:
+                os._exit(0)     # asked to go, and nothing spoke up in the meantime
+            if now - last > IDLE_SHUTDOWN_SECONDS:
+                os._exit(0)     # nobody has been watching for a long time
 
     if exit_when_idle:
         threading.Thread(target=_watchdog, daemon=True).start()

@@ -113,6 +113,52 @@ def test_the_idle_watchdog_is_off_unless_asked_for():
     assert client.get("/health").json()["status"] == "ok"
 
 
+def test_a_reload_does_not_shut_the_server_down():
+    """`pagehide` fires on every reload and every navigation, not only on the last tab closing.
+
+    Exiting on that beacon alone meant Rebind killed itself whenever its page was refreshed, and --
+    the case that actually bit -- whenever a stale tab left over from a previous run was closed,
+    which took the freshly started server down with it. The symptom was "Could not reach the
+    converter. Is Rebind still running?" on a server that had been alive seconds earlier.
+
+    The beacon now only starts a grace period, and a heartbeat cancels it. This test drives the
+    watchdog's own decision function rather than waiting on real time.
+    """
+    import rebind.app as app_module
+
+    client = TestClient(create_app(exit_when_idle=True))
+    exits: list[int] = []
+    monkey = app_module.os._exit
+    app_module.os._exit = exits.append
+    try:
+        client.get("/heartbeat")            # the page arrives and arms the watchdog
+        client.post("/shutdown")            # ...then reloads: pagehide fires
+        client.get("/heartbeat")            # ...and the new page checks in inside the grace period
+        # Give the watchdog several ticks to make its call.
+        time.sleep(app_module.WATCHDOG_TICK_SECONDS * 3 + app_module.CLOSING_GRACE_SECONDS)
+        assert exits == [], "a reload must not take the server with it"
+    finally:
+        app_module.os._exit = monkey
+
+
+def test_a_closed_last_tab_does_shut_the_server_down():
+    """The other half: Rebind has no window, so closing the tab is the only way to quit it. If
+    nothing checks in after the beacon, the process really does have to go."""
+    import rebind.app as app_module
+
+    client = TestClient(create_app(exit_when_idle=True))
+    exits: list[int] = []
+    monkey = app_module.os._exit
+    app_module.os._exit = exits.append
+    try:
+        client.get("/heartbeat")
+        client.post("/shutdown")
+        time.sleep(app_module.WATCHDOG_TICK_SECONDS * 2 + app_module.CLOSING_GRACE_SECONDS)
+        assert exits, "a closed last tab must still quit the app"
+    finally:
+        app_module.os._exit = monkey
+
+
 def test_a_finished_job_reports_the_two_manual_check_findings(tmp_path: Path):
     # Adobe's checker always defers "Logical Reading Order" and "Colour contrast" to a human. The
     # app has to hand that human the evidence, so a finished job must carry both -- with a real

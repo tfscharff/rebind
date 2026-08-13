@@ -75,6 +75,25 @@ def test_the_scan_itself_is_not_a_picture_on_the_page():
         assert (x1 - x0) * (y1 - y0) < 0.85 * PAGE_W * PAGE_H, region
 
 
+def test_the_scanners_own_dark_edge_never_claims_the_picture_beside_it():
+    # The real miss, from page 4 of a scanned book: the dark strip the scanner leaves down the
+    # spine and across the top of the sheet is one L-shaped blob. Its ink is thin, so the density
+    # rule that catches a solid black border let it through -- and its BOUNDING BOX covered the
+    # left 41% of the page, which then vetoed the photograph inside it as an overlap. The first
+    # picture on the page disappeared because of a mark that is not on the page at all.
+    page = _blank_page()
+    _draw(page, (0, 0, 24, PAGE_H))            # the spine shadow, full height
+    _draw(page, (0, PAGE_H - 24, 250, PAGE_H))  # ...turning the corner along the top edge
+    picture = (100, 300, 400, 650)
+    _draw(page, picture)
+
+    regions = _find(page, [])
+
+    assert len(regions) == 1, regions
+    x0, y0, x1, y1 = regions[0].bbox
+    assert 90 < x0 < 115 and 385 < x1 < 415, "the photograph, not the sheet's edge"
+
+
 def test_two_separate_pictures_stay_separate():
     page = _blank_page()
     _draw(page, (72, 480, 280, 700))

@@ -48,6 +48,14 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
   there is), a first-line indent, a gap bigger than the run's own leading, or a change of size,
   weight, slope or face. Where the signals disagree the split is kept: a boundary wrongly removed
   cannot be recovered from the joined text.
+- **Page furniture** (`/Artifact`) — running heads, footers and folios, kept out of the reading
+  order so a screen reader does not announce the chapter title before every page's first sentence.
+  A born-digital document gives itself away by style: the same typeface and position recurring at a
+  page edge. A scan cannot — OCR reports no typeface, so every line of a scanned book shares one
+  style — so the recurring *words* are what condemn it there, digits stripped so a changing folio
+  does not break the match. The bar is a quarter of the document's pages, not half, because a
+  book's running head alternates: the chapter title on the verso, the section title on the recto,
+  neither able to appear on more than about half the pages.
 - **Lists** (`/L` → `/LI` → `/LBody`).
 - **Tables** (`/Table` → `/TR` → `/TD`) as a regular grid; the top row is header cells (`/TH`)
   scoped to their column, empty cells fill gaps so rows stay aligned, and the table carries its own
@@ -76,8 +84,12 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
   scanned book was invisible. They are found from the pixels instead, the way a reader finds them:
   OCR says where the words are, those are masked out, and what is left is closed up into blobs.
   A blob becomes a figure only if it is large (≥1.5% of the page), solid enough to be a picture
-  rather than a stray mark, not mostly overlapping text, and not the scan's own dark border. A
-  missed figure is one the user marks by hand; an invented one is a picture that does not exist
+  rather than a stray mark, not mostly overlapping text, and does not reach three page edges —
+  anything printed on the sheet has a margin on at least two adjacent sides, and what reaches three
+  is the scanner's own dark strip down the spine and across the top. That strip cost a page its
+  photograph: it is a thin L, so it passed a density test meant to catch a solid black bar, and its
+  bounding box covered the left third of the sheet and vetoed the picture inside it as a duplicate.
+  A missed figure is one the user marks by hand; an invented one is a picture that does not exist
   being announced to a screen reader, so the thresholds lean toward missing.
 - **Links** — a working external link (URI) is tagged into the structure tree with an object
   reference back to its annotation. Two kinds are removed rather than carried through: an internal
@@ -245,7 +257,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.25.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.26.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,
