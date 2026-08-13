@@ -414,7 +414,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // ---- State ---------------------------------------------------------------------------------
   var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
           tags_edit:{},removed:{},alts:{},focused:null,figures:[],checks:[],status:null,
-          palette:false,walked:{},artifact:null,allKeys:[],altAsked:{}};
+          palette:false,walked:{},artifact:null,allKeys:[]};
 
   function done(id, name, s){
     if(elapsedTimer) clearInterval(elapsedTimer);
@@ -803,7 +803,20 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var pos=ed.pageList.indexOf(ed.page);
     // The middle column is the document and nothing else: the page, as large as the window will
     // allow, with the pager under it. Everything that talks *about* the page moved right.
-    var h='<div class="sheetwrap"><div class="sheet" id="sheet">'+
+    // A rebuild redraws this, and the page picture is a data: URI of a whole scanned sheet -- so
+    // rewriting the <img> means decoding it again, which is the flicker felt after every save.
+    // When the page has not changed, only the boxes over it are replaced.
+    var sheet=document.getElementById('sheet');
+    if(sheet && sheet.getAttribute('data-page')===String(ed.page)){
+      Array.prototype.slice.call(sheet.querySelectorAll('.ob')).forEach(function(node){
+        node.parentNode.removeChild(node);
+      });
+      sheet.insertAdjacentHTML('beforeend',
+        items.map(function(e,i){ return boxHtml(e,i); }).join(''));
+      wireStage();
+      return;
+    }
+    var h='<div class="sheetwrap"><div class="sheet" id="sheet" data-page="'+ed.page+'">'+
       (ed.pages[ed.page]? '<img src="'+ed.pages[ed.page]+'" alt="Page '+ed.page+'">':'')+
       items.map(function(e,i){ return boxHtml(e,i); }).join('')+'</div></div>'+
       '<div class="pager">'+
@@ -874,7 +887,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var del=document.getElementById('delel');
     if(del) del.addEventListener('click', function(){ setKind(e.id, 'Artifact'); });
     var box=document.getElementById('altnow');
-    if(box) box.addEventListener('input',function(){
+    // On 'change', not on 'input'. Every keystroke used to start a save, and a save re-runs the
+    // whole conversion -- so typing a sentence queued a rebuild per letter and the page stuttered
+    // under its own autosave. A description is saved when you leave the box, or accept it.
+    if(box) box.addEventListener('change',function(){
       ed.alts[box.getAttribute('data-id')]=box.value;
       applyEdits();
     });
@@ -938,9 +954,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       var e=items[index];
       box.addEventListener('focus',function(){
         ed.focused=e.id; showType(e); noteWalked(ed.page);
-        // Tabbing onto an undescribed picture is the moment to ask, and the only moment the
-        // person is looking straight at it. Asked once; Space asks again.
-        if(needsAlt(e) && !ed.altAsked[e.id]) openAltPrompt(e.id);
+        // Landing on a picture shows the description beside it, with the guess ready -- but does
+        // not take focus. Tab still means "next element"; Enter is what goes in and edits.
+        if(kindOf(e)==='Figure') openAltPrompt(e.id, false);
       });
       box.addEventListener('click',function(){ box.focus(); });
       box.addEventListener('keydown',function(ev){
@@ -956,10 +972,16 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
           if(turnPage(-1, true)){ ev.preventDefault(); }
           return;
         }
-        if(key==='Enter'){ ev.preventDefault(); openPalette(e.id); return; }
+        // On a picture, Enter goes into the description -- that is the work on a picture, and the
+        // list of types is not. Everywhere else Enter still opens the list.
+        if(key==='Enter'){
+          ev.preventDefault();
+          if(kindOf(e)==='Figure') openAltPrompt(e.id, true); else openPalette(e.id);
+          return;
+        }
         if(key===' '&&kindOf(e)==='Figure'){
           ev.preventDefault();
-          openAltPrompt(e.id);
+          openAltPrompt(e.id, true);
           return;
         }
         if(key==='['||key===']'){ ev.preventDefault(); turnPage(key===']'?1:-1); return; }
@@ -969,6 +991,19 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         if(key==='ArrowDown'||key==='ArrowUp'){
           var to=boxes[index+(key==='ArrowDown'?1:-1)];
           if(to){ ev.preventDefault(); to.focus(); }
+          return;
+        }
+        // On a picture, typing writes the description -- you should not have to press Enter first
+        // to start saying what the picture is. This does mean the type keys do not retag a figure;
+        // the way back is "−" (which the hint above says), and then "+" to add it as a paragraph.
+        if(kindOf(e)==='Figure' && key.length===1){
+          ev.preventDefault();
+          openAltPrompt(e.id, true);
+          var typing=document.getElementById('altinput');
+          if(typing){
+            typing.value=key;
+            typing.setSelectionRange(1, 1);
+          }
           return;
         }
         // The key sets the type straight away. Enter is only for when you cannot remember which
@@ -1045,15 +1080,15 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     return src;
   }
 
-  function openAltPrompt(elementId){
+  // `enter` is true when the person asked to go into the box (Enter, or the first character of a
+  // description). False just shows it beside the picture, leaving focus on the page -- landing on a
+  // figure must never capture the walk, or Tab stops meaning "next element" the moment you meet one.
+  function openAltPrompt(elementId, enter){
     closeAltPrompt();
     closePalette();
     var e=null;
     ed.elements.forEach(function(x){ if(x.id===elementId) e=x; });
     if(!e) return;
-    // Asked once per element. Without this the prompt would reopen the instant it closes, because
-    // closing hands focus back to the very box whose focus opened it.
-    ed.altAsked[elementId]=true;
     var guess=(ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'')) || altGuess(e);
     var thumb=figThumb(elementId);
     // In the right column, where the element you are standing on is already described -- not in a
@@ -1067,38 +1102,52 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       '<p class="sub">'+(guess? 'Rebind guessed from the page. Accept it or change it.'
                               : 'Rebind found no caption to guess from.')+'</p>'+
       (thumb? '<img class="altshot" src="'+esc(thumb)+'" alt="The picture being described">':'')+
-      '<textarea id="altinput" rows="3" placeholder="A short description of the picture">'+
+      '<textarea id="altinput" rows="7" placeholder="A short description of the picture">'+
       esc(guess)+'</textarea>'+
       '<div class="altact"><button type="button" class="btn small" id="altok">Use this</button>'+
       '<button type="button" class="btn ghost small" id="altskip">Skip</button></div>'+
-      '<p class="hint">Enter accepts · Shift+Enter for a new line · Esc skips</p></div>';
+      '<p class="hint">'+(enter? 'Enter or Tab accepts and moves on · Shift+Enter for a new line'+
+        ' · Esc goes back to the page'
+        : 'Enter to edit this · Tab accepts it and moves on')+'</p></div>';
     // The keys are of no use while the question on screen is a sentence, and the column is only so
-    // tall: folding them away is what makes room for the picture and the box without scrolling.
+    // tall: folding them away is what makes room for the picture and a description box worth
+    // writing in.
     setKeysCollapsed(true);
 
     var input=document.getElementById('altinput');
-    input.focus();
-    // Cursor at the end, not a selection: the guess is a starting point to edit, and selecting it
-    // all would mean the first key typed silently destroys it.
-    input.setSelectionRange(input.value.length, input.value.length);
 
     function accept(){
       var text=input.value.trim();
+      var before=ed.alts[elementId]!==undefined? ed.alts[elementId] : (e.alt||'');
       closeAltPrompt();
-      if(!text){ focusBox(elementId); return; }
-      ed.alts[elementId]=text;
-      applyEdits();
-      say('Description saved.');
+      // Only a real change starts a save. Accepting Rebind's own guess unchanged -- which is most
+      // of them, and the whole point of pre-filling it -- costs nothing and does not rebuild the
+      // document, so tabbing through a page of pictures stays as quick as tabbing through prose.
+      if(text!==before){
+        ed.alts[elementId]=text;
+        applyEdits();
+        say('Description saved.');
+      }
       focusNext(elementId);
     }
-    function skip(){ closeAltPrompt(); focusBox(elementId); }
+    function back(){ closeAltPrompt(); focusBox(elementId); }
 
     document.getElementById('altok').addEventListener('click', accept);
-    document.getElementById('altskip').addEventListener('click', skip);
+    document.getElementById('altskip').addEventListener('click', back);
     input.addEventListener('keydown',function(ev){
-      if(ev.key==='Escape'){ ev.preventDefault(); skip(); return; }
+      if(ev.key==='Escape'){ ev.preventDefault(); back(); return; }
+      // Tab out of the box is Tab through the document: it takes what is written and carries on,
+      // so the walk is one unbroken run of Tab from the first element to the last whether or not
+      // there are pictures in the way.
+      if(ev.key==='Tab' && !ev.shiftKey){ ev.preventDefault(); accept(); return; }
       if(ev.key==='Enter' && !ev.shiftKey){ ev.preventDefault(); accept(); }
     });
+    if(enter){
+      input.focus();
+      // Cursor at the end, not a selection: the guess is a starting point to edit, and selecting
+      // it all would mean the first key typed silently destroys it.
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
   }
 
   function closeAltPrompt(){

@@ -129,6 +129,11 @@ REGION_SCAN_DPI = 150
 # How much of the shorter box a figure and an element must share vertically to be on one row, and
 # so be ordered by which is further left rather than by which starts a shade higher.
 FIGURE_SAME_ROW_FRACTION = 0.5
+# The same question for two of the editor's elements, which are measured as percentages of the page
+# rather than in points. Lower than the line-level rule: these are whole blocks, and a folio sitting
+# inside a tall paragraph's vertical span shares its row for this purpose even though it covers
+# only a sliver of it.
+RECORD_SAME_ROW_FRACTION = 0.5
 # The longest a callout label runs to ("Ventral", "2-10 ml glass syringe", "3 mm"). Longer than
 # this, inside a guessed figure box, is a sentence -- prose the picture sits around, not part of it.
 FIGURE_LABEL_MAX_WORDS = 6
@@ -358,10 +363,17 @@ def _caption_number(text: str) -> str | None:
     return match.group(1) if match else None
 
 
-def _caption_block(ordered: list[TextLine]) -> str | None:
+def _caption_block(ordered: list[TextLine], used: list | None = None) -> str | None:
     """`ordered[0]` must be a caption-marker line; concatenate it with any tightly-following
     continuation lines (small vertical gap -- the same paragraph, not unrelated content) into the
-    full caption text, capped at CAPTION_MAX_LINES as a safety backstop."""
+    full caption text, capped at CAPTION_MAX_LINES as a safety backstop.
+
+    `used`, when given, is filled with the lines the block was built from. The caller needs those
+    to tag them `/Caption`, and they cannot be recovered afterwards by matching the text back
+    against the page: the search that found this block filtered the lines first (by position
+    relative to the figure), so re-deriving it from all of them picks up whatever OCR noise fell
+    between the caption's lines and produces a different string.
+    """
     if not ordered or not _is_caption_marker(ordered[0].text):
         return None
     block = [ordered[0]]
@@ -376,6 +388,8 @@ def _caption_block(ordered: list[TextLine]) -> str | None:
     # than top-to-bottom -- re-sort by position so the joined text always reads in the document's
     # true top-to-bottom order regardless of which direction found it.
     block.sort(key=lambda ln: -ln.bbox[3])
+    if used is not None:
+        used.extend(block)
     return _join_caption_lines([ln.text.strip() for ln in block])
 
 
@@ -412,7 +426,8 @@ def _caption_is_substantial(text: str) -> bool:
     return len(remainder.split()) >= MIN_CAPTION_WORDS
 
 
-def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, float]) -> str | None:
+def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, float],
+                    used: list | None = None) -> str | None:
     """The figure's own caption, if the document has one directly adjacent to it -- reusing the
     author's own words is more accurate than anything Rebind could invent, and skips the app's
     manual describe step entirely for a figure that already names itself. Conservative by
@@ -427,7 +442,7 @@ def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, floa
         key=lambda ln: -ln.bbox[3],   # closest to the figure (highest y1) first
     )
     if below and (fy0 - below[0].bbox[3]) <= CAPTION_MAX_GAP_PT:
-        found = _caption_block(below)
+        found = _caption_block(below, used)
         if found is not None:
             return found
 
@@ -436,12 +451,38 @@ def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, floa
         key=lambda ln: ln.bbox[1],   # closest to the figure (lowest y0) first
     )
     if above and (above[0].bbox[1] - fy1) <= CAPTION_MAX_GAP_PT:
-        return _caption_block(above)
+        return _caption_block(above, used)
     return None
 
 
-def _side_captions(lines: list[TextLine],
-                   bbox: tuple[float, float, float, float]) -> list[str]:
+def _records_in_reading_order(records: list[dict]) -> list[dict]:
+    """The editor's elements for one page: down the page, and across each row left to right.
+
+    Sorting on `top` alone (with `left` only as a tie-break on the exact same value) is what put a
+    page's folio ahead of the footer line beside it: the two differ by a fraction of a percent, so
+    the tie-break never fires and the reading order turns on that fraction. Grouping first is also
+    what keeps the two halves of a two-column page in the right order, since a left-column block
+    and the right-column block beside it overlap for most of their height and the left one wins.
+    """
+    ordered = sorted(records, key=lambda r: (r["top"], r["left"]))
+    out: list[dict] = []
+    row: list[dict] = []
+    for record in ordered:
+        if row:
+            top = min(r["top"] for r in row)
+            bottom = max(r["top"] + r["height"] for r in row)
+            overlap = min(bottom, record["top"] + record["height"]) - max(top, record["top"])
+            shorter = min(record["height"], min(r["height"] for r in row))
+            if overlap <= RECORD_SAME_ROW_FRACTION * max(shorter, 0.01):
+                out.extend(sorted(row, key=lambda r: r["left"]))
+                row = []
+        row.append(record)
+    out.extend(sorted(row, key=lambda r: r["left"]))
+    return out
+
+
+def _side_captions(lines: list[TextLine], bbox: tuple[float, float, float, float]
+                   ) -> list[tuple[str, list[TextLine]]]:
     """Every caption block sitting *beside* a figure, in the margin to its left or right.
 
     A book with a wide outer margin stacks its captions there rather than under the pictures, and
@@ -451,7 +492,7 @@ def _side_captions(lines: list[TextLine],
     can share one vertical span and their captions are stacked beside all of them.
     """
     fx0, fy0, fx1, fy1 = bbox
-    out: list[str] = []
+    out: list[tuple[str, list[TextLine]]] = []
     for line in sorted(lines, key=lambda ln: -ln.bbox[3]):
         lx0, ly0, lx1, ly1 = line.bbox
         if not _is_caption_marker(line.text):
@@ -461,11 +502,12 @@ def _side_captions(lines: list[TextLine],
             continue
         if min(ly1, fy1) - max(ly0, fy0) <= 0:
             continue        # not beside it at all -- above or below, which the caller handles
+        block_lines: list[TextLine] = []
         block = _caption_block(
             sorted((ln for ln in lines if ln.bbox[3] <= ly1 and _horizontally_overlaps(
-                ln.bbox, (lx0, ly0, lx1, ly1))), key=lambda ln: -ln.bbox[3]))
+                ln.bbox, (lx0, ly0, lx1, ly1))), key=lambda ln: -ln.bbox[3]), block_lines)
         if block:
-            out.append(block)
+            out.append((block, block_lines))
     return out
 
 
@@ -1302,13 +1344,15 @@ def plan_page(lines: list[TextLine], page_roles: list[str]) -> list[dict]:
 
         # Body text runs on until something says the paragraph has ended. Everything else -- a
         # heading, a caption, page furniture -- is one element per line by nature.
-        if page_roles[i] == "P":
+        # A caption runs on exactly as a paragraph does -- it wraps over several lines and is one
+        # element -- so the two share the rule. They are kept apart only in what they are called.
+        if page_roles[i] in ("P", "Caption"):
             j = i
-            while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == "P"
+            while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == page_roles[i]
                    and not _is_list_item(lines[j + 1].text)
                    and _same_paragraph(lines, i, j + 1, measures)):
                 j += 1
-            plan.append({"kind": "P", "first": i, "last": j})
+            plan.append({"kind": page_roles[i], "first": i, "last": j})
             i = j + 1
             continue
 
@@ -1458,19 +1502,31 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
                                 or "Figure")
             tops.append(figure)
         elif kind == "Caption":
-            captions.append((first, spanning("Caption", document_elem, indices)))
+            box = (min(lines[i].bbox[0] for i in indices),
+                   min(lines[i].bbox[1] for i in indices),
+                   max(lines[i].bbox[2] for i in indices),
+                   max(lines[i].bbox[3] for i in indices))
+            captions.append((first, spanning("Caption", document_elem, indices), box))
         else:
             tops.append(spanning(kind, document_elem, indices))
 
     # A /Caption is not legal beside the thing it captions -- it belongs inside it. Each is moved
-    # into the nearest figure or table on the page; one with nothing to caption stays where it is,
-    # as a paragraph, rather than being dropped or made non-conformant.
-    for first, caption in captions:
-        host = _caption_host(list(caption_hosts or []) + tops, page_obj)
+    # into the figure or table it is nearest to; one with nothing left to caption stays where it
+    # is, as a paragraph, rather than being dropped or made non-conformant.
+    #
+    # Two constraints from PDF/UA-2 shape this, and both were learned by failing them. A figure may
+    # hold AT MOST ONE caption (Table 5, Figure-Caption), so a host that already has one is not
+    # offered again -- on a page with two pictures, taking "the last figure built" put every
+    # caption into the same one. And a caption must be the FIRST OR LAST child of its parent
+    # (clause 8.2.5.27), which one of several siblings cannot be.
+    taken: set = set()
+    for first, caption, box in captions:
+        host = _caption_host(list(caption_hosts or []) + tops, box, taken)
         if host is None:
             caption.S = Name.P
             tops.insert(_position_for(tops, first, plan), caption)
             continue
+        taken.add(host.objgen)
         caption.P = host
         kids = host.get("/K")
         host.K = Array(list(kids) + [caption]) if isinstance(kids, Array) else Array(
@@ -1478,10 +1534,29 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
     return tops, owners
 
 
-def _caption_host(tops: list, page_obj) -> pikepdf.Object | None:
-    """The figure or table a caption should live inside: the last one built on this page."""
+def _caption_host(tops: list, box: tuple, taken: set) -> pikepdf.Object | None:
+    """The figure or table a caption belongs inside: the nearest one that has not got one already.
+
+    Nearness is measured between boxes, so a caption in the margin goes to the picture beside it
+    rather than to whichever figure happened to be built last. A figure records its own box (in
+    `/A /BBox`); a table does not, so tables stay a fallback taken in reverse build order.
+    """
+    best, best_gap = None, None
+    for elem in tops:
+        if str(elem.get("/S")) != "/Figure" or elem.objgen in taken:
+            continue
+        layout = elem.get("/A")
+        bbox = layout.get("/BBox") if layout is not None else None
+        if bbox is None:
+            continue
+        fx0, fy0, fx1, fy1 = (float(v) for v in bbox)
+        gap = max(0.0, max(fx0 - box[2], box[0] - fx1)) + max(0.0, max(fy0 - box[3], box[1] - fy1))
+        if best_gap is None or gap < best_gap:
+            best, best_gap = elem, gap
+    if best is not None:
+        return best
     for elem in reversed(tops):
-        if str(elem.get("/S")) in ("/Figure", "/Table"):
+        if str(elem.get("/S")) == "/Table" and elem.objgen not in taken:
             return elem
     return None
 
@@ -1807,9 +1882,15 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # it exists: it satisfies a checker's "has /Alt" box while telling a screen-reader user
         # nothing about the image, which is the exact failure WCAG 1.1.1 is about. Silence that
         # prompts a human beats a placeholder that suppresses the prompt.
+        # Which of this page's lines each accepted caption was built from, so they can be tagged
+        # /Caption rather than left as ordinary prose.
+        caption_ids: set[int] = set()
+
         def caption_for(fid: str, bbox: tuple) -> str | None:
-            local = anchored.get(fid) or _figure_caption(lines, bbox)
+            used: list[TextLine] = []
+            local = anchored.get(fid) or _figure_caption(lines, bbox, used)
             if local and _caption_is_substantial(local):
+                caption_ids.update(id(ln) for ln in used)
                 return local
             number = (_caption_number(local) if local else None) or _nearby_caption_number(lines, bbox)
             elsewhere = document_captions.get(number) if number else None
@@ -1834,10 +1915,12 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         for fid, bbox in figures:
             if effective_alt[fid]:
                 continue
-            beside = [text for text in _side_captions(lines, bbox) if text not in claimed]
-            if len(beside) == 1 and _caption_is_substantial(beside[0]):
-                effective_alt[fid] = beside[0]
-                claimed.add(beside[0])
+            beside = [(text, used) for text, used in _side_captions(lines, bbox)
+                      if text not in claimed]
+            if len(beside) == 1 and _caption_is_substantial(beside[0][0]):
+                effective_alt[fid] = beside[0][0]
+                claimed.add(beside[0][0])
+                caption_ids.update(id(ln) for ln in beside[0][1])
         described = [(fid, bbox) for fid, bbox in figures if effective_alt[fid]]
         undescribed = [(fid, bbox) for fid, bbox in figures if not effective_alt[fid]]
         rebuild = _has_marked_content(page)
@@ -1883,6 +1966,11 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             for index, ln in enumerate(lines)
         ]
 
+        # A caption Rebind was willing to use as a picture's description is, self-evidently, a
+        # caption -- so it is tagged as one rather than left as an ordinary paragraph. The text
+        # already had to be recognised to become the /Alt; not carrying that through to the tag
+        # threw the knowledge away at the last step, and a screen reader met the document's own
+        # captions as unremarkable prose sitting between the paragraphs.
         content_lines: list[TextLine] = []
         content_roles: list[str] = []
         content_source: list[int] = []      # content index -> index into `lines`
@@ -1890,7 +1978,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             if artifact or (id(line) in owner_figure and index not in promoted):
                 continue
             content_lines.append(line)
-            content_roles.append(role)
+            content_roles.append("Caption" if id(line) in caption_ids and role == "P" else role)
             content_source.append(index)
 
         # The page's structural judgement as data, then the user's corrections on top of it. Ids
@@ -1924,8 +2012,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                          if mcid_of[e] is not None}:
                 continue
             records.append(_untagged_record(src_page, line_ids[index], line))
-        records.sort(key=lambda record: (record["top"], record["left"]))
-        page_elements.extend(records)
+        page_elements.extend(_records_in_reading_order(records))
 
         # Draw each described figure (a crop of the rendered region) inside a tagged /Figure,
         # together with any text that belongs to it, all under the figure's single MCID.

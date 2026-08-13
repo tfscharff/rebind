@@ -223,7 +223,7 @@ def test_landing_on_an_undescribed_picture_asks_for_a_description():
     # element, as they tab onto it -- with Rebind's own guess already in the box.
     script = _script()
     assert "function openAltPrompt(" in script
-    assert "if(needsAlt(e) && !ed.altAsked[e.id]) openAltPrompt(e.id);" in script
+    assert "if(kindOf(e)==='Figure') openAltPrompt(e.id, false);" in script
     prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
     assert "altGuess(e)" in prompt, "the guess must be pre-filled, not an empty box"
     # It asks in the right column, not in a sheet over the page: the picture being described is in
@@ -239,18 +239,48 @@ def test_landing_on_an_undescribed_picture_asks_for_a_description():
     assert 'id="altskip"' in prompt
 
 
-def test_a_description_is_asked_for_once_not_every_time():
-    # Closing the prompt hands focus back to the box whose focus opened it. Without a record of
-    # having asked, that is an unbreakable loop -- the prompt reopens forever and the page is
-    # unusable. Space is what asks again.
+def test_landing_on_a_picture_never_captures_the_walk():
+    """Showing the description is not the same as taking focus, and the difference is the whole
+    keyboard flow: the walk has to stay one unbroken run of Tab from the first element of the
+    document to the last, whether or not there are pictures in the way.
+
+    So landing on a figure only shows the box. Enter goes in and edits it; Tab from inside it takes
+    what is written and carries on to the next element, exactly as Tab does everywhere else.
+    """
     script = _script()
-    assert "ed.altAsked[elementId]=true;" in script
-    assert "openAltPrompt(e.id);" in script[script.index("if(key===' '&&kindOf(e)==='Figure'"):
-                                            script.index("if(key==='['||key===']')")]
+    assert "function openAltPrompt(elementId, enter){" in script
+    assert "if(enter){" in script, "focus is taken only when the person asked to go in"
+    prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
+    assert "if(ev.key==='Tab' && !ev.shiftKey){ ev.preventDefault(); accept(); return; }" in prompt
+    # Enter on a picture edits the description; everywhere else it still opens the type list.
+    assert "if(kindOf(e)==='Figure') openAltPrompt(e.id, true); else openPalette(e.id);" in script
 
 
 def test_enter_opens_the_hotkey_palette_and_escape_leaves_it_alone():
     script = _script()
-    assert "if(key==='Enter'){ ev.preventDefault(); openPalette(" in script
+    # Everywhere except a picture, where Enter goes into the description instead -- that is the
+    # work on a picture, and the list of types is not.
+    assert "if(kindOf(e)==='Figure') openAltPrompt(e.id, true); else openPalette(e.id);" in script
     assert "ev.key==='Escape'" in script
     assert "'aria-modal','true'" in script, "the palette must trap a screen reader inside it"
+
+
+def test_typing_on_a_picture_writes_its_description():
+    # You should not have to press Enter before you can start saying what a picture is. The cost is
+    # that the type keys no longer retag a figure, so the way back out has to stay: "−" takes it
+    # out of the reading order and "+" puts it back as a paragraph, and both are handled before
+    # this. A description starting with "-" is not a thing; a mis-detected figure is.
+    script = _script()
+    handler = script[script.index("box.addEventListener('keydown'"):script.index("var hit=null;")]
+    assert handler.index("key==='-'||key==='_'") < handler.index("kindOf(e)==='Figure' && key.length===1")
+    assert "typing.value=key;" in script
+
+
+def test_a_description_is_saved_when_it_changes_not_on_every_keystroke():
+    # Every keystroke used to start a save, and a save re-runs the whole conversion -- so typing a
+    # sentence queued a rebuild per letter and the page stuttered under its own autosave.
+    script = _script()
+    assert "box.addEventListener('change'" in script, "the inline box saves on leaving it"
+    assert "if(text!==before){" in script, "accepting the guess unchanged must not rebuild"
+    # And redrawing a page that has not changed must not re-decode its picture.
+    assert "sheet.getAttribute('data-page')===String(ed.page)" in script

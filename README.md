@@ -63,6 +63,14 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
   does not break the match. The bar is a quarter of the document's pages, not half, because a
   book's running head alternates: the chapter title on the verso, the section title on the recto,
   neither able to appear on more than about half the pages.
+- **Captions** (`/Caption`). A caption Rebind was willing to use as a picture's description is, by
+  its own reckoning, a caption — so it is tagged as one rather than left as ordinary prose. Two
+  PDF/UA-2 rules shape where it goes, both learned by failing them: a figure may hold **at most one**
+  caption (Table 5, Figure-Caption), and a caption must be the **first or last child** of its parent
+  (clause 8.2.5.27), which one of several siblings cannot be. So each caption is moved inside the
+  figure it is *nearest* to — measured between boxes, so a caption in the outer margin goes to the
+  picture beside it — and a figure that already has one is not offered another. A caption with
+  nothing left to caption stays where it is, as a paragraph, rather than being dropped.
 - **Lists** (`/L` → `/LI` → `/LBody`).
 - **Tables** (`/Table` → `/TR` → `/TD`) as a regular grid; the top row is header cells (`/TH`)
   scoped to their column, empty cells fill gaps so rows stay aligned, and the table carries its own
@@ -188,6 +196,12 @@ an edit goes to the server on its own and the document is rebuilt behind you, wi
 saying where that has got to. There is no Apply button to forget, and no state that lives only in
 the tab.
 
+Saving happens when a value **changes**, not on every keystroke. A save re-runs the whole
+conversion, so typing a description used to queue a rebuild per letter and the page stuttered under
+its own autosave; a description is now saved when you accept it or leave the box. A rebuild that
+lands on the page you are already looking at replaces the boxes over it and leaves the picture
+alone, rather than re-decoding a whole scanned sheet.
+
 **The tab order is the design.** Rebind's own page has to be as walkable as the documents it fixes,
 and the run from the top of the page to the first element is a toll paid on every pass. So the
 order is: each failing check in the report, in order, then element 1 of the document — and nothing
@@ -218,15 +232,22 @@ key sets the type and moves you straight to the next element, so correcting a pa
 keystrokes with no Tab in between. `Enter` is only for when you cannot remember which key you want:
 it opens a floating list of every type.
 
-Land on a **figure that has no description** and the walk stops: the right column becomes a prompt
-with Rebind's best guess already in the box — the document's own caption where there is one — and
-the cursor at the end of it, ready to edit. It asks there rather than in a sheet over the page,
-because the picture you are being asked about is in the middle column and a dialog on top of it
-hides the one thing you look at to answer; the key legend folds away while you write, to make room.
-`Enter` accepts and carries straight on to the next element; `Esc` skips and leaves the document
-alone. It asks once per picture, not every time you pass; `Space` on a figure asks again. Nothing
-is invented: with no caption to draw on, the box starts empty, and nothing is written into the
-document unless you leave it there.
+Land on a **figure** and the right column becomes its description, with Rebind's best guess already
+in the box — the document's own caption where there is one. It asks there rather than in a sheet
+over the page, because the picture you are being asked about is in the middle column and a dialog
+on top of it hides the one thing you look at to answer; the key legend folds away to make room for
+a box worth writing in.
+
+Landing on it does **not** take focus, because the walk has to stay one unbroken run of `Tab` from
+the first element of the document to the last, whether or not there are pictures in the way. `Tab`
+takes the guess as it stands and moves on. `Enter` goes into the box to edit it — as does simply
+starting to type, since you should not have to ask permission to say what a picture is. From inside
+the box, `Enter` or `Tab` accepts and moves to the next element, and `Esc` goes back to the page.
+(The cost of typing straight into the box is that the type keys no longer retag a figure: `−` takes
+it out of the reading order and `+` puts it back as a paragraph.) Nothing is invented: with no
+caption to draw on the box starts empty, and nothing is written into the document unless you leave
+it there. Accepting a guess unchanged costs nothing — only a real change saves, so tabbing through
+a page of pictures is as quick as tabbing through prose.
 
 | key | | key | | key | |
 |---|---|---|---|---|---|
@@ -273,7 +294,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.27.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.28.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,
