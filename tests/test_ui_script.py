@@ -183,6 +183,32 @@ def test_nothing_has_to_be_saved_by_hand():
                                          script.index("function refreshElements(")]
 
 
+def test_landing_on_an_undescribed_picture_asks_for_a_description():
+    # A picture is the one thing the machine cannot finish, so the walk stops for it rather than
+    # leaving a list of homework behind. It asks where the person is already looking -- on the
+    # element, as they tab onto it -- with Rebind's own guess already in the box.
+    script = _script()
+    assert "function openAltPrompt(" in script
+    assert "if(needsAlt(e) && !ed.altAsked[e.id]) openAltPrompt(e.id);" in script
+    prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
+    assert "altGuess(e)" in prompt, "the guess must be pre-filled, not an empty box"
+    assert "'aria-modal','true'" in prompt, "the prompt must trap a screen reader inside it"
+    # Accepting is one key, and it carries on with the walk; skipping leaves the document alone.
+    assert "ev.key==='Enter' && !ev.shiftKey" in prompt
+    assert "function focusNext(" in script
+    assert 'id="altskip"' in prompt
+
+
+def test_a_description_is_asked_for_once_not_every_time():
+    # Closing the prompt hands focus back to the box whose focus opened it. Without a record of
+    # having asked, that is an unbreakable loop -- the prompt reopens forever and the page is
+    # unusable. Space is what asks again.
+    script = _script()
+    assert "ed.altAsked[elementId]=true;" in script
+    assert "openAltPrompt(e.id);" in script[script.index("if(key===' '&&kindOf(e)==='Figure'"):
+                                            script.index("if(key==='['||key===']')")]
+
+
 def test_enter_opens_the_hotkey_palette_and_escape_leaves_it_alone():
     script = _script()
     assert "if(key==='Enter'){ ev.preventDefault(); openPalette(" in script

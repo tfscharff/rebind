@@ -274,6 +274,15 @@ li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:non
   border-top:1px solid var(--line)}
 .palette .keys .lab{font-size:.88rem}
 .palette .keys .what{font-size:.76rem;color:var(--muted)}
+/* ---- The description prompt, opened by landing on a picture with no description ---- */
+.palette .card.alt{max-width:32rem}
+.palette .card.alt .sub{margin:.3rem 0 .7rem;font-size:.84rem;color:var(--muted)}
+.altshot{display:block;max-width:100%;max-height:11rem;object-fit:contain;margin:0 0 .7rem;
+  border:1px solid var(--line);border-radius:6px;background:var(--paper)}
+#altinput{width:100%;font:inherit;font-size:.9rem;padding:.45rem .6rem;border-radius:6px;
+  border:1px solid var(--line);background:var(--paper);color:var(--ink);resize:vertical}
+.altact{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;margin-top:.6rem}
+.altact .hint{font-size:.76rem;color:var(--muted);margin-left:auto}
 kbd{font-family:var(--mono);font-size:.72rem;background:var(--paper);border:1px solid var(--line);
   border-bottom-width:2px;border-radius:4px;padding:.05rem .32rem;color:var(--ink);flex:none;
   min-width:1.35rem;text-align:center}
@@ -396,7 +405,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // ---- State ---------------------------------------------------------------------------------
   var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
           tags_edit:{},removed:{},alts:{},focused:null,figures:[],checks:[],status:null,
-          palette:false,walked:{},artifact:null,allKeys:[]};
+          palette:false,walked:{},artifact:null,allKeys:[],altAsked:{}};
 
   function done(id, name, s){
     if(elapsedTimer) clearInterval(elapsedTimer);
@@ -849,7 +858,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       h+='<label class="altlab" for="altnow">Description <span class="req">needed</span></label>'+
         '<div class="altbox"><textarea id="altnow" rows="3" data-id="'+esc(e.id)+'" '+
         'placeholder="What does this picture show?">'+esc(alt||altGuess(e))+'</textarea></div>'+
-        '<p class="hint">Space jumps here from the page · Esc goes back</p>';
+        '<p class="hint">Edit it here, or press Space on the page to be asked again</p>';
     }
     bar.innerHTML=h;
     var add=document.getElementById('addel');
@@ -921,6 +930,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       var e=items[index];
       box.addEventListener('focus',function(){
         ed.focused=e.id; showType(e); noteWalked(ed.page);
+        // Tabbing onto an undescribed picture is the moment to ask, and the only moment the
+        // person is looking straight at it. Asked once; Space asks again.
+        if(needsAlt(e) && !ed.altAsked[e.id]) openAltPrompt(e.id);
       });
       box.addEventListener('click',function(){ box.focus(); });
       box.addEventListener('keydown',function(ev){
@@ -939,8 +951,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         if(key==='Enter'){ ev.preventDefault(); openPalette(e.id); return; }
         if(key===' '&&kindOf(e)==='Figure'){
           ev.preventDefault();
-          var box2=document.getElementById('altnow');
-          if(box2) box2.focus();
+          openAltPrompt(e.id);
           return;
         }
         if(key==='['||key===']'){ ev.preventDefault(); turnPage(key===']'?1:-1); return; }
@@ -1007,6 +1018,95 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var host=document.getElementById('palette');
     if(host && host.parentNode) host.parentNode.removeChild(host);
     ed.palette=false;
+  }
+
+  // ---- The description prompt ------------------------------------------------------------------
+  // A picture is the one thing in the document a machine cannot finish, so it is the one thing the
+  // walk stops for. Landing on a figure that has no description yet opens this with Rebind's own
+  // guess already in the box: the work is to read one line and press Enter, not to compose from
+  // nothing. Nothing here is ever written into the document unless the person leaves it there.
+  function needsAlt(e){
+    if(kindOf(e)!=='Figure') return false;
+    var have=ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'');
+    return !String(have).trim();
+  }
+
+  function figThumb(elementId){
+    var src='';
+    ed.figures.forEach(function(f){ if(f.id===elementId && f.thumb) src=f.thumb; });
+    return src;
+  }
+
+  function openAltPrompt(elementId){
+    closeAltPrompt();
+    closePalette();
+    var e=null;
+    ed.elements.forEach(function(x){ if(x.id===elementId) e=x; });
+    if(!e) return;
+    // Asked once per element. Without this the prompt would reopen the instant it closes, because
+    // closing hands focus back to the very box whose focus opened it.
+    ed.altAsked[elementId]=true;
+    var guess=(ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'')) || altGuess(e);
+    var thumb=figThumb(elementId);
+    var host=document.createElement('div');
+    host.className='palette';
+    host.id='altprompt';
+    host.setAttribute('role','dialog');
+    host.setAttribute('aria-modal','true');
+    host.setAttribute('aria-label','Describe this picture');
+    host.innerHTML='<div class="card alt"><h2>What does this picture show?</h2>'+
+      '<p class="sub">'+(guess? 'Rebind guessed from the page. Accept it or change it.'
+                              : 'Rebind found no caption to guess from.')+'</p>'+
+      (thumb? '<img class="altshot" src="'+esc(thumb)+'" alt="The picture being described">':'')+
+      '<textarea id="altinput" rows="3" placeholder="A short description of the picture">'+
+      esc(guess)+'</textarea>'+
+      '<div class="altact"><button type="button" class="btn" id="altok">Use this</button>'+
+      '<button type="button" class="btn ghost" id="altskip">Skip for now</button>'+
+      '<span class="hint">Enter accepts · Shift+Enter for a new line · Esc skips</span></div></div>';
+    document.body.appendChild(host);
+    ed.palette=true;
+
+    var input=document.getElementById('altinput');
+    input.focus();
+    // Cursor at the end, not a selection: the guess is a starting point to edit, and selecting it
+    // all would mean the first key typed silently destroys it.
+    input.setSelectionRange(input.value.length, input.value.length);
+
+    function accept(){
+      var text=input.value.trim();
+      closeAltPrompt();
+      if(!text){ focusBox(elementId); return; }
+      ed.alts[elementId]=text;
+      applyEdits();
+      say('Description saved.');
+      focusNext(elementId);
+    }
+    function skip(){ closeAltPrompt(); focusBox(elementId); }
+
+    document.getElementById('altok').addEventListener('click', accept);
+    document.getElementById('altskip').addEventListener('click', skip);
+    input.addEventListener('keydown',function(ev){
+      if(ev.key==='Escape'){ ev.preventDefault(); skip(); return; }
+      if(ev.key==='Enter' && !ev.shiftKey){ ev.preventDefault(); accept(); }
+    });
+    host.addEventListener('click',function(ev){ if(ev.target===host) skip(); });
+  }
+
+  function closeAltPrompt(){
+    var host=document.getElementById('altprompt');
+    if(host && host.parentNode) host.parentNode.removeChild(host);
+    ed.palette=false;
+  }
+
+  // The next element in the walk, carrying on to the next page at the end of this one -- what Tab
+  // would have done, so accepting a description never costs a keystroke to get moving again.
+  function focusNext(elementId){
+    var items=elementsOnPage();
+    var at=-1;
+    items.forEach(function(e,i){ if(e.id===elementId) at=i; });
+    var boxes=document.querySelectorAll('.ob');
+    if(at>=0 && at+1<boxes.length){ boxes[at+1].focus(); return; }
+    if(!turnPage(1) && boxes[at]) boxes[at].focus();
   }
 
   // Setting a type moves on to the next element by itself. Correcting a page is then a single

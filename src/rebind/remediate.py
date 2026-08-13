@@ -151,6 +151,16 @@ MIN_HEADING_CHARS = 3
 # recovered outline surfaced both a 4-fragment byline and a 20+-label diagram burst this way.
 MAX_HEADING_BURST_RUN = 2
 
+# How much of the shorter line's width two lines of one wrapped heading must share. A title's
+# second line sits under the first whether the block is centred, left-aligned or justified, so the
+# overlap is large; two headings that merely follow one another in a column also overlap, which is
+# why the vertical test below carries the weight and this one only excludes side-by-side fragments.
+HEADING_MIN_OVERLAP = 0.5
+# How far a heading's next line may reach back up into the previous one before it is read as part
+# of the same physical line rather than the line under it. Accents and ascenders routinely push a
+# box a little above the one it follows; a byline's fragments overlap almost entirely.
+HEADING_OVERLAP_SLACK = 0.25
+
 # A table spans from its first detected row to its last; lines in between that were not themselves
 # detected as table rows are sparse rows (a subtotal, or a row with an empty cell -- too few
 # side-by-side cells to detect alone) and are kept so no row is dropped. The gap is bounded so prose
@@ -650,6 +660,13 @@ def _demote_heading_bursts(levels: list[int]) -> list[int]:
     title immediately followed by its own subtitle uses two DIFFERENT levels and must never be
     treated as a burst just for being adjacent, no matter how many levels are involved -- only a
     run of lines that all share one style is the signature of a byline or diagram-label burst.
+
+    This counts LINES, deliberately, even though `_same_heading` can tell that two of them are one
+    wrapped heading. Counting joined headings instead was tried and reverted: a byline that wraps
+    is geometrically indistinguishable from a title that wraps -- same face, same tight leading,
+    same horizontal overlap -- so exempting joins let the real sample's 3-fragment byline back into
+    the outline as headings. The limit of 2 already admits a title set across two lines, which is
+    the shape that actually occurs; a title needing three is demoted, which is the safe direction.
     """
     out = list(levels)
     i, n = 0, len(out)
@@ -665,6 +682,39 @@ def _demote_heading_bursts(levels: list[int]) -> list[int]:
                 out[k] = 0
         i = j
     return out
+
+
+def _same_heading(lines: list[TextLine], index: int) -> bool:
+    """Whether `lines[index]` is the next line of the same wrapped heading as the line before it.
+
+    A heading is joined on much simpler evidence than a paragraph: there is no measure to run out
+    to (a title is usually centred, and one that fills its line does so by accident), and no
+    first-line indent to read. What is left is that the two lines are set the same way, sit
+    directly under one another, and overlap horizontally -- which a wrapped title does and the two
+    shapes it must not swallow do not. Byline fragments broken around superscript markers share a
+    baseline rather than stacking, and a diagram's callout labels are spread across the picture.
+    """
+    previous, current = lines[index - 1], lines[index]
+    if previous.bold != current.bold or previous.italic != current.italic:
+        return False
+    if abs(previous.size - current.size) > max(PARAGRAPH_SIZE_TOLERANCE * max(
+            previous.size, current.size, 1.0), 0.5):
+        return False
+    if previous.ocr_confidence is None and current.ocr_confidence is None \
+            and previous.font != current.font:
+        return False
+
+    height = max(previous.bbox[3] - previous.bbox[1], 1.0)
+    gap = previous.bbox[1] - current.bbox[3]
+    # Strictly below, by less than its own leading. The lower bound is what excludes fragments of
+    # one physical line, which overlap vertically rather than following one another.
+    if not -height * HEADING_OVERLAP_SLACK <= gap <= height * PARAGRAPH_GAP_SLACK:
+        return False
+
+    left = max(previous.bbox[0], current.bbox[0])
+    right = min(previous.bbox[2], current.bbox[2])
+    narrower = min(previous.bbox[2] - previous.bbox[0], current.bbox[2] - current.bbox[0])
+    return (right - left) >= HEADING_MIN_OVERLAP * max(narrower, 1.0)
 
 
 def _height_tiers(heights: list[float]) -> list[float]:
@@ -1198,6 +1248,18 @@ def plan_page(lines: list[TextLine], page_roles: list[str]) -> list[dict]:
                    and _same_paragraph(lines, i, j + 1, measures)):
                 j += 1
             plan.append({"kind": "P", "first": i, "last": j})
+            i = j + 1
+            continue
+
+        # A heading runs on the same way a paragraph does, on its own simpler evidence: a title
+        # too long for one line is one title, and leaving it as two elements puts a phantom entry
+        # in a screen reader's heading list and a pause in the middle of the title.
+        if page_roles[i].startswith("H"):
+            j = i
+            while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == page_roles[i]
+                   and _same_heading(lines, j + 1)):
+                j += 1
+            plan.append({"kind": page_roles[i], "first": i, "last": j})
             i = j + 1
             continue
 

@@ -910,6 +910,45 @@ def test_a_paragraph_is_one_element_not_one_per_line(tmp_path: Path):
     assert all(p["height"] > 5 for p in paragraphs), paragraphs
 
 
+def test_a_title_set_across_two_lines_is_one_heading(tmp_path: Path):
+    # A title too long for one line is still one title. Left as two /H1 elements it is read as two
+    # headings, which is both wrong and unnavigable: a screen reader's heading list gets a phantom
+    # entry, and the halves are announced with a pause between them as though unrelated.
+    from tests.fixtures import born_digital_pdf
+
+    source = born_digital_pdf(
+        "<h1>A Title Too Long For One Line Of This Page</h1>"
+        + "".join(f"<p>Paragraph {i} of the body, long enough to wrap onto a second line so that "
+                  "the document's body size is the commonest size on the page.</p>"
+                  for i in range(4)),
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T")
+
+    headings = [e for e in result.elements if e["kind"].startswith("H")]
+    assert len(headings) == 1, [(e["kind"], e["text"][:40]) for e in result.elements]
+    # Both halves are in it, and it covers both lines of the page.
+    assert "A Title Too Long" in headings[0]["text"] and "This Page" in headings[0]["text"]
+    assert headings[0]["height"] > 3, headings[0]
+
+
+def test_two_separate_headings_of_the_same_level_stay_separate(tmp_path: Path):
+    # The other half of the rule: joining is by adjacency, so it must not swallow the next section's
+    # heading. What separates them is the space around them, which is what the join tests.
+    from tests.fixtures import born_digital_pdf
+
+    source = born_digital_pdf(
+        "<h2>First Section</h2><p>A little body text under the first section heading.</p>"
+        "<h2>Second Section</h2><p>A little body text under the second section heading.</p>",
+        tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T")
+
+    kinds = [e["kind"] for e in result.elements]
+    headings = [k for k in kinds if k.startswith("H")]
+    assert len(headings) == 2, [(e["kind"], e["text"][:40]) for e in result.elements]
+
+
 def test_a_heading_never_joins_the_paragraph_under_it(tmp_path: Path):
     from tests.fixtures import born_digital_pdf
 

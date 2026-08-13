@@ -36,7 +36,11 @@ The structure tree (PDF/UA-2, ISO 14289-2, veraPDF zero failures) carries:
 - **Headings** (`/H1`–`/H6`, level-normalized so the sequence starts at H1 and skips no level).
   Born-digital headings come from font size; scanned/OCR headings come from geometry — a line is a
   heading when it is distinctly taller than the body text, set apart by whitespace, and shorter
-  than the column width.
+  than the column width. A title too long for one line is one heading, not two: consecutive lines
+  set the same way, stacked with tight leading and overlapping each other horizontally, are joined.
+  Two lines is the limit, and deliberately so — a byline that wraps looks exactly like a title that
+  wraps, and a run longer than that is the signature of a byline broken around superscript markers
+  or a diagram's callout labels, which are demoted to paragraphs rather than admitted as headings.
 - **Paragraphs** (`/P`) — whole paragraphs, not one per line. A screen reader pauses at every
   element boundary, so a page tagged line by line is read as a stream of fragments. Lines are
   joined unless the typesetting says they are not the same paragraph: the previous line stopping
@@ -178,9 +182,13 @@ key sets the type and moves you straight to the next element, so correcting a pa
 keystrokes with no Tab in between. `Enter` is only for when you cannot remember which key you want:
 it opens a floating list of every type.
 
-Land on a **figure** and a description box appears there, pre-filled with the best guess Rebind has
-— the document's own caption where there is one — and yours to rewrite. Nothing is invented: with
-no caption to draw on, the box starts empty.
+Land on a **figure that has no description** and the walk stops: a prompt opens over the page,
+showing the picture with Rebind's best guess already in the box — the document's own caption where
+there is one — and the cursor at the end of it, ready to edit. `Enter` accepts and carries straight
+on to the next element; `Esc` skips and leaves the document alone. It asks once per picture, not
+every time you pass; `Space` on a figure asks again, and the same box stays in the right column for
+editing a description you have already given. Nothing is invented: with no caption to draw on, the
+box starts empty, and nothing is written into the document unless you leave it there.
 
 | key | | key | | key | |
 |---|---|---|---|---|---|
@@ -199,8 +207,7 @@ their own keys.
 be drawn as page furniture instead. It marks the content as an artifact rather than untagging it,
 because untagged content is a conformance failure, not a fix. Page furniture and text inside
 figures are drawn hatched as "not read"; giving one a type puts it into the reading order, so
-nothing is one-way. A figure's description is typed in place, in the chooser (`Space` while the
-figure has focus).
+nothing is one-way.
 
 Everything that did not pass sits under the report on the left, each next to the one thing that
 would fix it — the images that need describing, with a thumbnail and a box; a field for a missing
@@ -226,7 +233,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.22.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.23.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,
