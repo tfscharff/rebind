@@ -56,7 +56,7 @@ VSVersionInfo(
         '040904B0',  # US English, Unicode
         [
           StringStruct('CompanyName', 'Thomas Scharff'),
-          StringStruct('FileDescription', 'Rebind - accessible PDF reconstruction'),
+          StringStruct('FileDescription', 'Rebind - accessible PDF remediation'),
           StringStruct('FileVersion', '{dotted}'),
           StringStruct('InternalName', 'rebind'),
           StringStruct('LegalCopyright', 'Copyright (c) Thomas Scharff. MIT License.'),

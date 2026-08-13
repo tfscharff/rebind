@@ -302,7 +302,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
 </head>
 <body>
 <header class="site"><div class="wrap brand">
-  <h1>Rebind</h1><span class="tag">accessible PDF reconstruction</span>
+  <h1>Rebind</h1><span class="tag">accessible PDF remediation</span>
   <div class="headright" id="headright"></div>
 </div></header>
 

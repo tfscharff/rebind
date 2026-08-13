@@ -1,6 +1,6 @@
 # Rebind
 
-Accessible PDF reconstruction for damaged library scans.
+Accessible PDF remediation for damaged library scans.
 
 Rebind takes a PDF — scanned or born-digital, tagged or not — and produces a PDF/UA-2 document that
 validates with veraPDF (zero failures). It preserves each page as it is and adds the accessibility
@@ -345,7 +345,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-**1.0.0.** Born-digital and scanned inputs both work end to end, and a real scanned book chapter
+**1.0.1.** Born-digital and scanned inputs both work end to end, and a real scanned book chapter
 goes through the whole path — convert, walk, describe, download — to a document that validates
 PDF/UA-2 with zero failures.
 
