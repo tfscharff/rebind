@@ -7,10 +7,6 @@ validates with veraPDF (zero failures). It preserves each page as it is and adds
 the source is missing: a selectable text layer and a structure tree. It runs entirely on the local
 machine — no API key, no GPU, no network at runtime.
 
-On a scanned book chapter that scored **0%** in Yuja's accessibility checker — and **69%, with 27
-issues left for a person to fix**, after Yuja's own remediation — the document Rebind produced
-scored **100%**.
-
 ## Install
 
 **Windows.** Download `rebind-setup.exe` from the
@@ -351,7 +347,8 @@ server; this is what the installed application runs on double-click.
 
 **1.0.0.** Born-digital and scanned inputs both work end to end, and a real scanned book chapter
 goes through the whole path — convert, walk, describe, download — to a document that validates
-PDF/UA-2 with zero failures and scores 100% in Yuja.
+PDF/UA-2 with zero failures and clears an independent accessibility checker with nothing
+outstanding.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, page furniture, captions, lists, tables, figures with

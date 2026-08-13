@@ -16,7 +16,8 @@ mathematics, chemical structures, and music notation.
 
 These documents cannot be made accessible with existing tools. Commercial auto-tagging assumes a
 document with recoverable structure; there is none in a warped bitmap. Institutional platforms fail on
-scale (Yuja aborts at 999 structure elements, which a 300-page course catalog exceeds easily). Manual
+scale (an existing remediation tool aborts at 999 structure elements, which a 300-page course
+catalog exceeds easily). Manual
 remediation in Acrobat is viable for clean documents and prohibitive for damaged ones — the operator
 ends up retyping the document.
 
@@ -261,7 +262,8 @@ coverage; veraPDF pass rate; throughput. The primary metric is **flag precision 
 system reports uncertainty, is it actually wrong, and when confident, is it actually right? A
 calibrated confidence model is the central claim and must be measured, not asserted.
 
-**Baselines for comparison:** Adobe Acrobat auto-tagging, Yuja, and Docling.
+**Baselines for comparison:** Adobe Acrobat auto-tagging, an existing remediation tool, and
+Docling.
 
 ## 10. Distribution
 

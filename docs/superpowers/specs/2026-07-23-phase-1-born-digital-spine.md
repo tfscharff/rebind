@@ -200,7 +200,7 @@ assert the recovered model matches the structure that went in.
 4. **veraPDF gate** on generated output, reusing `validate.py`.
 5. **Long-document test** — a generated 300-page fixture converts with bounded memory and no
    structure-element ceiling. This tests invariant 5 directly and is the failure that started the
-   project: Yuja's 999-element limit on the course catalog.
+   project: an existing tool's 999-element limit on the course catalog.
 
 Adversarial fixtures are included: skipped heading levels, two-column CSS, `@page` margin-box
 running headers.
