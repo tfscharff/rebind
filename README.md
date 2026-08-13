@@ -347,8 +347,7 @@ server; this is what the installed application runs on double-click.
 
 **1.0.0.** Born-digital and scanned inputs both work end to end, and a real scanned book chapter
 goes through the whole path — convert, walk, describe, download — to a document that validates
-PDF/UA-2 with zero failures and clears an independent accessibility checker with nothing
-outstanding.
+PDF/UA-2 with zero failures.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, page furniture, captions, lists, tables, figures with
@@ -368,9 +367,8 @@ Not implemented, and known rough:
 
 ## Runtime
 
-Runs on the local machine only — no API key, no GPU, no network at runtime. There are no limits on
-page count or number of structure elements. The Windows installer (~82 MB) is unsigned, so
-SmartScreen warns on first run.
+Runs on the local machine only — no API key, no GPU, no network at runtime. The Windows installer
+(~86 MB) is unsigned, so SmartScreen warns on first run.
 
 ## License
 

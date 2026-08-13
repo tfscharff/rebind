@@ -2,8 +2,7 @@
 
 Accessible PDF **remediation** for catastrophically bad library scans. Public repo:
 `tfscharff/rebind` (MIT). Primary user is Allie, an ILL/accessibility librarian at Wheaton College;
-secondary user is Thomas, who needs very long documents (a 300-page course catalog that broke an
-existing remediation tool at its 999-structure-element limit).
+secondary user is Thomas, who needs very long documents (a 300-page course catalog).
 
 ## The thesis — do not lose this
 

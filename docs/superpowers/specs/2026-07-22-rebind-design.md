@@ -16,8 +16,7 @@ mathematics, chemical structures, and music notation.
 
 These documents cannot be made accessible with existing tools. Commercial auto-tagging assumes a
 document with recoverable structure; there is none in a warped bitmap. Institutional platforms fail on
-scale (an existing remediation tool aborts at 999 structure elements, which a 300-page course
-catalog exceeds easily). Manual
+scale. Manual
 remediation in Acrobat is viable for clean documents and prohibitive for damaged ones — the operator
 ends up retyping the document.
 

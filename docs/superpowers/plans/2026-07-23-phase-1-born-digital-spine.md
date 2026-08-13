@@ -1942,8 +1942,8 @@ def test_model_matches_the_golden_file(tmp_path: Path):
 
 @pytest.mark.slow
 def test_three_hundred_pages_convert_without_an_element_limit(tmp_path: Path):
-    """Invariant 5: no arbitrary limits. This is the failure that started the project --
-    An existing tool refused the course catalog at its 999-structure-element ceiling."""
+    """Invariant 5: no arbitrary limits. A long document must not hit a ceiling on
+    structure elements."""
     body = "".join(
         f"<h2>Section {i}</h2><p>Body for section {i}.</p><p style='break-after:page'>x</p>"
         for i in range(300)
