@@ -8,5 +8,10 @@
 *.exe binary
 *.dll binary
 
-# Keep GitHub's language bar reflecting actual project code, not the one Inno Setup build script.
+# Keep GitHub's language bar reflecting actual project code, not the build and launcher scripts.
 packaging/rebind.iss linguist-detectable=false
+rebind.cmd linguist-detectable=false
+
+# cmd.exe mis-parses multi-line `if (...)` blocks in a batch file with LF endings, and a fresh
+# clone would get LF from the eol=lf rule above.
+rebind.cmd text eol=crlf
