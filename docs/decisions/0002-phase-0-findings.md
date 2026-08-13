@@ -270,13 +270,10 @@ Two things the phase never set out to test, but a reviewer measured directly whi
 other findings. Recorded here so they are not lost, with the caveat stated plainly: neither has
 its own dedicated task, fixture, or regression test the way the findings above do.
 
-**Scale: 200 pages, 2001 structure elements, ~3.0s render + ~5.7s veraPDF validation.** The
-Phase 0 spec's motivating comparison was a competing product that aborts entirely once a
-document exceeds 999 structure elements. A 200-page synthetic document (verified by review, not
-by a dedicated task or committed fixture) produced 2001 structure elements, rendered in
-approximately 3.0 seconds, and passed veraPDF PDF/UA-1 validation in approximately 5.7 seconds —
-directly answering that comparison in Rebind's favor at roughly double the competing product's
-failure threshold, with no sign of degradation. This is a measured result, not an assumption,
+**Scale: 200 pages, 2001 structure elements, ~3.0s render + ~5.7s veraPDF validation.** A
+200-page synthetic document (verified by review, not by a dedicated task or committed fixture)
+produced 2001 structure elements, rendered in approximately 3.0 seconds, and passed veraPDF
+PDF/UA-1 validation in approximately 5.7 seconds, with no sign of degradation. This is a measured result, not an assumption,
 but it was verified by review rather than committed as a reproducible test or benchmark; a
 dedicated scale test (with the fixture and measurement methodology checked in) would be needed
 before citing this number as a guaranteed property rather than a single observed data point.
