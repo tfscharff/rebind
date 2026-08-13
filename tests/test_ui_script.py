@@ -109,7 +109,30 @@ def test_tabbing_off_the_end_of_a_page_carries_on_to_the_next():
 def test_clicking_a_failing_check_goes_to_it_in_the_document():
     script = _script()
     assert "data-goto=" in script
-    assert "goToPage(parseInt(b.getAttribute('data-goto'),10))" in script
+    assert "goToPage(parseInt(page,10))" in script
+
+
+def test_the_run_from_the_report_to_the_document_is_only_what_is_wrong():
+    # The tab order is the product here. Everything that used to sit between the report and
+    # element 1 -- the download in the header, the fix fields under "Needs you" -- was a stop the
+    # person paid on every pass through the document, to reach a control they wanted once.
+    script = _script()
+    # Every failing check is reachable, whether or not it names a page; passes are not stops.
+    assert "var open=(status!=='pass'&&status!=='n/a');" in script
+    # ...and nothing else in the report is.
+    assert ".item input, .item button, .item a, .item textarea" in script
+    assert "el.tabIndex=-1;" in script
+    # The header holds the save state and nothing you can tab to.
+    header = script[script.index("function drawHeader("):script.index("function setSaveState(")]
+    assert "id=\"dl\"" not in header and "reset" not in header
+
+
+def test_the_document_and_a_fresh_start_are_the_last_two_stops():
+    script = _script()
+    todo = script[script.index("function drawTodo("):script.index("function actionFor(")]
+    finish = todo[todo.index('class="panel finish"'):]
+    assert finish.index('id="dl"') < finish.index('class="reset"'), \
+        "the download must come before the link that throws the document away"
 
 
 def test_reading_order_is_a_walk_the_person_completes():

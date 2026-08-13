@@ -157,17 +157,27 @@ heartbeat, and the server exits when it stops.
 
 ### The result view
 
-Three columns, with the document at twice the width of either side of it, and **Download PDF** in
-the page header. Nothing has to be saved: an edit goes to the server on its own and the document is
-rebuilt behind you, with the header saying where that has got to. There is no Apply button to
-forget, and no state that lives only in the tab.
+Three columns, with the document at twice the width of either side of it. Nothing has to be saved:
+an edit goes to the server on its own and the document is rebuilt behind you, with the header
+saying where that has got to. There is no Apply button to forget, and no state that lives only in
+the tab.
+
+**The tab order is the design.** Rebind's own page has to be as walkable as the documents it fixes,
+and the run from the top of the page to the first element is a toll paid on every pass. So the
+order is: each failing check in the report, in order, then element 1 of the document — and nothing
+in between. Every other control is out of the natural order and reached from the thing it belongs
+to: the fields under *Needs you* are reached from their own `!` row, the pager has `[` and `]`.
+**Download PDF** and **Do another document** are the last two stops on the page, in that order,
+because they are what you do when the work is finished and nobody should reach "start over"
+without passing the download first.
 
 **Left — the accessibility report.** Adobe's own rule list, in Adobe's own groups, ticked off one
 at a time against the document Rebind actually produced. Every verdict is read off the finished
 PDF — the structure tree, the fonts, the annotations — never inferred from what remediation
 intended, because a green tick is a claim. A rule the document has nothing to test (no forms, no
-tables) is marked *not applicable* rather than passed. Anything that did not pass is a button:
-click it and the middle column turns to the page the problem is on.
+tables) is marked *not applicable* rather than passed. Anything that did not pass is a button and a
+tab stop: activate it and the middle column turns to the page the problem is on, or focus lands on
+the field that fixes it.
 
 **Middle — the document and nothing else**, sized to the window so a whole page is always visible
 and nothing scrolls. Each element Rebind tagged is drawn over the page and is a tab stop, in
@@ -235,7 +245,7 @@ server; this is what the installed application runs on double-click.
 
 ## Status
 
-Alpha (v0.24.0). Born-digital and scanned inputs both work end to end.
+Alpha (v0.25.0). Born-digital and scanned inputs both work end to end.
 
 Implemented: on-device OCR with deskew/denoise restoration, multi-column reading order, and the
 structure tree above (headings, paragraphs, lists, tables, figures with caption-based alt text,

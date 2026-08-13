@@ -284,6 +284,10 @@ kbd{font-family:var(--mono);font-size:.72rem;background:var(--paper);border:1px 
 .error .detail{color:var(--ink)}
 .visually-hidden{position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden}
 a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
+/* The last block on the page: take the document, or start another. */
+.finish{display:flex;flex-direction:column;align-items:stretch;gap:.15rem}
+.finish #dl{text-align:center}
+.finish a.reset{margin-top:.5rem;text-align:center}
 .struct-badge{font-family:var(--mono);font-size:.74rem;text-transform:uppercase;
   letter-spacing:.03em;margin:.2rem 0 .6rem}
 .struct-badge.ok{color:var(--pass)}
@@ -396,6 +400,11 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     },1200);
   }
 
+  // Checks whose fix is asked for in the walk itself. They keep their row in the report -- the
+  // rule did not pass and the report says so -- but they get no second block underneath asking
+  // for the same work in a worse place.
+  var ASKED_IN_THE_WALK={'figures-alternate-text':true};
+
   // ---- State ---------------------------------------------------------------------------------
   var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
           tags_edit:{},removed:{},alts:{},focused:null,figures:[],checks:[],status:null,
@@ -420,13 +429,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     say('Done. Your accessible PDF is ready.');
   }
 
-  // The download and the save state live in the page header, so they are in the same place
-  // whatever the workspace is showing.
+  // Only the save state lives in the header. The download used to sit here too, which put a tab
+  // stop in front of every one of the document's elements -- the header is the first thing in the
+  // page, and getting to element 1 meant tabbing past it every time.
   function drawHeader(){
     var host=document.getElementById('headright');
     if(!host) return;
-    host.innerHTML='<span class="saved" id="savestate">All changes saved</span>'+
-      '<a class="btn primary" id="dl" href="/jobs/'+ed.id+'/pdf" download>Download PDF</a>';
+    host.innerHTML='<span class="saved" id="savestate">All changes saved</span>';
   }
 
   function setSaveState(text, working){
@@ -455,13 +464,17 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       h+='</ul></div>';
     });
     // Whatever did not pass, with the thing that would fix it, directly under the list it came
-    // from. Reading order is not repeated here -- it has the whole right column.
+    // from. Two are deliberately not repeated here: reading order, which has the whole right
+    // column, and the pictures needing a description, which are asked for one at a time in the
+    // walk. Both already have a place; a second block asking for the same work is clutter with a
+    // tab stop attached.
     var open=ed.checks.filter(function(c){
-      return effectiveStatus(c)==='needs-you' && c.action!=='reading-order'; });
+      return effectiveStatus(c)==='needs-you'
+        && c.action!=='reading-order' && !ASKED_IN_THE_WALK[c.key]; });
     if(open.length){
       h+='<div class="group"><h3>Needs you</h3>';
       open.forEach(function(c){
-        h+='<div class="item">'+
+        h+='<div class="item" id="item-'+esc(c.key)+'">'+
           '<div class="title">'+esc(c.title)+'</div>'+
           '<p class="detail">'+esc(c.detail)+'</p>'+
           (c.need? '<p class="need">'+esc(c.need)+'</p>':'')+
@@ -469,15 +482,28 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       });
       h+='</div>';
     }
-    h+=structureBadge(ed.status.structure_ok, ed.status.structure_issues||[])+
-      '<a class="reset" href="/">Do another document</a></section>';
+    h+=structureBadge(ed.status.structure_ok, ed.status.structure_issues||[])+'</section>';
     host.innerHTML=h;
     wireActions();
-    // Clicking an item that has a place in the document takes you there, rather than leaving you
-    // to find it: the middle column turns to the page and focuses the first element on it.
+    // The report's tab stops are its failing checks and nothing else, so that the run from the
+    // first "!" to element 1 is exactly as long as the list of things wrong. The controls under
+    // "Needs you" are still reachable -- the "!" row is what takes you to them -- but they are out
+    // of the natural order, because otherwise every one of them stands between the report and the
+    // document, and the document is where the work is.
+    Array.prototype.slice.call(
+      host.querySelectorAll('.item input, .item button, .item a, .item textarea'))
+      .forEach(function(el){ el.tabIndex=-1; });
+    // Activating a failing check takes you to whatever would fix it: the page it is on, with the
+    // middle column turned to it, or the field that sets it.
     Array.prototype.slice.call(host.querySelectorAll('.check button')).forEach(function(b){
       b.addEventListener('click',function(){
-        goToPage(parseInt(b.getAttribute('data-goto'),10));
+        var page=b.getAttribute('data-goto');
+        if(page){ goToPage(parseInt(page,10)); return; }
+        var item=document.getElementById('item-'+b.getAttribute('data-item'));
+        if(!item){ say('Nothing to do for that one here.'); return; }
+        item.scrollIntoView({block:'nearest'});
+        var field=item.querySelector('input, textarea, button');
+        if(field) field.focus();
       });
     });
     revealChecks(host);
@@ -489,9 +515,14 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var mark=status==='pass'?'✓':(status==='n/a'?'–':'!');
     var where=(c.locations&&c.locations.length)? c.locations[0].page : null;
     var label=esc(c.title)+'<span class="visually-hidden">: '+esc(statusWord(status))+'</span>';
-    var body=(where&&status!=='pass')
-      ? '<button type="button" class="where" data-goto="'+where+'">'+label+
-        '<span class="at">p. '+where+'</span></button>'
+    // Every check that did not pass is a tab stop, whether or not it names a page: the walk
+    // through the report is the walk through what is wrong, and a failing check you cannot reach
+    // by keyboard is one you cannot act on. Passing and not-applicable rows are read, not visited.
+    var open=(status!=='pass'&&status!=='n/a');
+    var body=open
+      ? '<button type="button" class="where"'+
+        (where? ' data-goto="'+where+'"' : ' data-item="'+esc(c.key)+'"')+'>'+label+
+        (where? '<span class="at">p. '+where+'</span>' : '')+'</button>'
       : '<span class="name">'+label+'</span>';
     return '<li class="check '+cls+'" data-check="'+esc(c.key)+'">'+
       '<span class="mark" aria-hidden="true">'+mark+'</span>'+body+'</li>';
@@ -579,7 +610,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       '<b>Enter</b> lists every type</p>'+
       '<dl class="keylist">'+ed.allKeys.map(function(k){
         return '<div><dt><kbd>'+esc(k.key)+'</kbd></dt><dd>'+esc(k.label)+'</dd></div>';
-      }).join('')+'</dl></section>';
+      }).join('')+'</dl></section>'+
+      // Last on the page, and last in the tab order, because they are what you do when the work is
+      // finished. Taking the document is the second-to-last stop and starting over is the last:
+      // nobody should reach "do another document" without passing the download first.
+      '<section class="panel finish"><h2 class="visually-hidden">When you are done</h2>'+
+      '<a class="btn primary" id="dl" href="/jobs/'+ed.id+'/pdf" download>Download PDF</a>'+
+      '<a class="reset" href="/">Do another document</a></section>';
     host.innerHTML=h;
   }
 
