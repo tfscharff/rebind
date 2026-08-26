@@ -388,6 +388,30 @@ def test_every_hotkey_names_a_tag_that_exists():
     assert "Artifact" not in EDITABLE_TAGS
 
 
+def test_row_hotkeys_are_well_formed_and_never_offered_as_whole_element_tags():
+    # TH/TD only ever make sense as a row inside an already-tagged Table -- offering them as a
+    # whole-element retag would let a bare paragraph become a /TH with no /TR or /Table around it,
+    # which fails PDF/UA-2 structurally (Table 5 restricts what may hold a /TH directly).
+    from rebind.remediate import EDITABLE_TAGS, ROW_TAG_KEYS
+
+    keys = [key for key, _tag, _label, _what in ROW_TAG_KEYS]
+    assert len(keys) == len(set(keys)), "row hotkeys must be unique"
+    tags = {tag for _key, tag, _label, _what in ROW_TAG_KEYS}
+    assert tags == {"TH", "TD"}
+    assert tags.isdisjoint(EDITABLE_TAGS), "TH/TD must never be offered as whole-element tags"
+    for key, tag, label, what in ROW_TAG_KEYS:
+        assert len(key) == 1, f"{tag}: a hotkey should be one keystroke, got {key!r}"
+        assert label and what and what != label, f"{tag}: needs a label and an explanation"
+
+
+def test_edits_accepts_row_tags_alongside_element_tags():
+    from rebind.remediate import Edits
+
+    edits = Edits.from_payload({"tags": {"p1n0": "H2", "p1n0r0": "TH", "p1n0r1": "TD",
+                                          "p1n0r2": "NotARealTag"}})
+    assert edits.tags == {"p1n0": "H2", "p1n0r0": "TH", "p1n0r1": "TD"}
+
+
 def test_a_running_footer_is_an_artifact_not_content(tmp_path: Path):
     # PDF/UA requires page furniture to be marked as an artifact. Tagged as content, a screen
     # reader announces the running head and folio in the middle of the prose on every page.

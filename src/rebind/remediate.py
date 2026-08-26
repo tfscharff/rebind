@@ -1221,7 +1221,7 @@ class Edits:
     @classmethod
     def from_payload(cls, payload: dict | None) -> Edits:
         payload = payload or {}
-        allowed = set(EDITABLE_TAGS)
+        allowed = set(EDITABLE_TAGS) | set(ROW_TAGS)
         return cls(
             tags={str(k): str(v) for k, v in (payload.get("tags") or {}).items() if v in allowed},
             removed={str(v) for v in (payload.get("removed") or [])},
@@ -1300,6 +1300,16 @@ ARTIFACT_KEY = "x"
 ARTIFACT_LABEL = "Not read"
 ARTIFACT_WHAT = ("Page furniture — on the page, but skipped by a screen reader. Give it a type to "
                  "have it read after all.")
+
+# TH/TD are never offered as a whole-element tag (see EDITABLE_TAGS) -- they only mean something
+# as a row inside a Table the editor already built. They get their own small keymap, sent to the
+# frontend separately (like ARTIFACT_KEY) and swapped in only when the focused element is a row.
+ROW_TAG_KEYS = (
+    ("h", "TH", "Header cell", "This row labels the columns beneath it — a screen reader reads "
+                               "it before each data cell in its column."),
+    ("c", "TD", "Data cell", "An ordinary cell of the table, read against its column's header."),
+)
+ROW_TAGS = tuple(tag for _key, tag, _label, _what in ROW_TAG_KEYS)
 
 
 def _element_records(src_page, plan: list[dict], lines: list[TextLine],
