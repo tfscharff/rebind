@@ -1248,7 +1248,8 @@ class Edits:
 # what the entry points at -- and Rebind cannot know which heading a line of a contents list refers
 # to without guessing. So it is not offered: a table of contents that names the wrong targets is
 # worse than one tagged as ordinary paragraphs.
-CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "Formula", "Form")
+CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "Formula", "Form",
+                "Note")
 # /Part is not offered: it is a container with no behaviour of its own that /Sect and /Div do not
 # already have, so it was one more thing to choose between for no gain to a reader.
 GROUPING_TAGS = ("Sect", "Div", "Art", "Index", "NonStruct")
@@ -1288,6 +1289,8 @@ TAG_KEYS = (
     ("m", "Formula", "Formula (maths)", "A mathematical or chemical expression."),
     ("e", "Code", "Code", "Program code or other text where the exact characters matter."),
     ("o", "Form", "Form field", "An interactive field a reader fills in."),
+    ("v", "Note", "Footnote", "A footnote or endnote — read separately from the body text it "
+                              "annotates, not in the middle of it."),
 )
 
 # Not a type, so not in TAG_KEYS -- an action, on its own key: take this out of the reading order
@@ -1875,7 +1878,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
 
     struct_root = pdf.make_indirect(Dictionary(Type=Name.StructTreeRoot))
     # PDF/UA-2 (ISO 14289-2) namespace. All the structure types below (/P, /H1-/H6, /Table, /TR,
-    # /TD, /TH, /L, /LI, /LBody, /Figure) are retained as-is in the PDF 2.0 Standard Structure
+    # /TD, /TH, /L, /LI, /LBody, /Figure, /Note) are retained as-is in the PDF 2.0 Standard Structure
     # Namespace -- confirmed against `verapdf -f ua2` (see docs/decisions/ for the spike). Only the
     # root Document element needs /NS set explicitly; every descendant inherits it, so nothing else
     # in this function's tag-building changes. Getting the namespace URI wrong (e.g. the plausible
@@ -1886,7 +1889,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         Dictionary(Type=Name.StructElem, S=Name.Document, NS=ssn_namespace, P=struct_root, K=Array([]))
     )
     struct_root.K = Array([document_elem])
-    struct_root.RoleMap = Dictionary()
+    struct_root.RoleMap = Dictionary(Note=Name.P)
     struct_root.Namespaces = Array([ssn_namespace])
     parent_tree_nums = Array([])
     # Page StructParents keys use 0..page_count-1 (the enumerate index below); annotation

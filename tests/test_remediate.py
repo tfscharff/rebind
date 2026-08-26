@@ -1175,6 +1175,32 @@ def test_figure_is_decorative_until_described(tmp_path: Path):
         assert len(figs) == 1 and str(figs[0].get("/Alt")) == "A red bar chart of sales."
 
 
+def test_footnote_tag_builds_as_note(tmp_path: Path, verapdf_exe: Path):
+    # /Note is PDF 2.0's structure type for a footnote or endnote -- content read separately from
+    # the body text it annotates, not inline with it. It needs no special construction: like P,
+    # H1-H6 and BlockQuote, it takes its element's marked content directly.
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf
+
+    source = born_digital_pdf(
+        "<h1>Title</h1><p>Body text.</p><p>1. A footnote at the bottom of the page.</p>",
+        tmp_path / "in.pdf")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    target = next(e["id"] for e in plain.elements
+                  if e["kind"] == "P" and "footnote" in e["text"])
+
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T", edits=Edits(tags={target: "Note"}))
+
+    with pikepdf.open(out) as pdf:
+        notes = [e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Note"]
+        assert len(notes) == 1
+
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
+
+
 def test_figure_with_a_caption_is_described_automatically(tmp_path: Path):
     # A figure sitting directly under a "Fig. N ..." caption -- the real, standard convention
     # (confirmed against a real sample: 1429254.pdf, gitignored) -- needs no manual description at
