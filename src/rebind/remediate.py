@@ -981,7 +981,8 @@ def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextL
 
 
 def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
-                  document_elem: pikepdf.Object, page_obj: pikepdf.Object, leaf) -> pikepdf.Object:
+                  document_elem: pikepdf.Object, page_obj: pikepdf.Object, leaf,
+                  table_id: str, row_tags: dict[str, str]) -> pikepdf.Object:
     """Build a fully tagged `/Table` from a run of table cells: a regular grid of `/TR`s whose
     first row is header cells (`/TH` scoped to their column) and the rest data cells (`/TD`).
 
@@ -1013,7 +1014,10 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
         by_column: dict[int, list[tuple[int, TextLine]]] = {}
         for mcid, line in row:
             by_column.setdefault(column_of(line), []).append((mcid, line))
-        is_header = row_index == 0
+        # The default guess -- the first detected row is the header -- unless a person corrected
+        # this specific row through the editor (Task 3's row sub-elements).
+        override = row_tags.get(f"{table_id}r{row_index}")
+        is_header = override == "TH" if override in ("TH", "TD") else row_index == 0
         cell_type = Name.TH if is_header else Name.TD
         row_cells: list[pikepdf.Object] = []
         for c in range(len(columns)):
@@ -1526,7 +1530,7 @@ def _same_paragraph(lines: list[TextLine], first: int, index: int,
 def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
                     mcid_of: list[int | None],
                     document_elem: pikepdf.Object, page_obj: pikepdf.Object,
-                    caption_hosts: list | None = None):
+                    caption_hosts: list | None = None, edits: Edits | None = None):
     """Build one page's structure elements from an (already decided, possibly edited) plan.
 
     Returns (top-level elements in reading order, owners) where `owners[mcid]` is the leaf element
@@ -1565,8 +1569,9 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
         indices = list(range(first, last + 1))
 
         if kind == "Table":
+            row_tags = edits.tags if edits else {}
             tops.append(_tagged_table(pdf, [(i, lines[i]) for i in indices],
-                                      document_elem, page_obj, leaf))
+                                      document_elem, page_obj, leaf, entry["id"], row_tags))
         elif kind == "L":
             lst = pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.L, P=document_elem, K=Array([])))
@@ -2191,7 +2196,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         ]
         tops, owner_of_mcid = _page_structure(pdf, content_lines, plan, mcid_of,
                                               document_elem, page.obj,
-                                              caption_hosts=figure_elems)
+                                              caption_hosts=figure_elems, edits=edits)
         # The parent tree is indexed BY marked-content id, so every slot must hold the element that
         # owns that id. Appending here instead of assigning (as this briefly did) shifts the figure
         # entries past their own ids and leaves nulls behind -- content that names a structure

@@ -1141,6 +1141,39 @@ def test_tagged_table_is_pdf_ua_compliant(tmp_path: Path, verapdf_exe: Path):
     assert result.compliant, result.summary()
 
 
+def test_a_row_can_be_promoted_to_header_by_id(tmp_path: Path, verapdf_exe: Path):
+    # Rebind's default guess -- the first detected row is the header -- is sometimes wrong (a
+    # table with no header row at all, or one whose header is really its second row). The row
+    # sub-elements from Task 3 exist so a person can correct exactly one row without retagging the
+    # whole table.
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf_with_table
+
+    source = born_digital_pdf_with_table(tmp_path / "in.pdf")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    table = next(e for e in plain.elements if e["kind"] == "Table")
+
+    out = tmp_path / "out.pdf"
+    # Swap the header from row 0 to row 1 ("North" becomes the header row instead of "Region").
+    result = remediate(source, out, title="T", edits=Edits(
+        tags={f"{table['id']}r0": "TD", f"{table['id']}r1": "TH"}))
+
+    rows = [e for e in result.elements if e.get("row") and e["id"].startswith(table["id"] + "r")]
+    assert [r["kind"] for r in rows] == ["TD", "TH", "TD", "TD"]
+
+    with pikepdf.open(out) as pdf:
+        tbl = next(e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Table")
+        trs = list(tbl.K)
+        first_row_cell_types = {str(c.get("/S")) for c in trs[0].K}
+        second_row_cell_types = {str(c.get("/S")) for c in trs[1].K}
+        assert first_row_cell_types == {"/TD"}
+        assert second_row_cell_types == {"/TH"}
+
+    result_report = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result_report.compliant, result_report.summary()
+
+
 def test_table_rows_are_offered_as_editable_sub_elements(tmp_path: Path):
     # A table's header row is a guess (today: always the first detected row). Exposing each row as
     # its own element -- with its own id and bbox -- is what lets a person correct that guess for
