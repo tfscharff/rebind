@@ -760,32 +760,67 @@ def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, font: pikepdf.Object, name: 
     fonts[Name("/" + name)] = font
 
 
-def _ocr_heading_heights(lines: list[TextLine]) -> dict[int, float]:
-    """For the OCR lines on one page, return {id(line): height} for lines that look like headings.
+def _ocr_heading_sizes(lines: list[TextLine]) -> dict[int, float]:
+    """For the OCR lines on one page, return {id(line): size} for lines that look like headings.
 
-    A heading is taller than the page's body text (size), set apart by whitespace (isolation), and
-    does not fill the text column (shortness). No signal alone is trusted -- a single OCR line's box
-    height is noise -- but their conjunction is not something an over-tall body line, which still
-    sits inside its paragraph spanning the full width, can produce.
+    `lines` must arrive in reading order (`layout.order_page` put them there); isolation is
+    measured against each line's neighbours in that order.
+
+    A heading is larger than the page's body text, set apart by whitespace (isolation), and does
+    not fill the text column (shortness). No signal alone is trusted, but their conjunction is not
+    something a body line -- which sits inside its paragraph spanning the full width -- produces.
+
+    Size is the line's DECLARED font size, not its box height. Box height was tried first and is
+    wrong on the shape this exists for: a tilted scan's words share a line but not a baseline, so
+    the box spans the drift across the line's width and measures the tilt rather than the type. On
+    a real scanned book (samples/The_power_of_images_in_the_Age_of_Augustus_ocr.pdf) that inflated
+    every 10pt body line's box to ~16pt while the 16.1pt chapter title's box was 19.68 -- 1.21x the
+    body median, under the bar -- and the whole 25-page book came out with no headings at all.
+    The declared size separated them cleanly at 16.1 against 10.0. Nothing is given up by trusting
+    it: a third-party OCR layer writes a real size, and for Rebind's own recognizer size IS the box
+    height by definition (`ocr.py`), so this is the same measurement it always was.
+
+    Trusting a declared size means guarding against a nonsensical one, which is what the first two
+    checks are for. The same book's recogniser found a lone '|' at 26pt and 'at  1' at 17.1pt with
+    its five characters strewn across 191pt -- dirt on the platen, isolated and short, and promoted
+    to headings the moment size was believed. A heading has to have some text in it, and its
+    characters cannot sit further apart than the type is tall.
     """
     if len(lines) < 3:
         return {}
-    heights = sorted(ln.bbox[3] - ln.bbox[1] for ln in lines)
-    body_height = heights[len(heights) // 2] or 1.0
+    sizes = sorted(ln.size for ln in lines)
+    body_size = sizes[len(sizes) // 2] or 1.0
     max_width = max((ln.bbox[2] - ln.bbox[0]) for ln in lines) or 1.0
-    ordered = sorted(lines, key=lambda ln: -ln.bbox[3])   # top of page to bottom
     result: dict[int, float] = {}
-    for idx, line in enumerate(ordered):
-        height = line.bbox[3] - line.bbox[1]
+    for idx, line in enumerate(lines):
+        text = line.text.strip()
         width = line.bbox[2] - line.bbox[0]
-        if height < body_height * OCR_HEADING_HEIGHT_RATIO:
+        height = line.bbox[3] - line.bbox[1]
+        if len(text) < MIN_HEADING_CHARS:
+            continue
+        if width / len(text) > line.size:
+            continue        # characters further apart than the type is tall: not a line of text
+        if line.size < body_size * OCR_HEADING_HEIGHT_RATIO:
             continue
         if width > max_width * OCR_HEADING_MAX_WIDTH_RATIO:
             continue
-        gap_above = (ordered[idx - 1].bbox[1] - line.bbox[3]) if idx > 0 else float("inf")
-        gap_below = (line.bbox[1] - ordered[idx + 1].bbox[3]) if idx < len(ordered) - 1 else float("inf")
-        if max(gap_above, gap_below) >= body_height * OCR_HEADING_ISOLATION_RATIO:
-            result[id(line)] = height
+
+        def gap_to(other: TextLine | None, above: bool, line: TextLine = line,
+                   height: float = height) -> float:
+            """Whitespace between `line` and the neighbour before (above) or after it."""
+            if other is None:
+                return float("inf")
+            gap = (other.bbox[1] - line.bbox[3]) if above else (line.bbox[1] - other.bbox[3])
+            # Not vertically adjacent at all: the neighbour is across a column or page break, which
+            # is isolation rather than crowding. Measuring against whatever sat nearest vertically
+            # anywhere on the page is what hid every title on a two-page spread, where the line
+            # alongside on the *other* page sits level with it.
+            return float("inf") if gap < -height else gap
+
+        gap_above = gap_to(lines[idx - 1] if idx > 0 else None, True)
+        gap_below = gap_to(lines[idx + 1] if idx < len(lines) - 1 else None, False)
+        if max(gap_above, gap_below) >= body_size * OCR_HEADING_ISOLATION_RATIO:
+            result[id(line)] = line.size
     return result
 
 
@@ -868,14 +903,14 @@ def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
 
     Born-digital headings come from the document-global typographic profile. Recognizer output
     (Rebind's OCR, or a hidden OCR layer over a scan) has no reliable font size, so its headings are
-    instead recovered geometrically -- size, isolation and shortness together (`_ocr_heading_heights`)
+    instead recovered geometrically -- size, isolation and shortness together (`_ocr_heading_sizes`)
     -- with heading levels assigned from document-global size tiers. Levels are then normalized so
     the sequence starts at H1 and never skips a level, which PDF/UA requires (7.4.2).
     """
     ocr_headings: list[dict[int, float]] = []   # per page: {id(line): height} for OCR headings
     for src_page, lines, used_ocr in per_page:
         page_is_ocr = used_ocr or _is_ocr_over_scan(src_page)
-        ocr_headings.append(_ocr_heading_heights(lines) if page_is_ocr else {})
+        ocr_headings.append(_ocr_heading_sizes(lines) if page_is_ocr else {})
 
     tiers = _height_tiers([h for page in ocr_headings for h in page.values()])
 
@@ -900,7 +935,7 @@ def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
             else:
                 page_levels.append(0)
         if not page_is_ocr:
-            # OCR headings already carry their own isolation signal (_ocr_heading_heights);
+            # OCR headings already carry their own isolation signal (_ocr_heading_sizes);
             # only born-digital candidacy (style + length alone) needs the burst check too.
             page_levels = _demote_heading_bursts(page_levels)
         raw.append(page_levels)

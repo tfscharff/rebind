@@ -1567,3 +1567,82 @@ def test_editor_elements_keep_layout_order_when_geometry_disagrees():
 
     assert [r["id"] for r in out] == ["e0", "e1", "e2", "e3"]
     assert all("_order" not in r for r in out), "the sort key must not leak to the editor"
+
+
+def _ocr_line(text: str, *, size: float, box_height: float, top: float,
+              left: float = 280.0, width: float = 330.0):
+    """One line of a hidden OCR layer: a declared font size, and a box whose height is independent
+    of it -- which is what a tilted scan produces."""
+    from rebind.extract import TextLine
+    return TextLine(text=text, page=1, bbox=(left, top - box_height, left + width, top),
+                    font="GlyphLessFont", size=size, bold=False, italic=False)
+
+
+def test_ocr_heading_is_found_by_declared_size_not_tilt_inflated_box_height():
+    # Measured on a real scanned book (samples/The_power_of_images_in_the_Age_of_Augustus_ocr.pdf,
+    # tilted two-page spreads with a Tesseract text layer): the body is 10pt type, but every body
+    # line's box is inflated to ~16pt because a tilted line's words share a line and not a
+    # baseline, so the box spans the drift across its width. The 16.1pt chapter title's box is
+    # 19.68 -- only 1.21x the body median, under the 1.35 bar. Ranked by box height the title is
+    # invisible, and the whole 25-page book came out with zero headings.
+    #
+    # The declared size says what the box cannot: 16.1 against a body of 10.0. That size is real
+    # data -- a third-party OCR layer writes it -- and for Rebind's own OCR it is defined as the
+    # box height (ocr.py), so trusting it changes nothing there.
+    from rebind.remediate import _ocr_heading_sizes
+
+    title = _ocr_line("Rival Images: Octavian, Antony,", size=16.1, box_height=19.68, top=636.0,
+                      width=230.0)
+    body = [_ocr_line(f"body line {i} running the full width of its column here.",
+                      size=10.1, box_height=16.23, top=600.0 - i * 20.0)
+            for i in range(8)]
+
+    found = _ocr_heading_sizes([title, *body])
+
+    assert [ln.text for ln in [title, *body] if id(ln) in found] == [title.text]
+
+
+def test_ocr_scanner_noise_at_a_large_declared_size_is_not_a_heading():
+    # Trusting the declared size cuts both ways: on the same book the recogniser gave two pieces of
+    # scanner noise enormous sizes -- a lone '|' at 26pt, and 'at  1' at 17.1pt whose five
+    # characters are strewn across 191pt. Both are isolated and short, so size alone promoted them
+    # to headings, which is fabricating structure out of dirt on the platen.
+    #
+    # Two guards, both about the size being consistent with what is actually on the page: a
+    # heading has to have some text in it (MIN_HEADING_CHARS, which the born-digital path already
+    # required), and its characters cannot sit further apart than the type is tall.
+    from rebind.remediate import _ocr_heading_sizes
+
+    bar = _ocr_line("|", size=26.0, box_height=26.0, top=636.0, width=1.4)
+    strewn = _ocr_line("at  1", size=17.1, box_height=20.0, top=560.0, width=191.2)
+    body = [_ocr_line(f"body line {i} running the full width of its column here.",
+                      size=10.1, box_height=16.23, top=500.0 - i * 20.0)
+            for i in range(8)]
+
+    found = _ocr_heading_sizes([bar, strewn, *body])
+
+    assert found == {}, "scanner noise was promoted to a heading"
+
+
+def test_ocr_headings_are_isolated_against_their_neighbours_in_reading_order():
+    # Isolation used to be measured against whatever line sat nearest vertically anywhere on the
+    # page. On a two-page spread that is a line from the *other page*, sitting alongside at almost
+    # the same height, so a genuinely isolated title looked crowded and was rejected. The lines
+    # arrive in reading order (layout.order_page put them there), so the neighbours that matter
+    # are the ones before and after it in that order.
+    from rebind.remediate import _ocr_heading_sizes
+
+    # Reading order: the whole left page, then the whole right page.
+    left = [_ocr_line("Chapter 2: Rival Images", size=16.1, box_height=19.68, top=700.0,
+                      left=280.0, width=230.0)]
+    left += [_ocr_line(f"left body {i} running the full width of the column.",
+                       size=10.1, box_height=16.23, top=640.0 - i * 20.0, left=280.0)
+             for i in range(6)]
+    # The right page's text sits beside the title, level with it -- and must not crowd it.
+    right = [_ocr_line(f"right body {i} running the full width of the column.",
+                       size=10.1, box_height=16.23, top=700.0 - i * 20.0, left=700.0)
+             for i in range(7)]
+
+    found = _ocr_heading_sizes([*left, *right])
+
+    assert [ln.text for ln in [*left, *right] if id(ln) in found] == ["Chapter 2: Rival Images"]
