@@ -133,11 +133,6 @@ REGION_SCAN_DPI = 150
 # How much of the shorter box a figure and an element must share vertically to be on one row, and
 # so be ordered by which is further left rather than by which starts a shade higher.
 FIGURE_SAME_ROW_FRACTION = 0.5
-# The same question for two of the editor's elements, which are measured as percentages of the page
-# rather than in points. Lower than the line-level rule: these are whole blocks, and a folio sitting
-# inside a tall paragraph's vertical span shares its row for this purpose even though it covers
-# only a sliver of it.
-RECORD_SAME_ROW_FRACTION = 0.5
 # The longest a callout label runs to ("Ventral", "2-10 ml glass syringe", "3 mm"). Longer than
 # this, inside a guessed figure box, is a sentence -- prose the picture sits around, not part of it.
 FIGURE_LABEL_MAX_WORDS = 6
@@ -493,29 +488,31 @@ def _caption_groups(content_lines: list[TextLine], content_roles: list[str],
 
 
 def _records_in_reading_order(records: list[dict]) -> list[dict]:
-    """The editor's elements for one page: down the page, and across each row left to right.
+    """The editor's elements for one page, in the order the page is actually read.
 
-    Sorting on `top` alone (with `left` only as a tie-break on the exact same value) is what put a
-    page's folio ahead of the footer line beside it: the two differ by a fraction of a percent, so
-    the tie-break never fires and the reading order turns on that fraction. Grouping first is also
-    what keeps the two halves of a two-column page in the right order, since a left-column block
-    and the right-column block beside it overlap for most of their height and the left one wins.
+    That order is not re-derived here. It was decided by `layout.order_page`'s XY-cut before any
+    of this ran, `_lines_for` returned the page's lines in it, and every record carries the index
+    of the line it starts at as `_order`. Sorting on that reproduces the cut exactly -- including
+    its columns -- and the key never reaches the editor.
+
+    This function used to guess instead, grouping records into visual rows and sorting each row
+    left to right. Both halves of that were wrong on a real scanned book (a tilted two-page
+    spread, `The_power_of_images...`):
+
+    * The row's lower edge was `max(top + height)` over its members, which only ever grows, so a
+      row of overlapping multi-line paragraphs never closed. All twenty elements on a page landed
+      in one row.
+    * That row was then sorted by left edge -- and a tilted scan drifts every line's left edge
+      about 0.7pt further across as the page goes down, so the sort walked the page BOTTOM TO TOP.
+
+    On a two-column page it also read straight across the gutter, because a left-column element
+    and the right-column element beside it share a row. The tagged output was correct throughout
+    (it is built from the plan, which kept the cut's order); it was the person correcting that
+    output who was handed word salad to tab through.
     """
-    ordered = sorted(records, key=lambda r: (r["top"], r["left"]))
-    out: list[dict] = []
-    row: list[dict] = []
-    for record in ordered:
-        if row:
-            top = min(r["top"] for r in row)
-            bottom = max(r["top"] + r["height"] for r in row)
-            overlap = min(bottom, record["top"] + record["height"]) - max(top, record["top"])
-            shorter = min(record["height"], min(r["height"] for r in row))
-            if overlap <= RECORD_SAME_ROW_FRACTION * max(shorter, 0.01):
-                out.extend(sorted(row, key=lambda r: r["left"]))
-                row = []
-        row.append(record)
-    out.extend(sorted(row, key=lambda r: r["left"]))
-    return out
+    # Stable, so a table's row sub-elements -- which share their table's key -- stay with it.
+    return [{k: v for k, v in record.items() if k != "_order"}
+            for record in sorted(records, key=lambda r: r["_order"])]
 
 
 def _side_captions(lines: list[TextLine], bbox: tuple[float, float, float, float]
@@ -1336,13 +1333,19 @@ ROW_TAGS = tuple(tag for _key, tag, _label, _what in ROW_TAG_KEYS)
 
 
 def _element_records(src_page, plan: list[dict], lines: list[TextLine],
-                     mcid_of: list[int | None], edits: Edits) -> list[dict]:
+                     mcid_of: list[int | None], edits: Edits,
+                     source_index: list[int]) -> list[dict]:
     """One record per element for the app's editor: what it is, where it is, what it says.
 
     A `Table` entry also yields one sub-record per detected row -- its own id and bbox -- so a
     row's header/data status can be corrected without retagging the whole table (`ROW_TAG_KEYS`).
     A row's id is derived from the table's, never from a source line, so it can never collide with
     a top-level element's id.
+
+    `source_index` maps an index into `lines` back to the line's position on the page as the XY-cut
+    ordered it. Each record carries that as `_order`, which is what puts the editor's walk in
+    reading order (`_records_in_reading_order`); a table's rows share their table's key so they
+    stay with it. It is stripped before the records reach the editor.
     """
     out = []
     for entry in plan:
@@ -1354,6 +1357,7 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
                max(ln.bbox[2] for ln in members), max(ln.bbox[3] for ln in members))
         out.append({
             "id": entry["id"],
+            "_order": source_index[first],
             "page": src_page.number,
             "kind": entry["kind"],
             "alt": entry.get("alt", ""),
@@ -1374,6 +1378,7 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
                 default_kind = "TH" if row_index == 0 else "TD"
                 out.append({
                     "id": row_id,
+                    "_order": source_index[first],
                     "page": src_page.number,
                     "kind": edits.tags.get(row_id, default_kind),
                     "text": " ".join(ln.text.strip() for ln in row_lines).strip()[:300],
@@ -1387,12 +1392,12 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
     return out
 
 
-def _untagged_record(src_page, element_id: str, line: TextLine) -> dict:
+def _untagged_record(src_page, element_id: str, line: TextLine, order: int) -> dict:
     """A line Rebind left out of the structure tree -- page furniture, or text inside a figure --
     offered to the editor so it can be given a tag and read after all."""
     x0, y0, x1, y1 = line.bbox
     return {
-        "id": element_id, "page": src_page.number, "kind": "Artifact",
+        "id": element_id, "_order": order, "page": src_page.number, "kind": "Artifact",
         "text": line.text.strip()[:300],
         "left": round(100 * x0 / src_page.width, 2),
         "top": round(100 * (src_page.height - y1) / src_page.height, 2),
@@ -2149,7 +2154,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             mcid_of.append(next_mcid)
             mcids[content_source[index]] = next_mcid
             next_mcid += 1
-        records = _element_records(src_page, plan, content_lines, mcid_of, edits)
+        records = _element_records(src_page, plan, content_lines, mcid_of, edits, content_source)
         # Lines Rebind set aside are listed too, marked as untagged, so the editor can offer them.
         # They sit at the position they occupy on the page, so the list stays the page's order.
         #
@@ -2167,7 +2172,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                 continue
             if id(line) in owner_figure or id(line) in inside_undescribed:
                 continue
-            records.append(_untagged_record(src_page, line_ids[index], line))
+            records.append(_untagged_record(src_page, line_ids[index], line, index))
         page_elements.extend(_records_in_reading_order(records))
 
         # Draw each described figure (a crop of the rendered region) inside a tagged /Figure,

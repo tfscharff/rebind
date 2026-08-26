@@ -1516,3 +1516,54 @@ def test_text_inside_a_figure_is_not_also_an_element_of_its_own(tmp_path: Path):
     assert figures, [(e["kind"], e["text"][:30]) for e in result.elements]
     loose = [e for e in result.elements if e["text"].strip() in {"A", "B"}]
     assert not loose, f"a figure's callout labels must not be elements too: {loose}"
+
+
+def test_the_editor_lists_elements_down_each_column_not_across_the_gutter(tmp_path: Path):
+    # The editor's element list is the Tab order and the numbering on the boxes drawn over the
+    # page. It has to be the SAME reading order the structure tree gets -- the one the XY-cut
+    # recovered -- not a fresh guess from bounding boxes.
+    #
+    # It was a fresh guess: `_records_in_reading_order` re-derived the order by grouping records
+    # into visual rows and sorting each row left to right, which on a two-column page puts the
+    # left and right columns' elements in the same row and reads straight across the gutter. So
+    # `test_two_column_text_is_read_down_each_column_not_across_the_gutter` passed (the tagged
+    # output was right) while the person correcting that output tabbed through word salad.
+    from tests.fixtures import born_digital_pdf_two_column
+
+    source = born_digital_pdf_two_column(tmp_path / "in.pdf")
+    result = remediate(source, tmp_path / "out.pdf", title="T")
+
+    sides = [e["text"].split()[0] for e in result.elements
+             if e["text"].split() and e["text"].split()[0] in ("LEFT", "RIGHT")]
+    assert sides, "no column text reached the editor's element list at all"
+    assert sides == sorted(sides, key=lambda s: 0 if s == "LEFT" else 1), (
+        f"the editor walks across the gutter instead of down each column: {sides}")
+
+
+def test_editor_elements_keep_layout_order_when_geometry_disagrees():
+    # A tilted scan drifts every line's left edge a little further across as the page goes down
+    # (measured on a real sample: about 0.7pt per line). Ordering the editor's records by
+    # geometry turned that drift into the reading order -- the rows never closed, the whole page
+    # collapsed into one "row", and sorting it left-to-right walked the page BOTTOM TO TOP.
+    #
+    # Reading order is not a property of the boxes; it was already decided by the XY-cut, and
+    # `_order` carries that decision. Records must come back in that order whatever their
+    # coordinates say.
+    from rebind.remediate import _records_in_reading_order
+
+    def rec(order: int, left: float, top: float) -> dict:
+        # Tall enough that consecutive records overlap vertically -- a multi-line paragraph. That
+        # is what made the old row accumulator run away: its lower edge was max(top + height) over
+        # the members, so it only ever grew and the row never closed.
+        return {"id": f"e{order}", "_order": order, "left": left, "top": top,
+                "width": 40.0, "height": 30.0}
+
+    # Reading order 0,1,2,3 down the page -- but each one starts a little further LEFT than the
+    # last, the drift a tilted scan produces. Grouped and sorted left-to-right this comes back
+    # exactly reversed, which is the bug.
+    scrambled = [rec(3, 20.0, 40.0), rec(1, 22.0, 20.0), rec(0, 23.0, 10.0), rec(2, 21.0, 30.0)]
+
+    out = _records_in_reading_order(scrambled)
+
+    assert [r["id"] for r in out] == ["e0", "e1", "e2", "e3"]
+    assert all("_order" not in r for r in out), "the sort key must not leak to the editor"
