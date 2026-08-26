@@ -188,13 +188,15 @@ figure out of the reading order; other type keys type instead.
 | `f` | Figure | `t` | Table | `a` | Article |
 | `l` | List | `m` | Formula | `i` | Index |
 | `e` | Code | `o` | Form field | `n` | No structure |
-| `x` | Not read | `[` `]` | Previous / next page | | |
+| `v` | Footnote | `x` | Not read | `[` `]` | Previous / next page |
 
 `+` adds the region you are on to the reading order; `−` takes it out.
 
 `x` is an action, not a type: it marks content as an artifact rather than untagging it, since
 untagged content is a conformance failure. Page furniture and text inside figures are drawn hatched
 as "not read"; giving one a type puts it back into the reading order.
+
+On a table row, only `h` (Header cell) and `b` (Data cell) are offered, letting you correct which rows are headers without retagging the whole table.
 
 Every change rebuilds the document from the corrected plan rather than patching the structure tree,
 so grouping decisions change too. Every offered type has a test that applies it and validates the

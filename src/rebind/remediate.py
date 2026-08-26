@@ -981,9 +981,12 @@ def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextL
 
 
 def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
-                  document_elem: pikepdf.Object, page_obj: pikepdf.Object, leaf) -> pikepdf.Object:
+                  document_elem: pikepdf.Object, page_obj: pikepdf.Object, leaf,
+                  table_id: str, row_tags: dict[str, str]) -> pikepdf.Object:
     """Build a fully tagged `/Table` from a run of table cells: a regular grid of `/TR`s whose
-    first row is header cells (`/TH` scoped to their column) and the rest data cells (`/TD`).
+    first row is header cells (`/TH` scoped to their column) and the rest data cells (`/TD`) by
+    default -- a person can override any row's header/data status per row through the editor
+    (`row_tags`, keyed by row id; see `ROW_TAG_KEYS`).
 
     Cells are snapped to document-consistent column positions (their clustered left edges), so every
     row emits one cell per column -- an empty cell where a value is missing -- making the grid
@@ -1013,7 +1016,10 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
         by_column: dict[int, list[tuple[int, TextLine]]] = {}
         for mcid, line in row:
             by_column.setdefault(column_of(line), []).append((mcid, line))
-        is_header = row_index == 0
+        # The default guess -- the first detected row is the header -- unless a person corrected
+        # this specific row through the editor (Task 3's row sub-elements).
+        override = row_tags.get(f"{table_id}r{row_index}")
+        is_header = override == "TH" if override in ("TH", "TD") else row_index == 0
         cell_type = Name.TH if is_header else Name.TD
         row_cells: list[pikepdf.Object] = []
         for c in range(len(columns)):
@@ -1221,13 +1227,30 @@ class Edits:
     @classmethod
     def from_payload(cls, payload: dict | None) -> Edits:
         payload = payload or {}
-        allowed = set(EDITABLE_TAGS)
+
+        def allowed(k: str, v: str) -> bool:
+            # TH/TD only mean anything as a row inside a Table the editor already built (see
+            # ROW_TAG_KEYS); accepting one for any other id would let a crafted payload build a
+            # bare /TH or /TD with no /TR or /Table around it, which is illegal PDF/UA-2 structure.
+            # A row id is always `{table element id}r{row index}` and a table element id is always
+            # `p{page}n{index}` (see `entry["id"] =` below), so a real row id always ends in an
+            # `n<digits>` run immediately followed by an `r<digits>` run -- a shape no other id in
+            # this file produces (the picture-region id `p{page}r{index}`, for one, has no `n`
+            # before its `r` at all).
+            if v in ROW_TAGS:
+                return bool(_ROW_ID.search(k))
+            return v in EDITABLE_TAGS
+
         return cls(
-            tags={str(k): str(v) for k, v in (payload.get("tags") or {}).items() if v in allowed},
+            tags={str(k): str(v) for k, v in (payload.get("tags") or {}).items()
+                  if allowed(str(k), str(v))},
             removed={str(v) for v in (payload.get("removed") or [])},
             alts={str(k): str(v).strip() for k, v in (payload.get("alts") or {}).items()
                   if str(v).strip()},
         )
+
+
+_ROW_ID = re.compile(r"n\d+r\d+$")
 
 
 # What a person may retag an element as, and how each has to be built. ISO 32005 Table 5 governs
@@ -1248,7 +1271,8 @@ class Edits:
 # what the entry points at -- and Rebind cannot know which heading a line of a contents list refers
 # to without guessing. So it is not offered: a table of contents that names the wrong targets is
 # worse than one tagged as ordinary paragraphs.
-CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "Formula", "Form")
+CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "Formula", "Form",
+                "Note")
 # /Part is not offered: it is a container with no behaviour of its own that /Sect and /Div do not
 # already have, so it was one more thing to choose between for no gain to a reader.
 GROUPING_TAGS = ("Sect", "Div", "Art", "Index", "NonStruct")
@@ -1288,6 +1312,8 @@ TAG_KEYS = (
     ("m", "Formula", "Formula (maths)", "A mathematical or chemical expression."),
     ("e", "Code", "Code", "Program code or other text where the exact characters matter."),
     ("o", "Form", "Form field", "An interactive field a reader fills in."),
+    ("v", "Note", "Footnote", "A footnote or endnote — read separately from the body text it "
+                              "annotates, not in the middle of it."),
 )
 
 # Not a type, so not in TAG_KEYS -- an action, on its own key: take this out of the reading order
@@ -1298,10 +1324,26 @@ ARTIFACT_LABEL = "Not read"
 ARTIFACT_WHAT = ("Page furniture — on the page, but skipped by a screen reader. Give it a type to "
                  "have it read after all.")
 
+# TH/TD are never offered as a whole-element tag (see EDITABLE_TAGS) -- they only mean something
+# as a row inside a Table the editor already built. They get their own small keymap, sent to the
+# frontend separately (like ARTIFACT_KEY) and swapped in only when the focused element is a row.
+ROW_TAG_KEYS = (
+    ("h", "TH", "Header cell", "This row labels the columns beneath it — a screen reader reads "
+                               "it before each data cell in its column."),
+    ("b", "TD", "Data cell", "An ordinary cell of the table, read against its column's header."),
+)
+ROW_TAGS = tuple(tag for _key, tag, _label, _what in ROW_TAG_KEYS)
+
 
 def _element_records(src_page, plan: list[dict], lines: list[TextLine],
-                     mcid_of: list[int | None]) -> list[dict]:
-    """One record per element for the app's editor: what it is, where it is, what it says."""
+                     mcid_of: list[int | None], edits: Edits) -> list[dict]:
+    """One record per element for the app's editor: what it is, where it is, what it says.
+
+    A `Table` entry also yields one sub-record per detected row -- its own id and bbox -- so a
+    row's header/data status can be corrected without retagging the whole table (`ROW_TAG_KEYS`).
+    A row's id is derived from the table's, never from a source line, so it can never collide with
+    a top-level element's id.
+    """
     out = []
     for entry in plan:
         first, last = entry["first"], entry["last"]
@@ -1322,6 +1364,26 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
             "height": round(100 * (box[3] - box[1]) / src_page.height, 2),
             "editable": True,
         })
+        if entry["kind"] == "Table":
+            cells = [(i, lines[i]) for i in range(first, last + 1)]
+            for row_index, row in enumerate(_table_rows(cells)):
+                row_lines = [line for _i, line in row]
+                rbox = (min(ln.bbox[0] for ln in row_lines), min(ln.bbox[1] for ln in row_lines),
+                        max(ln.bbox[2] for ln in row_lines), max(ln.bbox[3] for ln in row_lines))
+                row_id = f"{entry['id']}r{row_index}"
+                default_kind = "TH" if row_index == 0 else "TD"
+                out.append({
+                    "id": row_id,
+                    "page": src_page.number,
+                    "kind": edits.tags.get(row_id, default_kind),
+                    "text": " ".join(ln.text.strip() for ln in row_lines).strip()[:300],
+                    "left": round(100 * rbox[0] / src_page.width, 2),
+                    "top": round(100 * (src_page.height - rbox[3]) / src_page.height, 2),
+                    "width": round(100 * (rbox[2] - rbox[0]) / src_page.width, 2),
+                    "height": round(100 * (rbox[3] - rbox[1]) / src_page.height, 2),
+                    "editable": True,
+                    "row": True,
+                })
     return out
 
 
@@ -1487,7 +1549,7 @@ def _same_paragraph(lines: list[TextLine], first: int, index: int,
 def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
                     mcid_of: list[int | None],
                     document_elem: pikepdf.Object, page_obj: pikepdf.Object,
-                    caption_hosts: list | None = None):
+                    caption_hosts: list | None = None, edits: Edits | None = None):
     """Build one page's structure elements from an (already decided, possibly edited) plan.
 
     Returns (top-level elements in reading order, owners) where `owners[mcid]` is the leaf element
@@ -1526,8 +1588,9 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
         indices = list(range(first, last + 1))
 
         if kind == "Table":
+            row_tags = edits.tags if edits else {}
             tops.append(_tagged_table(pdf, [(i, lines[i]) for i in indices],
-                                      document_elem, page_obj, leaf))
+                                      document_elem, page_obj, leaf, entry["id"], row_tags))
         elif kind == "L":
             lst = pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.L, P=document_elem, K=Array([])))
@@ -1875,18 +1938,23 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
 
     struct_root = pdf.make_indirect(Dictionary(Type=Name.StructTreeRoot))
     # PDF/UA-2 (ISO 14289-2) namespace. All the structure types below (/P, /H1-/H6, /Table, /TR,
-    # /TD, /TH, /L, /LI, /LBody, /Figure) are retained as-is in the PDF 2.0 Standard Structure
-    # Namespace -- confirmed against `verapdf -f ua2` (see docs/decisions/ for the spike). Only the
-    # root Document element needs /NS set explicitly; every descendant inherits it, so nothing else
-    # in this function's tag-building changes. Getting the namespace URI wrong (e.g. the plausible
-    # but incorrect "http://iso.org/pdf/ssn") fails clause 8.2.5.2 silently -- confirmed by trial.
+    # /TD, /TH, /L, /LI, /LBody, /Figure) keep their names as-is in the PDF 2.0 Standard Structure
+    # Namespace -- confirmed against `verapdf -f ua2` (see docs/decisions/ for the spike). /Note is
+    # the one exception: it still needs the RoleMap entry below. Only the root Document element
+    # needs /NS set explicitly; every descendant inherits it, so nothing else in this function's
+    # tag-building changes. Getting the namespace URI wrong (e.g. the plausible but incorrect
+    # "http://iso.org/pdf/ssn") fails clause 8.2.5.2 silently -- confirmed by trial.
     PDF2_SSN_NAMESPACE = "http://iso.org/pdf2/ssn"
     ssn_namespace = pdf.make_indirect(Dictionary(Type=Name.Namespace, NS=String(PDF2_SSN_NAMESPACE)))
     document_elem = pdf.make_indirect(
         Dictionary(Type=Name.StructElem, S=Name.Document, NS=ssn_namespace, P=struct_root, K=Array([]))
     )
     struct_root.K = Array([document_elem])
-    struct_root.RoleMap = Dictionary()
+    # PDF/UA-2 clause 8.2.5.14: "the Note standard structure type shall not be present in
+    # conforming documents unless role mapped to a structure element in the PDF 2.0 namespace" --
+    # unlike its neighbours above, /Note fails validation without this line. Confirmed by trial:
+    # removing it reproduces that exact veraPDF failure.
+    struct_root.RoleMap = Dictionary(Note=Name.P)
     struct_root.Namespaces = Array([ssn_namespace])
     parent_tree_nums = Array([])
     # Page StructParents keys use 0..page_count-1 (the enumerate index below); annotation
@@ -2081,7 +2149,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             mcid_of.append(next_mcid)
             mcids[content_source[index]] = next_mcid
             next_mcid += 1
-        records = _element_records(src_page, plan, content_lines, mcid_of)
+        records = _element_records(src_page, plan, content_lines, mcid_of, edits)
         # Lines Rebind set aside are listed too, marked as untagged, so the editor can offer them.
         # They sit at the position they occupy on the page, so the list stays the page's order.
         #
@@ -2152,7 +2220,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         ]
         tops, owner_of_mcid = _page_structure(pdf, content_lines, plan, mcid_of,
                                               document_elem, page.obj,
-                                              caption_hosts=figure_elems)
+                                              caption_hosts=figure_elems, edits=edits)
         # The parent tree is indexed BY marked-content id, so every slot must hold the element that
         # owns that id. Appending here instead of assigning (as this briefly did) shifts the figure
         # entries past their own ids and leaves nulls behind -- content that names a structure

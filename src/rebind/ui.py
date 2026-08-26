@@ -414,7 +414,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // ---- State ---------------------------------------------------------------------------------
   var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
           tags_edit:{},removed:{},alts:{},focused:null,figures:[],checks:[],status:null,
-          palette:false,walked:{},artifact:null,allKeys:[]};
+          palette:false,walked:{},artifact:null,allKeys:[],rowKeys:[]};
 
   function done(id, name, s){
     if(elapsedTimer) clearInterval(elapsedTimer);
@@ -765,6 +765,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     fetch('/jobs/'+id+'/elements').then(function(r){return r.json();}).then(function(d){
       if(d.error){ host.innerHTML=''; return; }
       ed.elements=d.elements||[]; ed.pages=d.pages||{}; ed.tags=d.tags||[]; ed.keys=d.keys||[];
+      ed.rowKeys=d.rowKeys||[];
       // "Not read" is an action, not a type, so it arrives separately -- but it answers to a key
       // exactly like the types do, so the editor holds them in one list for lookup.
       ed.artifact=d.artifact||null;
@@ -787,8 +788,18 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
 
   function keyFor(tag){
     var found=null;
-    ed.allKeys.forEach(function(k){ if(k.tag===tag) found=k; });
+    // TH/TD live in a separate keymap from everything else, but a row's label still has to be
+    // found by tag name wherever any element's label is looked up (showType, boxHtml) -- the two
+    // vocabularies never share a tag name, so searching both together is safe.
+    ed.allKeys.concat(ed.rowKeys).forEach(function(k){ if(k.tag===tag) found=k; });
     return found;
+  }
+
+  // Which keymap answers to the keyboard on this element: the row-only one for a table row's
+  // sub-element, the general one for everything else. A table row never sees "make this a
+  // Division"; an ordinary paragraph never sees "make this a header cell".
+  function keysFor(e){
+    return e.row? ed.rowKeys : ed.allKeys;
   }
 
   function tagLabel(t){
@@ -865,13 +876,15 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     // pair of controls rather than hiding among the types. Whichever one does nothing here is
     // disabled instead of absent, so the pair stays in the same place on every element.
     var out=(k==='Artifact');
-    h+='<div class="addrem">'+
-      '<button type="button" class="btn ghost small" id="addel"'+(out?'':' disabled')+
-      ' title="Add this to the reading order"><b>+</b> Add</button>'+
-      '<button type="button" class="btn ghost small" id="delel"'+(out?' disabled':'')+
-      ' title="Take this out of the reading order"><b>−</b> Remove</button>'+
-      '<span class="hint">'+(out? 'Not read. + puts it into the reading order.'
-                                : 'In the reading order. − takes it out.')+'</span></div>';
+    if(!e.row){
+      h+='<div class="addrem">'+
+        '<button type="button" class="btn ghost small" id="addel"'+(out?'':' disabled')+
+        ' title="Add this to the reading order"><b>+</b> Add</button>'+
+        '<button type="button" class="btn ghost small" id="delel"'+(out?' disabled':'')+
+        ' title="Take this out of the reading order"><b>−</b> Remove</button>'+
+        '<span class="hint">'+(out? 'Not read. + puts it into the reading order.'
+                                  : 'In the reading order. − takes it out.')+'</span></div>';
+    }
     if(k==='Figure'){
       // A figure is the one thing a machine cannot finish. The box is here the moment you land on
       // one, pre-filled with the best guess Rebind has -- the document's own caption where there
@@ -985,9 +998,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
           return;
         }
         if(key==='['||key===']'){ ev.preventDefault(); turnPage(key===']'?1:-1); return; }
-        // The two edits that are not "what is this?", on the obvious pair of keys.
-        if(key==='+'||key==='='){ ev.preventDefault(); addElement(e.id); return; }
-        if(key==='-'||key==='_'){ ev.preventDefault(); setKind(e.id, 'Artifact'); return; }
+        // The two edits that are not "what is this?", on the obvious pair of keys -- meaningless
+        // on a table row, which is never independently added or removed (see showType).
+        if(!e.row && (key==='+'||key==='=')){ ev.preventDefault(); addElement(e.id); return; }
+        if(!e.row && (key==='-'||key==='_')){ ev.preventDefault(); setKind(e.id, 'Artifact'); return; }
         if(key==='ArrowDown'||key==='ArrowUp'){
           var to=boxes[index+(key==='ArrowDown'?1:-1)];
           if(to){ ev.preventDefault(); to.focus(); }
@@ -1012,9 +1026,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
           return;
         }
         // The key sets the type straight away. Enter is only for when you cannot remember which
-        // key you want; knowing it should never cost you a menu.
+        // key you want; knowing it should never cost you a menu. A row answers to its own, smaller
+        // keymap (keysFor) rather than the whole document's.
         var hit=null;
-        ed.allKeys.forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });
+        keysFor(e).forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });
         if(hit){ ev.preventDefault(); setKind(e.id, hit); }
       });
     });
@@ -1031,6 +1046,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     ed.elements.forEach(function(x){ if(x.id===elementId) e=x; });
     if(!e) return;
     var current=kindOf(e);
+    var keys=keysFor(e);
     var host=document.createElement('div');
     host.className='palette';
     host.id='palette';
@@ -1039,7 +1055,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     host.setAttribute('aria-label','Change what this element is');
     host.innerHTML='<div class="card"><h2>What is this?</h2>'+
       '<p class="sub">Press a key. Esc leaves it as it is.</p><ul class="keys">'+
-      ed.allKeys.map(function(k){
+      keys.map(function(k){
         return '<li'+(k.tag===current?' class="current"':'')+
           (k.tag==='Artifact'?' class="action"':'')+'><kbd>'+esc(k.key)+'</kbd>'+
           '<span><span class="lab">'+esc(k.label)+'</span><br>'+
@@ -1054,7 +1070,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       if(ev.key==='Escape'){ ev.preventDefault(); closePalette(); focusBox(elementId); return; }
       var pressed=(ev.key||'').toLowerCase();
       var hit=null;
-      ed.allKeys.forEach(function(k){ if(k.key===pressed) hit=k.tag; });
+      keys.forEach(function(k){ if(k.key===pressed) hit=k.tag; });
       if(hit){ ev.preventDefault(); closePalette(); setKind(elementId, hit); }
     });
     host.addEventListener('click',function(ev){

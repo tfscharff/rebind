@@ -388,6 +388,43 @@ def test_every_hotkey_names_a_tag_that_exists():
     assert "Artifact" not in EDITABLE_TAGS
 
 
+def test_row_hotkeys_are_well_formed_and_never_offered_as_whole_element_tags():
+    # TH/TD only ever make sense as a row inside an already-tagged Table -- offering them as a
+    # whole-element retag would let a bare paragraph become a /TH with no /TR or /Table around it,
+    # which fails PDF/UA-2 structurally (Table 5 restricts what may hold a /TH directly).
+    from rebind.remediate import EDITABLE_TAGS, ROW_TAG_KEYS
+
+    keys = [key for key, _tag, _label, _what in ROW_TAG_KEYS]
+    assert len(keys) == len(set(keys)), "row hotkeys must be unique"
+    tags = {tag for _key, tag, _label, _what in ROW_TAG_KEYS}
+    assert tags == {"TH", "TD"}
+    assert tags.isdisjoint(EDITABLE_TAGS), "TH/TD must never be offered as whole-element tags"
+    for key, tag, label, what in ROW_TAG_KEYS:
+        assert len(key) == 1, f"{tag}: a hotkey should be one keystroke, got {key!r}"
+        assert label and what and what != label, f"{tag}: needs a label and an explanation"
+
+
+def test_edits_accepts_row_tags_alongside_element_tags():
+    from rebind.remediate import Edits
+
+    edits = Edits.from_payload({"tags": {"p1n0": "H2", "p1n0r0": "TH", "p1n0r1": "TD",
+                                          "p1n0r2": "NotARealTag"}})
+    assert edits.tags == {"p1n0": "H2", "p1n0r0": "TH", "p1n0r1": "TD"}
+
+
+def test_edits_rejects_row_tags_on_a_non_row_id():
+    # TH/TD only mean something as a row inside an already-built Table (see ROW_TAG_KEYS) -- a
+    # payload trying to set a whole element's id to TH/TD must be dropped, the same way a bogus
+    # tag string already is, or a crafted payload could build a bare /TH with no /TR or /Table
+    # around it, which fails PDF/UA-2 structurally.
+    from rebind.remediate import Edits
+
+    edits = Edits.from_payload({"tags": {"p1n3": "TH", "p1n3r0": "TH", "p3r0": "TD"}})
+    assert "p1n3" not in edits.tags
+    assert "p3r0" not in edits.tags
+    assert edits.tags == {"p1n3r0": "TH"}
+
+
 def test_a_running_footer_is_an_artifact_not_content(tmp_path: Path):
     # PDF/UA requires page furniture to be marked as an artifact. Tagged as content, a screen
     # reader announces the running head and folio in the middle of the prose on every page.
@@ -1117,6 +1154,61 @@ def test_tagged_table_is_pdf_ua_compliant(tmp_path: Path, verapdf_exe: Path):
     assert result.compliant, result.summary()
 
 
+def test_a_row_can_be_promoted_to_header_by_id(tmp_path: Path, verapdf_exe: Path):
+    # Rebind's default guess -- the first detected row is the header -- is sometimes wrong (a
+    # table with no header row at all, or one whose header is really its second row). The row
+    # sub-elements from Task 3 exist so a person can correct exactly one row without retagging the
+    # whole table.
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf_with_table
+
+    source = born_digital_pdf_with_table(tmp_path / "in.pdf")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    table = next(e for e in plain.elements if e["kind"] == "Table")
+
+    out = tmp_path / "out.pdf"
+    # Swap the header from row 0 to row 1 ("North" becomes the header row instead of "Region").
+    result = remediate(source, out, title="T", edits=Edits(
+        tags={f"{table['id']}r0": "TD", f"{table['id']}r1": "TH"}))
+
+    rows = [e for e in result.elements if e.get("row") and e["id"].startswith(table["id"] + "r")]
+    assert [r["kind"] for r in rows] == ["TD", "TH", "TD", "TD"]
+
+    with pikepdf.open(out) as pdf:
+        tbl = next(e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Table")
+        trs = list(tbl.K)
+        first_row_cell_types = {str(c.get("/S")) for c in trs[0].K}
+        second_row_cell_types = {str(c.get("/S")) for c in trs[1].K}
+        assert first_row_cell_types == {"/TD"}
+        assert second_row_cell_types == {"/TH"}
+
+    result_report = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result_report.compliant, result_report.summary()
+
+
+def test_table_rows_are_offered_as_editable_sub_elements(tmp_path: Path):
+    # A table's header row is a guess (today: always the first detected row). Exposing each row as
+    # its own element -- with its own id and bbox -- is what lets a person correct that guess for
+    # one row without retagging the whole table.
+    from tests.fixtures import born_digital_pdf_with_table
+
+    source = born_digital_pdf_with_table(tmp_path / "in.pdf")
+    result = remediate(source, tmp_path / "out.pdf", title="T")
+
+    table = next(e for e in result.elements if e["kind"] == "Table")
+    rows = [e for e in result.elements if e.get("row") and e["id"].startswith(table["id"] + "r")]
+    assert len(rows) == 4, rows          # header + 3 data rows, per born_digital_pdf_with_table
+    assert rows[0]["id"] == f"{table['id']}r0"
+    assert rows[0]["kind"] == "TH"
+    assert [r["kind"] for r in rows[1:]] == ["TD", "TD", "TD"]
+    for row in rows:
+        assert row["editable"] is True
+        # A row's box sits inside the table's box -- it did not escape onto some other part of the
+        # page.
+        assert table["top"] <= row["top"] <= row["top"] + row["height"] <= table["top"] + table["height"] + 0.5
+
+
 def test_outline_is_built_from_recovered_headings_with_structure_destinations(
         tmp_path: Path, verapdf_exe: Path):
     # PDF/UA-2 clause 8.8 requires internal destinations to be structure destinations; nothing
@@ -1173,6 +1265,34 @@ def test_figure_is_decorative_until_described(tmp_path: Path):
     with pikepdf.open(tmp_path / "out2.pdf") as pdf:
         figs = [e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Figure"]
         assert len(figs) == 1 and str(figs[0].get("/Alt")) == "A red bar chart of sales."
+
+
+def test_footnote_tag_builds_as_note(tmp_path: Path, verapdf_exe: Path):
+    # /Note is PDF 2.0's structure type for a footnote or endnote -- content read separately from
+    # the body text it annotates, not inline with it. Its content is built the same simple way as
+    # P, H1-H6 and BlockQuote (it takes its element's marked content directly), but unlike them it
+    # needs a RoleMap entry to /P or PDF/UA-2 clause 8.2.5.14 rejects it -- see the RoleMap comment
+    # in remediate.py.
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf
+
+    source = born_digital_pdf(
+        "<h1>Title</h1><p>Body text.</p><p>1. A footnote at the bottom of the page.</p>",
+        tmp_path / "in.pdf")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    target = next(e["id"] for e in plain.elements
+                  if e["kind"] == "P" and "footnote" in e["text"])
+
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T", edits=Edits(tags={target: "Note"}))
+
+    with pikepdf.open(out) as pdf:
+        notes = [e for e in pdf.Root.StructTreeRoot.K[0].K if str(e.get("/S")) == "/Note"]
+        assert len(notes) == 1
+
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
 
 
 def test_figure_with_a_caption_is_described_automatically(tmp_path: Path):
