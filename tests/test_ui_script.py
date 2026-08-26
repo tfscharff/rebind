@@ -148,7 +148,7 @@ def test_a_hotkey_sets_the_type_without_opening_anything():
     # Enter is for when you cannot remember the key. Knowing it must never cost you a menu, and
     # setting a type must move you on without a Tab, so a page is one stream of keystrokes.
     script = _script()
-    assert "ed.allKeys.forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });" in script
+    assert "keysFor(e).forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });" in script
     assert "if(hit){ ev.preventDefault(); setKind(e.id, hit); }" in script
     assert "if(at>=0 && at+1<boxes.length){ boxes[at+1].focus(); return; }" in script
 
