@@ -984,7 +984,9 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
                   document_elem: pikepdf.Object, page_obj: pikepdf.Object, leaf,
                   table_id: str, row_tags: dict[str, str]) -> pikepdf.Object:
     """Build a fully tagged `/Table` from a run of table cells: a regular grid of `/TR`s whose
-    first row is header cells (`/TH` scoped to their column) and the rest data cells (`/TD`).
+    first row is header cells (`/TH` scoped to their column) and the rest data cells (`/TD`) by
+    default -- a person can override any row's header/data status per row through the editor
+    (`row_tags`, keyed by row id; see `ROW_TAG_KEYS`).
 
     Cells are snapped to document-consistent column positions (their clustered left edges), so every
     row emits one cell per column -- an empty cell where a value is missing -- making the grid
@@ -1225,13 +1227,30 @@ class Edits:
     @classmethod
     def from_payload(cls, payload: dict | None) -> Edits:
         payload = payload or {}
-        allowed = set(EDITABLE_TAGS) | set(ROW_TAGS)
+
+        def allowed(k: str, v: str) -> bool:
+            # TH/TD only mean anything as a row inside a Table the editor already built (see
+            # ROW_TAG_KEYS); accepting one for any other id would let a crafted payload build a
+            # bare /TH or /TD with no /TR or /Table around it, which is illegal PDF/UA-2 structure.
+            # A row id is always `{table element id}r{row index}` and a table element id is always
+            # `p{page}n{index}` (see `entry["id"] =` below), so a real row id always ends in an
+            # `n<digits>` run immediately followed by an `r<digits>` run -- a shape no other id in
+            # this file produces (the picture-region id `p{page}r{index}`, for one, has no `n`
+            # before its `r` at all).
+            if v in ROW_TAGS:
+                return bool(_ROW_ID.search(k))
+            return v in EDITABLE_TAGS
+
         return cls(
-            tags={str(k): str(v) for k, v in (payload.get("tags") or {}).items() if v in allowed},
+            tags={str(k): str(v) for k, v in (payload.get("tags") or {}).items()
+                  if allowed(str(k), str(v))},
             removed={str(v) for v in (payload.get("removed") or [])},
             alts={str(k): str(v).strip() for k, v in (payload.get("alts") or {}).items()
                   if str(v).strip()},
         )
+
+
+_ROW_ID = re.compile(r"n\d+r\d+$")
 
 
 # What a person may retag an element as, and how each has to be built. ISO 32005 Table 5 governs
@@ -1919,17 +1938,22 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
 
     struct_root = pdf.make_indirect(Dictionary(Type=Name.StructTreeRoot))
     # PDF/UA-2 (ISO 14289-2) namespace. All the structure types below (/P, /H1-/H6, /Table, /TR,
-    # /TD, /TH, /L, /LI, /LBody, /Figure, /Note) are retained as-is in the PDF 2.0 Standard Structure
-    # Namespace -- confirmed against `verapdf -f ua2` (see docs/decisions/ for the spike). Only the
-    # root Document element needs /NS set explicitly; every descendant inherits it, so nothing else
-    # in this function's tag-building changes. Getting the namespace URI wrong (e.g. the plausible
-    # but incorrect "http://iso.org/pdf/ssn") fails clause 8.2.5.2 silently -- confirmed by trial.
+    # /TD, /TH, /L, /LI, /LBody, /Figure) keep their names as-is in the PDF 2.0 Standard Structure
+    # Namespace -- confirmed against `verapdf -f ua2` (see docs/decisions/ for the spike). /Note is
+    # the one exception: it still needs the RoleMap entry below. Only the root Document element
+    # needs /NS set explicitly; every descendant inherits it, so nothing else in this function's
+    # tag-building changes. Getting the namespace URI wrong (e.g. the plausible but incorrect
+    # "http://iso.org/pdf/ssn") fails clause 8.2.5.2 silently -- confirmed by trial.
     PDF2_SSN_NAMESPACE = "http://iso.org/pdf2/ssn"
     ssn_namespace = pdf.make_indirect(Dictionary(Type=Name.Namespace, NS=String(PDF2_SSN_NAMESPACE)))
     document_elem = pdf.make_indirect(
         Dictionary(Type=Name.StructElem, S=Name.Document, NS=ssn_namespace, P=struct_root, K=Array([]))
     )
     struct_root.K = Array([document_elem])
+    # PDF/UA-2 clause 8.2.5.14: "the Note standard structure type shall not be present in
+    # conforming documents unless role mapped to a structure element in the PDF 2.0 namespace" --
+    # unlike its neighbours above, /Note fails validation without this line. Confirmed by trial:
+    # removing it reproduces that exact veraPDF failure.
     struct_root.RoleMap = Dictionary(Note=Name.P)
     struct_root.Namespaces = Array([ssn_namespace])
     parent_tree_nums = Array([])

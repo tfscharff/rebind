@@ -412,6 +412,19 @@ def test_edits_accepts_row_tags_alongside_element_tags():
     assert edits.tags == {"p1n0": "H2", "p1n0r0": "TH", "p1n0r1": "TD"}
 
 
+def test_edits_rejects_row_tags_on_a_non_row_id():
+    # TH/TD only mean something as a row inside an already-built Table (see ROW_TAG_KEYS) -- a
+    # payload trying to set a whole element's id to TH/TD must be dropped, the same way a bogus
+    # tag string already is, or a crafted payload could build a bare /TH with no /TR or /Table
+    # around it, which fails PDF/UA-2 structurally.
+    from rebind.remediate import Edits
+
+    edits = Edits.from_payload({"tags": {"p1n3": "TH", "p1n3r0": "TH", "p3r0": "TD"}})
+    assert "p1n3" not in edits.tags
+    assert "p3r0" not in edits.tags
+    assert edits.tags == {"p1n3r0": "TH"}
+
+
 def test_a_running_footer_is_an_artifact_not_content(tmp_path: Path):
     # PDF/UA requires page furniture to be marked as an artifact. Tagged as content, a screen
     # reader announces the running head and folio in the middle of the prose on every page.
@@ -1256,8 +1269,10 @@ def test_figure_is_decorative_until_described(tmp_path: Path):
 
 def test_footnote_tag_builds_as_note(tmp_path: Path, verapdf_exe: Path):
     # /Note is PDF 2.0's structure type for a footnote or endnote -- content read separately from
-    # the body text it annotates, not inline with it. It needs no special construction: like P,
-    # H1-H6 and BlockQuote, it takes its element's marked content directly.
+    # the body text it annotates, not inline with it. Its content is built the same simple way as
+    # P, H1-H6 and BlockQuote (it takes its element's marked content directly), but unlike them it
+    # needs a RoleMap entry to /P or PDF/UA-2 clause 8.2.5.14 rejects it -- see the RoleMap comment
+    # in remediate.py.
     from rebind.remediate import Edits
     from rebind.validate import validate_pdf_ua
     from tests.fixtures import born_digital_pdf
