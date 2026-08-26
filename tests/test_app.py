@@ -65,6 +65,10 @@ def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
     assert body["artifact"]["tag"] == "Artifact"
     assert body["artifact"]["key"] not in keys
     assert "Artifact" not in {entry["tag"] for entry in body["keys"]}
+    row_keys = {entry["key"] for entry in body["rowKeys"]}
+    assert row_keys == {"h", "b"}
+    assert {entry["tag"] for entry in body["rowKeys"]} == {"TH", "TD"}
+    assert row_keys.isdisjoint(keys), "row hotkeys must not collide with the whole-element ones"
     for element in body["elements"]:
         assert 0 <= element["left"] <= 100 and 0 <= element["top"] <= 100, element
 
@@ -81,6 +85,32 @@ def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
     # A removed element is not read, but it is still offered -- listed as untagged, so the same
     # control that removed it can put it back.
     assert after[ids[3]] == "Artifact"
+
+
+def test_table_rows_reach_the_editor_with_their_own_ids(tmp_path: Path):
+    from tests.fixtures import born_digital_pdf_with_table
+
+    source = born_digital_pdf_with_table(tmp_path / "in.pdf")
+    client = TestClient(create_app())
+    job_id = client.post("/convert?filename=in.pdf", content=source.read_bytes()).json()["job_id"]
+    assert _run(client, job_id)["status"] == "done"
+
+    body = client.get(f"/jobs/{job_id}/elements").json()
+    table = next(e for e in body["elements"] if e["kind"] == "Table")
+    rows = [e for e in body["elements"] if e.get("row")]
+    assert len(rows) == 4
+    assert all(r["id"].startswith(table["id"] + "r") for r in rows)
+
+    client.post(f"/jobs/{job_id}/edits",
+                json={"tags": {f"{table['id']}r0": "TD", f"{table['id']}r1": "TH"}})
+    status = _run(client, job_id)
+    assert status["status"] == "done", status.get("error")
+
+    after_rows = {e["id"]: e["kind"]
+                  for e in client.get(f"/jobs/{job_id}/elements").json()["elements"]
+                  if e.get("row")}
+    assert after_rows[f"{table['id']}r0"] == "TD"
+    assert after_rows[f"{table['id']}r1"] == "TH"
 
 
 def test_a_finished_job_carries_the_adobe_checklist(tmp_path: Path):

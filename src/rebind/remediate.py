@@ -1311,7 +1311,7 @@ ARTIFACT_WHAT = ("Page furniture — on the page, but skipped by a screen reader
 ROW_TAG_KEYS = (
     ("h", "TH", "Header cell", "This row labels the columns beneath it — a screen reader reads "
                                "it before each data cell in its column."),
-    ("c", "TD", "Data cell", "An ordinary cell of the table, read against its column's header."),
+    ("b", "TD", "Data cell", "An ordinary cell of the table, read against its column's header."),
 )
 ROW_TAGS = tuple(tag for _key, tag, _label, _what in ROW_TAG_KEYS)
 

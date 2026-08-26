@@ -227,6 +227,7 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
             ARTIFACT_LABEL,
             ARTIFACT_WHAT,
             EDITABLE_TAGS,
+            ROW_TAG_KEYS,
             TAG_KEYS,
         )
 
@@ -239,6 +240,11 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
             # an action, not one more type to choose between.
             "artifact": {"key": ARTIFACT_KEY, "tag": "Artifact", "label": ARTIFACT_LABEL,
                          "what": ARTIFACT_WHAT},
+            # A second, small keymap -- TH/TD only mean something on a table's row sub-elements
+            # (remediate._element_records), so they are never mixed into the general "keys" list a
+            # librarian sees on an ordinary paragraph.
+            "rowKeys": [{"key": key, "tag": tag, "label": label, "what": what}
+                        for key, tag, label, what in ROW_TAG_KEYS],
         })
 
     async def job_edits(request: Request) -> JSONResponse:
