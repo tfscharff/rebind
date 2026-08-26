@@ -1313,8 +1313,14 @@ ROW_TAGS = tuple(tag for _key, tag, _label, _what in ROW_TAG_KEYS)
 
 
 def _element_records(src_page, plan: list[dict], lines: list[TextLine],
-                     mcid_of: list[int | None]) -> list[dict]:
-    """One record per element for the app's editor: what it is, where it is, what it says."""
+                     mcid_of: list[int | None], edits: Edits) -> list[dict]:
+    """One record per element for the app's editor: what it is, where it is, what it says.
+
+    A `Table` entry also yields one sub-record per detected row -- its own id and bbox -- so a
+    row's header/data status can be corrected without retagging the whole table (`ROW_TAG_KEYS`).
+    A row's id is derived from the table's, never from a source line, so it can never collide with
+    a top-level element's id.
+    """
     out = []
     for entry in plan:
         first, last = entry["first"], entry["last"]
@@ -1335,6 +1341,26 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
             "height": round(100 * (box[3] - box[1]) / src_page.height, 2),
             "editable": True,
         })
+        if entry["kind"] == "Table":
+            cells = [(i, lines[i]) for i in range(first, last + 1)]
+            for row_index, row in enumerate(_table_rows(cells)):
+                row_lines = [line for _i, line in row]
+                rbox = (min(ln.bbox[0] for ln in row_lines), min(ln.bbox[1] for ln in row_lines),
+                        max(ln.bbox[2] for ln in row_lines), max(ln.bbox[3] for ln in row_lines))
+                row_id = f"{entry['id']}r{row_index}"
+                default_kind = "TH" if row_index == 0 else "TD"
+                out.append({
+                    "id": row_id,
+                    "page": src_page.number,
+                    "kind": edits.tags.get(row_id, default_kind),
+                    "text": " ".join(ln.text.strip() for ln in row_lines).strip()[:300],
+                    "left": round(100 * rbox[0] / src_page.width, 2),
+                    "top": round(100 * (src_page.height - rbox[3]) / src_page.height, 2),
+                    "width": round(100 * (rbox[2] - rbox[0]) / src_page.width, 2),
+                    "height": round(100 * (rbox[3] - rbox[1]) / src_page.height, 2),
+                    "editable": True,
+                    "row": True,
+                })
     return out
 
 
@@ -2094,7 +2120,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             mcid_of.append(next_mcid)
             mcids[content_source[index]] = next_mcid
             next_mcid += 1
-        records = _element_records(src_page, plan, content_lines, mcid_of)
+        records = _element_records(src_page, plan, content_lines, mcid_of, edits)
         # Lines Rebind set aside are listed too, marked as untagged, so the editor can offer them.
         # They sit at the position they occupy on the page, so the list stays the page's order.
         #

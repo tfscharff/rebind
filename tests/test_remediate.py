@@ -1141,6 +1141,28 @@ def test_tagged_table_is_pdf_ua_compliant(tmp_path: Path, verapdf_exe: Path):
     assert result.compliant, result.summary()
 
 
+def test_table_rows_are_offered_as_editable_sub_elements(tmp_path: Path):
+    # A table's header row is a guess (today: always the first detected row). Exposing each row as
+    # its own element -- with its own id and bbox -- is what lets a person correct that guess for
+    # one row without retagging the whole table.
+    from tests.fixtures import born_digital_pdf_with_table
+
+    source = born_digital_pdf_with_table(tmp_path / "in.pdf")
+    result = remediate(source, tmp_path / "out.pdf", title="T")
+
+    table = next(e for e in result.elements if e["kind"] == "Table")
+    rows = [e for e in result.elements if e.get("row") and e["id"].startswith(table["id"] + "r")]
+    assert len(rows) == 4, rows          # header + 3 data rows, per born_digital_pdf_with_table
+    assert rows[0]["id"] == f"{table['id']}r0"
+    assert rows[0]["kind"] == "TH"
+    assert [r["kind"] for r in rows[1:]] == ["TD", "TD", "TD"]
+    for row in rows:
+        assert row["editable"] is True
+        # A row's box sits inside the table's box -- it did not escape onto some other part of the
+        # page.
+        assert table["top"] <= row["top"] <= row["top"] + row["height"] <= table["top"] + table["height"] + 0.5
+
+
 def test_outline_is_built_from_recovered_headings_with_structure_destinations(
         tmp_path: Path, verapdf_exe: Path):
     # PDF/UA-2 clause 8.8 requires internal destinations to be structure destinations; nothing
