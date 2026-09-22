@@ -938,7 +938,9 @@ def test_a_caption_beside_a_figure_is_found_and_an_ambiguous_one_is_not():
     below_unrelated = line("Ordinary prose under the picture.", (100.0, 470.0, 300.0, 482.0))
 
     found = _side_captions([beside, far_away, below_unrelated], picture)
-    assert len(found) == 1 and found[0].startswith("Fig. 2."), found
+    # Each hit is (caption text, the lines it was built from) -- the caller needs the lines so it
+    # can take them out of the reading order once it has claimed them for a figure.
+    assert len(found) == 1 and found[0][0].startswith("Fig. 2."), found
 
     # Two captions stacked in the margin beside one picture: both come back, so the caller declines.
     second = line("Fig. 3.  A coin, obverse.", (340.0, 660.0, 520.0, 672.0))

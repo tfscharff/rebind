@@ -241,3 +241,83 @@ def test_two_columns_are_still_columns_not_one_row_each():
     region = _xy_cut(left + right, (72, 680, 500, 712))
     placed = _reading_order(region)
     assert [p.line.text for p in placed] == ["L1", "L2", "R1", "R2"]
+
+
+def test_a_running_head_reads_at_the_top_of_the_page_not_after_the_body():
+    # Page furniture is held out of the XY-cut on purpose -- a head spanning both columns hides the
+    # gutter -- but it used to be appended after the cut as well, so the first thing on the page
+    # came out as the last stop in the editor's walk. Held out of the cut, spliced back in place.
+    head = _line(72, 720, 300, 730, "A Chapter Title", font="Helvetica", size=8.0)
+    folio = _line(480, 721, 500, 731, "29", font="Helvetica", size=8.0)
+    body = [_line(72, 600, 500, 610, "para one"), _line(72, 560, 500, 570, "para two")]
+    footer = _line(240, 40, 320, 50, "a running foot", font="Helvetica", size=8.0)
+    pages = [Page(number=n, width=560, height=760,
+                  lines=tuple([_line(72, 720, 300, 730, "A Chapter Title",
+                                     font="Helvetica", size=8.0),
+                               _line(480, 721, 500, 731, str(28 + n),
+                                     font="Helvetica", size=8.0),
+                               _line(72, 600, 500, 610, f"body {n}"),
+                               _line(240, 40, 320, 50, "a running foot",
+                                     font="Helvetica", size=8.0)]),
+                  images=())
+             for n in (2, 3, 4, 5)]
+    page = Page(number=1, width=560, height=760,
+                lines=tuple([head, folio] + body + [footer]), images=())
+    profile = build_profile([page, *pages])
+    layout = order_page(page, profile)
+    walk = [p.line.text for p in layout.lines]
+    assert walk == ["A Chapter Title", "29", "para one", "para two", "a running foot"], walk
+    # Still furniture: what changed is where it is read, not what it is.
+    assert [p.column for p in layout.lines] == [-1, -1, 0, 0, -1]
+
+
+def test_a_folio_typeset_a_hair_higher_still_reads_after_the_head_beside_it():
+    # The folio's box tops 1pt above the head's. Splicing each artifact against a list that earlier
+    # artifacts had already been inserted into would put the folio first, undoing the left-to-right
+    # `rows_left_to_right` just established.
+    def furniture(n):
+        return (_line(72, 720, 300, 730, "A Chapter Title", font="Helvetica", size=8.0),
+                _line(480, 721, 500, 731, str(28 + n), font="Helvetica", size=8.0),
+                _line(72, 600, 500, 610, f"body {n}"))
+    pages = [Page(number=n, width=560, height=760, lines=furniture(n), images=())
+             for n in range(1, 6)]
+    profile = build_profile(pages)
+    walk = [p.line.text for p in order_page(pages[0], profile).lines]
+    assert walk == ["A Chapter Title", "29", "body 1"], walk
+
+
+def test_a_table_split_across_the_cuts_columns_is_read_as_one_table():
+    # The real failure (1429254.pdf p.3): the cut fragments a grid into a left half and a right
+    # half with a paragraph of body text between them, so `plan_page` makes two /Table elements,
+    # each inventing a header row of its own, and the second opens on a header cell with its title
+    # far behind it. Detection already sees the whole grid; the order has to keep it together.
+    grid = [_grid_line(col, row, f"c{col}r{row}")
+            for row in range(4) for col in range(4)]
+    intruder = _line(520, 660, 700, 670, "a paragraph from the column beside the table")
+    page = Page(number=1, width=760, height=760,
+                lines=tuple(grid + [intruder]), images=())
+    profile = build_profile([page])
+    layout = order_page(page, profile)
+    assert layout.table_line_ids, "the grid must be detected as a table at all"
+
+    walk = [p.line.text for p in layout.lines]
+    flagged = [i for i, p in enumerate(layout.lines) if id(p.line) in layout.table_line_ids]
+    assert flagged == list(range(flagged[0], flagged[0] + len(flagged))), \
+        f"the table's cells must be one unbroken run, got {walk}"
+    # Row by row, each row left to right -- what the structure tree's /TR order will be.
+    cells = [text for text in walk if text.startswith("c")]
+    assert cells == [f"c{col}r{row}" for row in range(4) for col in range(4)], cells
+
+
+def test_two_separate_tables_on_one_page_stay_separate():
+    # A vertical gap wider than TABLE_SPLIT_GAP_RATIO row heights ends one table and starts another,
+    # so welding a page's grids into a single run cannot happen.
+    first = [_grid_line(col, row, f"a{col}r{row}", y_top=700)
+             for row in range(4) for col in range(4)]
+    second = [_grid_line(col, row, f"b{col}r{row}", y_top=400)
+              for row in range(4) for col in range(4)]
+    page = Page(number=1, width=760, height=760, lines=tuple(first + second), images=())
+    profile = build_profile([page])
+    walk = [p.line.text for p in order_page(page, profile).lines]
+    assert walk[:16] == [f"a{col}r{row}" for row in range(4) for col in range(4)], walk[:16]
+    assert walk[16:] == [f"b{col}r{row}" for row in range(4) for col in range(4)], walk[16:]

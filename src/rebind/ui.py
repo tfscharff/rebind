@@ -610,13 +610,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       esc(readingOrderProgress())+'</span></div>'+
       '<div id="typebody">'+idleBanner()+'</div>'+
       '</section>'+
-      '<section class="panel keys" id="keys"><h2>Keys</h2>'+
-      '<p class="sub"><b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
-      '<b>+</b> add · <b>−</b> remove · <b>[</b> <b>]</b> turn the page · '+
-      '<b>Enter</b> lists every type</p>'+
-      '<dl class="keylist">'+ed.allKeys.map(function(k){
-        return '<div><dt><kbd>'+esc(k.key)+'</kbd></dt><dd>'+esc(k.label)+'</dd></div>';
-      }).join('')+'</dl></section>'+
+      '<section class="panel keys" id="keys"><div id="keysbody">'+keysHtml(null)+'</div></section>'+
       // Last on the page, and last in the tab order, because they are what you do when the work is
       // finished. Taking the document is the second-to-last stop and starting over is the last:
       // nobody should reach "do another document" without passing the download first.
@@ -840,6 +834,31 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     wireStage();
   }
 
+  // The legend lists the keys that answer on the element you are standing on, because those are
+  // not always the document's keys. A table row answers to `h` and `b` and to nothing else
+  // (`keysFor`), and a legend that went on listing the whole document's seventeen types is why
+  // the row keys could not be found: every key on display did nothing, and the only two that
+  // worked were printed nowhere on the screen.
+  function keysHtml(e){
+    var row=!!(e&&e.row);
+    var sub=row
+      ? '<b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
+        '<b>[</b> <b>]</b> turn the page · <b>Enter</b> lists both'
+      : '<b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
+        '<b>+</b> add · <b>−</b> remove · <b>[</b> <b>]</b> turn the page · '+
+        '<b>Enter</b> lists every type';
+    return '<h2>'+(row? 'Keys for this table row' : 'Keys')+'</h2>'+
+      '<p class="sub">'+sub+'</p>'+
+      '<dl class="keylist">'+keysFor(e||{}).map(function(k){
+        return '<div><dt><kbd>'+esc(k.key)+'</kbd></dt><dd>'+esc(k.label)+'</dd></div>';
+      }).join('')+'</dl>';
+  }
+
+  function drawKeys(e){
+    var host=document.getElementById('keysbody');
+    if(host) host.innerHTML=keysHtml(e);
+  }
+
   // Nothing until you land on something. The panel used to open with a paragraph explaining what
   // the walk is; it was read once and then sat in the way of the thing it was explaining.
   function idleBanner(){
@@ -895,6 +914,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         '<p class="hint">Edit it here, or press Space on the page to be asked again</p>';
     }
     bar.innerHTML=h;
+    drawKeys(e);
     var add=document.getElementById('addel');
     if(add) add.addEventListener('click', function(){ addElement(e.id); });
     var del=document.getElementById('delel');

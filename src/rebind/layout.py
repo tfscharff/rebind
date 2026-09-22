@@ -64,6 +64,11 @@ MIN_ROWS_FOR_TABLE = 3
 # gate removes the dense flowing rows before the regularity test, which is what finally separates a
 # table from dense multi-column text -- geometry alone (alignment) could not.
 TABLE_ROW_MAX_FILL = 0.8
+# How far apart two flagged rows must sit before they are two tables rather than one, in multiples
+# of the median flagged row height. A table's own row pitch is barely more than one line height; a
+# page carrying two separate tables puts a title, a rule and a band of prose between them. Three is
+# comfortably outside the first and well inside the second.
+TABLE_SPLIT_GAP_RATIO = 3.0
 
 
 @dataclass(frozen=True)
@@ -309,11 +314,113 @@ def _splice_figure_text(placed: list[PlacedLine], in_figure: list[TextLine]) -> 
     return out
 
 
+def _splice_tables(placed: list[PlacedLine], table_line_ids: set[int]) -> list[PlacedLine]:
+    """Keep each detected table's cells together in the reading order, read row by row.
+
+    `detect_table_lines` deliberately runs on the whole page rather than per column, because a
+    table's inter-cell gaps look exactly like column gutters to the XY-cut and a per-column
+    detector would miss the grid entirely. It only *flags*, though, and the cut had already
+    fragmented what it flagged: on a real journal page (`1429254.pdf` p.3) one two-part table came
+    out of the cut as its left half, then a paragraph of body text from the column beside it, then
+    its right half. `plan_page` groups contiguous runs, so that became two `/Table` elements, each
+    with a header row of its own, and the walk read
+
+        Table I -> [left half: TH, 15 x TD] -> a body paragraph -> [right half: TH, 15 x TD]
+
+    -- the second half opening on a header cell with its title fifteen stops behind it. Put back
+    together it reads as the page does: the title, then one table, then its header row, then its
+    data rows in order.
+
+    Rows come from `_rows_by_band` (the same banding the table detector and `_tagged_table` use, so
+    the walk and the structure tree agree on what a row is) and each row reads left to right. A
+    page carrying two genuinely separate tables keeps them separate: a vertical gap wider than
+    TABLE_SPLIT_GAP_RATIO row heights ends one table and starts the next.
+
+    The run is anchored at its earliest member's place in the cut, so a table still reads where the
+    cut decided it belongs relative to everything around it -- including its own title, which is
+    not flagged and so never moves.
+    """
+    if not table_line_ids:
+        return placed
+    members = [p for p in placed if p.column >= 0 and id(p.line) in table_line_ids]
+    if len(members) < 2:
+        return placed
+
+    lines = [p.line for p in members]
+    heights = sorted(ln.bbox[3] - ln.bbox[1] for ln in lines)
+    median_h = heights[len(heights) // 2] or 1.0
+    groups: list[list[TextLine]] = []
+    current: list[TextLine] = []
+    previous_bottom: float | None = None
+    for row in _rows_by_band(lines):
+        top = max(ln.bbox[3] for ln in row)
+        if previous_bottom is not None and previous_bottom - top > median_h * TABLE_SPLIT_GAP_RATIO:
+            groups.append(current)
+            current = []
+        current.extend(sorted(row, key=lambda ln: ln.bbox[0]))
+        previous_bottom = min(ln.bbox[1] for ln in row)
+    if current:
+        groups.append(current)
+
+    at = {id(p.line): index for index, p in enumerate(placed)}
+    anchored = {min(at[id(ln)] for ln in group): group for group in groups}
+    moved = {id(ln) for group in groups for ln in group}
+
+    out: list[PlacedLine] = []
+    for index, item in enumerate(placed):
+        group = anchored.get(index)
+        if group is not None:
+            # One column for the whole table: a grid split across two of the cut's columns is one
+            # block to `review._group_blocks`, not two.
+            out.extend(PlacedLine(line=ln, column=item.column) for ln in group)
+        elif id(item.line) not in moved:
+            out.append(item)
+    return out
+
+
+def _splice_artifacts(placed: list[PlacedLine], artifacts: list[TextLine]) -> list[PlacedLine]:
+    """Put the page's furniture back into the walk at the height it sits at, still marked
+    `column == -1`.
+
+    Artifacts are held out of the XY-cut on purpose -- a running head spanning both columns of a
+    two-column page hides the gutter, and a folio in the outer margin manufactures a column of its
+    own -- but they used to be *appended* after the cut as well, which is a different decision and
+    a worse one. A running head is the first thing on the page and came out as the last stop in
+    the editor's walk, after the whole body; the folio came after that. Nothing downstream was
+    wrong (furniture is an `/Artifact` either way, announced by no screen reader, and
+    `review.page_order` filters `column == -1` out of its numbered blocks), but the librarian
+    correcting the page was handed the page's top edge at the bottom of the list.
+
+    Position only, never grouping: each artifact goes before the first line that starts below it,
+    which is where a sighted reader meets it. A head at the top leads; a footer trails.
+    """
+    if not artifacts:
+        return placed
+    ordered = rows_left_to_right(artifacts)
+    # Every cut is measured against the body as the cut left it, never against a list that earlier
+    # artifacts have already been inserted into: a folio typeset a hair higher than the running
+    # head beside it would otherwise be placed before it, undoing the left-to-right the row sort
+    # just established.
+    cuts = [next((i for i, p in enumerate(placed) if p.line.bbox[3] < line.bbox[3]), len(placed))
+            for line in ordered]
+    queue = sorted(range(len(ordered)), key=lambda k: cuts[k])
+    out: list[PlacedLine] = []
+    pending = 0
+    for index in range(len(placed) + 1):
+        while pending < len(queue) and cuts[queue[pending]] <= index:
+            out.append(PlacedLine(line=ordered[queue[pending]], column=-1))
+            pending += 1
+        if index < len(placed):
+            out.append(placed[index])
+    return out
+
+
 def order_page(page: Page, profile: TypographicProfile,
                figure_boxes: tuple = ()) -> PageLayout:
-    """Reading order for one page: body lines XY-cut into columns and blocks, then artifact lines
-    (running headers/footers/page numbers, identified by the profile) appended with column == -1
-    and excluded from the cut so they cannot manufacture spurious block breaks.
+    """Reading order for one page: body lines XY-cut into columns and blocks, with artifact lines
+    (running headers/footers/page numbers, identified by the profile) held out of the cut so they
+    cannot manufacture spurious block breaks, then spliced back in at the height they sit at and
+    marked column == -1 (`_splice_artifacts`).
 
     Text *inside* a figure is held out of the cut for the same reason, and matters more than it
     sounds: a diagram's callout labels ("A", "B", "3 mm", "Ventral") are scattered across the
@@ -339,13 +446,15 @@ def order_page(page: Page, profile: TypographicProfile,
     placed = _splice_figure_text(placed, in_figure)
 
     # Table detection runs on all body lines (a table's inter-cell gaps look like column gutters to
-    # XY-cut, which fragments the grid, so per-column detection would miss it). It only *flags*;
-    # ordering is unchanged, so running independently of the cut is correct. The three-column and
-    # short-cell guards are what keep a genuine multi-column *layout* from being read as a table.
+    # XY-cut, which fragments the grid, so per-column detection would miss it). The three-column
+    # and short-cell guards are what keep a genuine multi-column *layout* from being read as a
+    # table. What it flags is then put back together as one run (`_splice_tables`) -- the cut had
+    # already scattered the grid, and a fragmented table becomes several `/Table` elements, each
+    # inventing a header row.
     table_line_ids = detect_table_lines(body)
+    placed = _splice_tables(placed, table_line_ids)
 
-    artifacts_ordered = rows_left_to_right(artifacts)
-    placed.extend(PlacedLine(line=ln, column=-1) for ln in artifacts_ordered)
+    placed = _splice_artifacts(placed, artifacts)
 
     flags = ["multi-column-suspected"] if any(marginal) else []
     return PageLayout(lines=placed, flags=flags, table_line_ids=table_line_ids)

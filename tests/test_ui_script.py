@@ -170,7 +170,20 @@ def test_the_right_column_is_the_walk_the_element_and_the_keys():
     todo = script[script.index("function drawTodo("):script.index("function actionFor(")]
     assert "Reading order" in todo
     assert 'id="typebar"' in todo, "the element chooser lives here now"
-    assert 'class="keylist"' in todo, "and so do the keys"
+    assert 'id="keysbody"' in todo, "and so do the keys"
+    assert "keysHtml(null)" in todo, "which start as the document's, before you land on anything"
+
+
+def test_the_key_legend_follows_the_element_you_are_standing_on():
+    # A table row answers to h and b and to nothing else. The legend used to be drawn once from
+    # the document's own keymap and never redrawn, so a row showed seventeen keys that did nothing
+    # and neither of the two that did. That is why the row keys could not be found.
+    script = _script()
+    keys = script[script.index("function keysHtml("):script.index("function drawKeys(")]
+    assert "keysFor(e||{})" in keys, "the legend asks the same question the keyboard does"
+    assert "Keys for this table row" in keys
+    show = script[script.index("function showType("):script.index("// The best opening line")]
+    assert "drawKeys(e);" in show, "landing on an element redraws its legend"
 
 
 def test_adding_and_removing_an_element_are_an_obvious_pair():

@@ -56,6 +56,13 @@ Within a block, items on one line read left to right. Two lines count as one lin
 share most of the shorter one's height. The rule never crosses a gutter: in two-column text the
 whole left column is read before the right.
 
+Page furniture and table grids are held out of the cut and put back afterwards, because both
+mislead it — a running head spanning two columns hides the gutter, and a table's inter-cell gaps
+look exactly like gutters. Furniture goes back at the height it sits at, so a running head is the
+first stop on the page rather than the last. A table goes back as one unbroken run, read row by
+row: a grid the cut had split down the middle is one `/Table` with one header row, not two tables
+each inventing a header, with the body paragraph that sat between the halves back outside it.
+
 Born-digital pages name their own structure through markup. Scanned pages do not, so structure is
 inferred from geometry: line height against the body median, whitespace above and below, and
 alignment into recurring column positions.
@@ -196,7 +203,10 @@ figure out of the reading order; other type keys type instead.
 untagged content is a conformance failure. Page furniture and text inside figures are drawn hatched
 as "not read"; giving one a type puts it back into the reading order.
 
-On a table row, only `h` (Header cell) and `b` (Data cell) are offered, letting you correct which rows are headers without retagging the whole table.
+On a table row, only `h` (Header cell) and `b` (Data cell) are offered, letting you correct which
+rows are headers without retagging the whole table. The key legend is the element's own, not the
+document's: land on a row and it lists those two and nothing else, because nothing else answers
+there.
 
 Every change rebuilds the document from the corrected plan rather than patching the structure tree,
 so grouping decisions change too. Every offered type has a test that applies it and validates the
