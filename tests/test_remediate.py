@@ -88,6 +88,53 @@ def test_malformed_source_xmp_does_not_hide_our_metadata(tmp_path: Path, verapdf
     assert result.compliant, result.summary()
 
 
+def test_a_sources_own_title_in_a_description_with_no_rdf_about_does_not_hide_ours(
+        tmp_path: Path, verapdf_exe: Path):
+    # A second real-world shape of the same failure (real sample: 1087881.pdf, an open-book scan).
+    # The publisher's own dc:title lived in an <rdf:Description> with no rdf:about attribute --
+    # pikepdf's metadata editor only manages the rdf:about="" description it owns, so that one is
+    # invisible to meta.keys() and a selective per-key strip (the first fix, above) can never reach
+    # it. Editing in place left both titles in the packet; the duplication is what breaks veraPDF's
+    # parser, not either title alone. Confirmed by writing this exact malformed shape by hand,
+    # since pikepdf's own writer never produces it -- only some other producer's does.
+    from pikepdf import Name
+
+    from rebind.validate import validate_pdf_ua
+
+    clean = born_digital_pdf("<h1>Title</h1><p>Body text.</p>", tmp_path / "clean.pdf")
+    source = tmp_path / "in.pdf"
+    with pikepdf.open(clean) as pdf:
+        xmp = (
+            b'<?xpacket begin="\xef\xbb\xbf" id="W5M0MpCehiHzreSzNTczkc9d"?>'
+            b'<x:xmpmeta xmlns:x="adobe:ns:meta/">'
+            b'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">'
+            b'<rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            b'<dc:title><rdf:Alt><rdf:li xml:lang="x-default">'
+            b"The Publisher's Own Title</rdf:li></rdf:Alt></dc:title>"
+            b"</rdf:Description></rdf:RDF></x:xmpmeta>"
+            b'<?xpacket end="w"?>'
+        )
+        meta_stream = pdf.make_stream(xmp)
+        meta_stream.Type = Name.Metadata
+        meta_stream.Subtype = Name.XML
+        pdf.Root.Metadata = meta_stream
+        pdf.save(source)
+
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="A Title")
+
+    with pikepdf.open(out) as pdf:
+        raw = bytes(pdf.Root.Metadata.read_bytes())
+        assert raw.count(b"dc:title") <= 2, raw   # open + close tag of ONE title, never a second
+        assert b"Publisher's Own Title" not in raw
+        with pdf.open_metadata() as meta:
+            assert meta["dc:title"] == "A Title"
+            assert meta["pdfuaid:part"] == "2"
+
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
+
+
 def test_internal_link_destinations_are_stripped_not_left_broken(tmp_path: Path, verapdf_exe: Path):
     # A born-digital source can carry Link annotations navigating within the document (a table of
     # contents, cross-references) -- confirmed on a real publisher sample (137 instances in one
@@ -1010,6 +1057,44 @@ def test_a_paragraph_is_one_element_not_one_per_line(tmp_path: Path):
     assert "Sentence number 3 of the second paragraph" in text
     # Each one spans several lines of the page, which is the whole point.
     assert all(p["height"] > 5 for p in paragraphs), paragraphs
+
+
+def test_a_wide_caption_sharing_a_paragraphs_margin_does_not_widen_its_measure():
+    # Real failure (1087881.pdf p.8): an "Exhibit 7.3 ..." title set at the paragraph's own left
+    # margin but running much wider than the column beneath it was pulled into _column_measures'
+    # left-edge grouping (it shares that margin, which is all the grouping asks). Its width alone
+    # then set the paragraph's "measure" to a right edge none of the paragraph's own lines ever
+    # reached, so every one of them read as falling short of it -- "ragged" -- and eleven lines of
+    # one paragraph became eleven one-line elements instead of one.
+    from rebind.extract import TextLine
+    from rebind.remediate import _column_measures, _same_paragraph
+
+    def line(text, x0, x1, y1, size=10.0):
+        return TextLine(text=text, page=1, bbox=(x0, y1 - size - 2, x1, y1), font="F",
+                        size=size, bold=False, italic=False)
+
+    title = line("Exhibit 7.3 Twelve Contrasting Interview Styles and Strategies",
+                 86.5, 506.5, 700.0)
+    body = [
+        line("Different inquiry traditions emphasize different questions", 79.0, 306.0, 680.0),
+        line("and feldwork methods. Interviewing varies in important ways,", 73.0, 306.0, 668.0),
+        line("then, within different traditions and inquiry approaches.", 73.0, 306.0, 656.0),
+        line("Traditional social science interviewing emphasizes.", 73.0, 306.0, 644.0),
+    ]
+    lines = [title] + body
+    roles = ["P"] * len(lines)
+    measures = _column_measures(lines, roles)
+
+    # The paragraph's own measure comes from where its own lines actually end, not from the title
+    # that merely happens to share its margin.
+    for i in range(1, len(body)):
+        _, right = measures[i]
+        assert right < 320, f"line {i}'s measure ({right}) was set by the wide title, not its own column"
+
+    # And with a true measure, the paragraph's lines join as they should.
+    for i in range(1, len(body)):
+        assert _same_paragraph(lines, 1, i + 1, measures), \
+            f"line {i} should still join the paragraph above it"
 
 
 def test_a_title_set_across_two_lines_is_one_heading(tmp_path: Path):

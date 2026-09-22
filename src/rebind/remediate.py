@@ -1532,9 +1532,20 @@ def _column_measures(lines: list[TextLine], roles: list[str]) -> list[tuple[floa
     """For each line, the (left, right) margins of the column of body text it sits in.
 
     The right margin is what tells a last line from a middle one, and it has to come from the text
-    itself: nothing in a PDF states where a column ends. It is taken as the furthest right any body
-    line in the same column reaches, which is the measure by definition -- at least one line in a
-    paragraph of prose runs the full width of it.
+    itself: nothing in a PDF states where a column ends. It is taken as the furthest right reached
+    by more than one nearby line -- a paragraph's own full lines cluster tightly around their true
+    margin, so requiring at least two of them to agree is what keeps a single outlier from setting
+    it by itself.
+
+    That outlier is not hypothetical: a caption or an "Exhibit N.N" title is commonly set at the
+    same left margin as the body column beneath it (ordinary typesetting) while running much wider
+    -- to the left-edge grouping in `near`, sharing a margin is all it takes to look like the same
+    column. On a real sample (`1087881.pdf` p.8) one such title at x0=86.5 running to x1=506.5 sat
+    within PARAGRAPH_COLUMN_TOLERANCE_PT of a paragraph whose own eleven lines all ended near
+    x1=306 -- so every one of them read as falling short of a 506.5pt margin that was never really
+    its own, and a single paragraph became eleven one-line elements. Requiring company before a
+    right edge counts fixes that without weakening the rule for an ordinary paragraph, where
+    several lines legitimately reach the true margin together.
     """
     body = [ln for ln, role in zip(lines, roles) if role == "P"]
     out: list[tuple[float, float]] = []
@@ -1544,7 +1555,12 @@ def _column_measures(lines: list[TextLine], roles: list[str]) -> list[tuple[floa
         if not near:
             out.append((line.bbox[0], line.bbox[2]))
             continue
-        out.append((min(ln.bbox[0] for ln in near), max(ln.bbox[2] for ln in near)))
+        rights = sorted((ln.bbox[2] for ln in near), reverse=True)
+        measure = next(
+            (r for r in rights
+             if sum(1 for x in rights if abs(x - r) <= PARAGRAPH_ALIGN_TOLERANCE_PT) >= 2),
+            rights[0])   # nothing recurs (too few lines to tell) -- fall back to the widest line
+        out.append((min(ln.bbox[0] for ln in near), measure))
     return out
 
 
@@ -2595,17 +2611,23 @@ def _set_metadata(pdf: pikepdf.Pdf, *, title: str, lang: str) -> None:
     pdf.Root.Lang = String(lang)
     pdf.Root.MarkInfo = Dictionary(Marked=True)
     pdf.Root.ViewerPreferences = Dictionary(DisplayDocTitle=True)
+    # The source's own XMP is discarded outright rather than edited in place. Two publisher
+    # artifacts, confirmed in real samples, both survive an in-place edit and both break veraPDF's
+    # strict metadata parser badly enough that it stops seeing OUR dc:title/pdfuaid entries too
+    # (clauses 5 and 8.11.1 both fail), even though pikepdf's own reader still finds them fine:
+    #   * A stray, non-namespaced top-level element (an Elsevier DRM/fingerprinting artifact) --
+    #     well-formed XML, but noise no accessibility-relevant property ever has.
+    #   * A second <rdf:Description> holding the publisher's own dc:title, written without an
+    #     rdf:about attribute (a real sample, `1087881.pdf`). pikepdf's editor manages only the
+    #     rdf:about="" description it owns, so this one is invisible to `meta.keys()` and a
+    #     selective per-key strip can never reach it -- the publisher's title and ours both end up
+    #     in the packet, and that duplication is what trips the parser, not either title alone.
+    # Rebind does not need anything the source's XMP carries -- title and language are about to be
+    # set explicitly -- so there is nothing to lose and a second undiscovered case to pre-empt by
+    # not inheriting any of it.
+    if Name.Metadata in pdf.Root:
+        del pdf.Root[Name.Metadata]
     with pdf.open_metadata() as meta:
-        # Publisher-produced PDFs (confirmed: Elsevier's own pipeline, in a real sample) can carry
-        # a stray, non-namespaced XMP element -- a DRM/fingerprinting artifact. It's well-formed
-        # XML, but it breaks veraPDF's strict metadata parser badly enough that it stops seeing
-        # OUR dc:title/pdfuaid entries too (clauses 5 and 8.11.1 both fail), even though pikepdf's
-        # own reader still finds them fine. A legitimate XMP property always belongs to some
-        # namespace, so any top-level key with none is noise, never accessibility-relevant --
-        # strip it before adding ours.
-        for key in list(meta.keys()):
-            if not key.startswith("{"):
-                del meta[key]
         meta["dc:title"] = title
         meta["dc:language"] = lang
         meta["pdfuaid:part"] = "2"          # PDF/UA-2 identification (veraPDF clause 5)
