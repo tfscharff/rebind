@@ -435,41 +435,122 @@ def test_every_hotkey_names_a_tag_that_exists():
     assert "Artifact" not in EDITABLE_TAGS
 
 
-def test_row_hotkeys_are_well_formed_and_never_offered_as_whole_element_tags():
-    # TH/TD only ever make sense as a row inside an already-tagged Table -- offering them as a
-    # whole-element retag would let a bare paragraph become a /TH with no /TR or /Table around it,
-    # which fails PDF/UA-2 structurally (Table 5 restricts what may hold a /TH directly).
-    from rebind.remediate import EDITABLE_TAGS, ROW_TAG_KEYS
+def test_row_hotkeys_are_the_same_keys_as_the_whole_element_cell_tags():
+    # A table Rebind did not find has to be buildable by hand, so TH/TD are offered on every
+    # element -- and the keys must be the same ones a detected table's rows answer to, or the
+    # same act has two different keys depending on whether Rebind happened to spot the table.
+    from rebind.remediate import EDITABLE_TAGS, ROW_TAG_KEYS, TAG_KEYS
 
     keys = [key for key, _tag, _label, _what in ROW_TAG_KEYS]
     assert len(keys) == len(set(keys)), "row hotkeys must be unique"
     tags = {tag for _key, tag, _label, _what in ROW_TAG_KEYS}
     assert tags == {"TH", "TD"}
-    assert tags.isdisjoint(EDITABLE_TAGS), "TH/TD must never be offered as whole-element tags"
+    assert tags <= set(EDITABLE_TAGS)
+    element_keys = {tag: key for key, tag, _label, _what in TAG_KEYS}
     for key, tag, label, what in ROW_TAG_KEYS:
+        assert element_keys[tag] == key, f"{tag}: row and element keys differ"
         assert len(key) == 1, f"{tag}: a hotkey should be one keystroke, got {key!r}"
         assert label and what and what != label, f"{tag}: needs a label and an explanation"
 
 
-def test_edits_accepts_row_tags_alongside_element_tags():
+def test_edits_accepts_cell_tags_on_rows_and_on_elements():
     from rebind.remediate import Edits
 
     edits = Edits.from_payload({"tags": {"p1n0": "H2", "p1n0r0": "TH", "p1n0r1": "TD",
-                                          "p1n0r2": "NotARealTag"}})
-    assert edits.tags == {"p1n0": "H2", "p1n0r0": "TH", "p1n0r1": "TD"}
+                                          "p1n3": "TH", "p1n0r2": "NotARealTag"}})
+    assert edits.tags == {"p1n0": "H2", "p1n0r0": "TH", "p1n0r1": "TD", "p1n3": "TH"}
 
 
-def test_edits_rejects_row_tags_on_a_non_row_id():
-    # TH/TD only mean something as a row inside an already-built Table (see ROW_TAG_KEYS) -- a
-    # payload trying to set a whole element's id to TH/TD must be dropped, the same way a bogus
-    # tag string already is, or a crafted payload could build a bare /TH with no /TR or /Table
-    # around it, which fails PDF/UA-2 structurally.
+def test_elements_tagged_as_cells_are_built_into_one_table(tmp_path: Path, verapdf_exe: Path):
+    # A bare /TH or /TD with no /TR and /Table around it is illegal structure, so a run of elements
+    # a person marked as cells is gathered into one table, row by row, rather than tagged as-is.
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf
+
+    source = born_digital_pdf(
+        "<p>Opening paragraph of ordinary prose.</p><p>Name</p><p>Alice</p><p>Bob</p>"
+        "<p>Closing paragraph of ordinary prose.</p>", tmp_path / "in.pdf")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    ids = [e["id"] for e in plain.elements if e["kind"] == "P"]
+    assert len(ids) == 5, plain.elements
+
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T", edits=Edits(
+        tags={ids[1]: "TH", ids[2]: "TD", ids[3]: "TD"}))
+    assert [e["kind"] for e in result.elements if e["id"] in ids[1:4]] == ["TH", "TD", "TD"]
+
+    sequence = _structure_sequence(out)
+    assert [tag for tag, _text in sequence] == ["P", "Table", "P"], sequence
+    assert "Alice" in sequence[1][1] and "Name" in sequence[1][1]
+    with pikepdf.open(out) as pdf:
+        tags = _all_struct_tags(pdf)
+    assert tags.count("/TR") == 3 and tags.count("/TH") == 1 and tags.count("/TD") == 2, tags
+    assert validate_pdf_ua(out, verapdf_exe=verapdf_exe).compliant
+
+
+def test_cells_side_by_side_share_a_row():
+    from rebind.remediate import _cell_rows
+
+    # Header row: two one-line cells. Data row: a three-line cell beside a one-line cell set at
+    # its top -- still one row, which banding on centres alone would have split in two.
+    boxes = [(50, 700, 150, 712), (200, 700, 300, 712), (50, 650, 150, 686), (200, 674, 300, 686)]
+    assert _cell_rows(boxes) == [[0, 1], [2, 3]]
+
+
+def test_a_frame_regroups_the_lines_it_encloses():
+    from rebind.extract import TextLine
+    from rebind.remediate import _apply_frames
+
+    def line(y, text):
+        return TextLine(text=text, page=1, bbox=(72, y, 300, y + 10), font="Times", size=10.0,
+                        bold=False, italic=False)
+
+    lines = [line(700, "a"), line(686, "b"), line(672, "c"), line(658, "d")]
+    plan = [{"kind": "P", "first": 0, "last": 0, "id": "A"},
+            {"kind": "P", "first": 1, "last": 1, "id": "B"},
+            {"kind": "P", "first": 2, "last": 3, "id": "C"}]
+    # Frame A down over "b" and "c": A takes them, B is emptied and goes, C keeps only "d".
+    order, out = _apply_frames(plan, lines, {"A": (60, 675, 320, 715)}, lambda i: f"o{i}")
+    assert [(e["id"], [lines[order[i]].text for i in range(e["first"], e["last"] + 1)])
+            for e in out] == [("A", ["a", "b", "c"]), ("C", ["d"])]
+
+    # Shrinking a frame gives lines up: they become an element of their own, in place.
+    order, out = _apply_frames(plan[2:], lines, {"C": (60, 668, 320, 690)}, lambda i: f"o{i}")
+    assert [(e["id"], [lines[order[i]].text for i in range(e["first"], e["last"] + 1)])
+            for e in out] == [("C", ["c"]), ("o3", ["d"])]
+
+
+def test_a_framed_element_is_rebuilt_from_what_the_frame_encloses(tmp_path: Path,
+                                                                     verapdf_exe: Path):
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf
+
+    source = born_digital_pdf(
+        "<p>First short paragraph.</p><p>Second short paragraph.</p>"
+        "<p>Third short paragraph.</p>", tmp_path / "in.pdf")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    first, second, third = [e for e in plain.elements if e["kind"] == "P"]
+    # A frame, in the editor's page percentages, from the top of the first paragraph to the
+    # bottom of the second.
+    frame = [first["left"] - 1, first["top"] - 0.5, max(first["width"], second["width"]) + 2,
+             second["top"] + second["height"] - first["top"] + 1]
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T", edits=Edits(frames={first["id"]: frame}))
+    texts = {e["id"]: e["text"] for e in result.elements}
+    assert "First" in texts[first["id"]] and "Second" in texts[first["id"]]
+    assert second["id"] not in texts
+    assert texts[third["id"]].startswith("Third")
+    assert validate_pdf_ua(out, verapdf_exe=verapdf_exe).compliant
+
+
+def test_edits_accepts_only_well_formed_frames():
     from rebind.remediate import Edits
 
-    edits = Edits.from_payload({"tags": {"p1n3": "TH", "p1n3r0": "TH", "p3r0": "TD"}})
-    assert "p1n3" not in edits.tags
-    assert "p3r0" not in edits.tags
-    assert edits.tags == {"p1n3r0": "TH"}
+    edits = Edits.from_payload({"frames": {"p1n0": [10, 20, 30, 5], "p1n1": [1, 2, 3],
+                                           "p1n2": [1, 2, -3, 4], "p1n3": ["x", 1, 1, 1]}})
+    assert edits.frames == {"p1n0": (10.0, 20.0, 30.0, 5.0)}
 
 
 def test_a_running_footer_is_an_artifact_not_content(tmp_path: Path):

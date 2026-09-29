@@ -68,7 +68,10 @@ def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
     row_keys = {entry["key"] for entry in body["rowKeys"]}
     assert row_keys == {"h", "b"}
     assert {entry["tag"] for entry in body["rowKeys"]} == {"TH", "TD"}
-    assert row_keys.isdisjoint(keys), "row hotkeys must not collide with the whole-element ones"
+    # The same keys mark a cell whether or not Rebind found its table.
+    element_keys = {entry["tag"]: entry["key"] for entry in body["keys"]}
+    for entry in body["rowKeys"]:
+        assert element_keys[entry["tag"]] == entry["key"], entry
     for element in body["elements"]:
         assert 0 <= element["left"] <= 100 and 0 <= element["top"] <= 100, element
 

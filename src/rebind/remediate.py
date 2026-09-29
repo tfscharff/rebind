@@ -14,6 +14,7 @@ never reflowed or restyled.
 from __future__ import annotations
 
 import io
+import math
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -1080,6 +1081,85 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
     return table
 
 
+def _cell_rows(boxes: list[tuple[float, float, float, float]]) -> list[list[int]]:
+    """Group cell boxes into rows, top to bottom, each row's indices left to right.
+
+    By vertical overlap rather than by centre: a cell that wraps over three lines sits beside
+    one-line cells set level with its top, and their centres are a line or more apart. A cell joins
+    the row above it when it shares at least half of the shorter of the two heights with it.
+    """
+    rows: list[list] = []       # [member indices, bottom, top]
+    for i in sorted(range(len(boxes)), key=lambda k: -boxes[k][3]):
+        _x0, y0, _x1, y1 = boxes[i]
+        if rows:
+            members, low, high = rows[-1]
+            overlap = min(high, y1) - max(low, y0)
+            if overlap >= 0.5 * min(max(y1 - y0, 1.0), max(high - low, 1.0)):
+                members.append(i)
+                rows[-1][1], rows[-1][2] = min(low, y0), max(high, y1)
+                continue
+        rows.append([[i], y0, y1])
+    return [sorted(members, key=lambda k: boxes[k][0]) for members, _low, _high in rows]
+
+
+def _cell_table(pdf: pikepdf.Pdf, cells: list[tuple[str, list[int]]], lines: list[TextLine],
+                document_elem: pikepdf.Object, leaf) -> pikepdf.Object:
+    """A `/Table` built around a run of elements a person marked as cells, `(TH|TD, line indices)`.
+
+    The grid is laid out from where the cells sit: rows by `_cell_rows`, columns by clustering left
+    edges exactly as `_tagged_table` does, and an empty cell wherever a row has nothing in a column,
+    so every row is the same width. A header cell is scoped to its column when its whole row is
+    headers (the usual header row) and to its row otherwise (a label down the left-hand side).
+    """
+    boxes = [(min(lines[i].bbox[0] for i in indices), min(lines[i].bbox[1] for i in indices),
+              max(lines[i].bbox[2] for i in indices), max(lines[i].bbox[3] for i in indices))
+             for _kind, indices in cells]
+    columns: list[float] = []
+    for x in sorted(box[0] for box in boxes):
+        if not columns or x - columns[-1] > COLUMN_ALIGN_TOLERANCE_PT:
+            columns.append(x)
+
+    def column_of(k: int) -> int:
+        return min(range(len(columns)), key=lambda c: abs(boxes[k][0] - columns[c]))
+
+    table = pdf.make_indirect(Dictionary(
+        Type=Name.StructElem, S=Name.Table, P=document_elem, K=Array([])))
+    trs: list[pikepdf.Object] = []
+    header_texts: list[str] = []
+    rows = _cell_rows(boxes)
+    for row in rows:
+        tr = pdf.make_indirect(Dictionary(Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
+        by_column: dict[int, list[int]] = {}
+        for k in row:
+            by_column.setdefault(column_of(k), []).append(k)
+        header_row = all(cells[k][0] == "TH" for k in row)
+        scope = Name.Column if header_row else Name.Row
+        row_cells: list[pikepdf.Object] = []
+        for c in range(len(columns)):
+            members = by_column.get(c)
+            if not members:
+                row_cells.append(pdf.make_indirect(Dictionary(
+                    Type=Name.StructElem, S=Name.TH if header_row else Name.TD, P=tr,
+                    K=Array([]))))
+                continue
+            # Two cells snapped to one column share it, as in `_tagged_table`: dropping one would
+            # leave its content on the page owned by nothing.
+            indices = [i for k in members for i in cells[k][1]]
+            if any(cells[k][0] == "TH" for k in members):
+                row_cells.append(leaf(indices, Name.TH, tr,
+                                      {"A": Dictionary(O=Name.Table, Scope=scope)}))
+                header_texts.append(" ".join(lines[i].text.strip() for i in indices).strip())
+            else:
+                row_cells.append(leaf(indices, Name.TD, tr))
+        tr.K = Array(row_cells)
+        trs.append(tr)
+    table.K = Array(trs)
+    summary = _table_summary(len(columns), len(rows), header_texts)
+    table.Alt = String(summary)
+    table.A = Dictionary(O=Name.Table, Summary=String(summary))
+    return table
+
+
 def _table_summary(column_count: int, row_count: int, header_texts: list[str]) -> str:
     """An honest, non-fabricated /Alt for a /Table (Adobe's 'Tables must have a summary' check).
 
@@ -1255,34 +1335,40 @@ class Edits:
     tags: dict[str, str] = field(default_factory=dict)      # element id -> structure type
     removed: set[str] = field(default_factory=set)          # element ids to drop from the tree
     alts: dict[str, str] = field(default_factory=dict)      # figure id -> alt text
+    # element id -> the frame a person drew around it, as (left, top, width, height) in percent of
+    # the page -- the editor's own coordinates. The element becomes exactly the lines whose centres
+    # fall inside it (`_apply_frames`).
+    frames: dict[str, tuple[float, float, float, float]] = field(default_factory=dict)
 
     @classmethod
     def from_payload(cls, payload: dict | None) -> Edits:
         payload = payload or {}
 
-        def allowed(k: str, v: str) -> bool:
-            # TH/TD only mean anything as a row inside a Table the editor already built (see
-            # ROW_TAG_KEYS); accepting one for any other id would let a crafted payload build a
-            # bare /TH or /TD with no /TR or /Table around it, which is illegal PDF/UA-2 structure.
-            # A row id is always `{table element id}r{row index}` and a table element id is always
-            # `p{page}n{index}` (see `entry["id"] =` below), so a real row id always ends in an
-            # `n<digits>` run immediately followed by an `r<digits>` run -- a shape no other id in
-            # this file produces (the picture-region id `p{page}r{index}`, for one, has no `n`
-            # before its `r` at all).
-            if v in ROW_TAGS:
-                return bool(_ROW_ID.search(k))
+        # TH/TD are accepted on any id: on a detected table's row they set that row, and on any
+        # other element they make it a cell of a table built around it (`_page_structure`), so a
+        # bare /TH with no /TR or /Table around it can no longer arise from either.
+        def allowed(v: str) -> bool:
             return v in EDITABLE_TAGS
 
+        def frame(v) -> tuple[float, float, float, float] | None:
+            try:
+                left, top, width, height = (float(x) for x in v)
+            except (TypeError, ValueError):
+                return None
+            values = (left, top, width, height)
+            if not all(math.isfinite(x) for x in values) or width <= 0 or height <= 0:
+                return None
+            return values
+
+        frames = {str(k): frame(v) for k, v in (payload.get("frames") or {}).items()}
         return cls(
             tags={str(k): str(v) for k, v in (payload.get("tags") or {}).items()
-                  if allowed(str(k), str(v))},
+                  if allowed(str(v))},
             removed={str(v) for v in (payload.get("removed") or [])},
             alts={str(k): str(v).strip() for k, v in (payload.get("alts") or {}).items()
                   if str(v).strip()},
+            frames={k: v for k, v in frames.items() if v is not None},
         )
-
-
-_ROW_ID = re.compile(r"n\d+r\d+$")
 
 
 # What a person may retag an element as, and how each has to be built. ISO 32005 Table 5 governs
@@ -1309,7 +1395,11 @@ CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "
 # already have, so it was one more thing to choose between for no gain to a reader.
 GROUPING_TAGS = ("Sect", "Div", "Art", "Index", "NonStruct")
 SPECIAL_TAGS = ("Figure", "Table", "L", "Caption")
-EDITABLE_TAGS = CONTENT_TAGS + GROUPING_TAGS + SPECIAL_TAGS
+# A cell is never tagged where it stands -- a /TH or /TD is only legal inside a /TR inside a /Table.
+# A run of elements marked as cells is gathered into one table around them (`_cell_table`), which
+# is how a table Rebind did not detect is built by hand.
+CELL_TAGS = ("TH", "TD")
+EDITABLE_TAGS = CONTENT_TAGS + GROUPING_TAGS + SPECIAL_TAGS + CELL_TAGS
 
 # One keystroke per type, so retagging is Tab-and-press rather than Tab-and-open-a-menu. Chosen for
 # the first letter of the thing wherever it is free, and the digits for heading levels. Defined
@@ -1335,6 +1425,10 @@ TAG_KEYS = (
     ("f", "Figure", "Figure", "A picture, chart or diagram. Needs a description, so a screen "
                               "reader has something to say about it."),
     ("t", "Table", "Table", "A grid of data. Rebind builds the rows, cells and column headers."),
+    ("h", "TH", "Table header cell", "A cell that labels a row or column of a table. Cells marked "
+                                     "one after another are built into one table."),
+    ("b", "TD", "Table data cell", "An ordinary cell of a table, read against its header. Cells "
+                                   "marked one after another are built into one table."),
     ("l", "L", "List", "A bulleted or numbered list."),
     ("s", "Sect", "Section", "A container grouping related content together."),
     ("d", "Div", "Division", "A generic container, when nothing more specific fits."),
@@ -1356,9 +1450,10 @@ ARTIFACT_LABEL = "Not read"
 ARTIFACT_WHAT = ("Page furniture — on the page, but skipped by a screen reader. Give it a type to "
                  "have it read after all.")
 
-# TH/TD are never offered as a whole-element tag (see EDITABLE_TAGS) -- they only mean something
-# as a row inside a Table the editor already built. They get their own small keymap, sent to the
-# frontend separately (like ARTIFACT_KEY) and swapped in only when the focused element is a row.
+# A detected table's rows answer to a keymap of their own, sent to the frontend separately (like
+# ARTIFACT_KEY) and swapped in only when the focused element is a row: a row is only ever a header
+# row or a data row. Its keys are the same as the whole-element cell keys above, so marking a cell
+# is the same keystroke whether or not Rebind found the table.
 ROW_TAG_KEYS = (
     ("h", "TH", "Header cell", "This row labels the columns beneath it — a screen reader reads "
                                "it before each data cell in its column."),
@@ -1528,6 +1623,74 @@ def plan_page(lines: list[TextLine], page_roles: list[str],
     return plan
 
 
+def _apply_frames(plan: list[dict], lines: list[TextLine],
+                  frames: dict[str, tuple[float, float, float, float]],
+                  orphan_id) -> tuple[list[int], list[dict]]:
+    """Regroup a page's plan around the frames a person drew: `(new line order, new plan)`.
+
+    A framed element becomes exactly the lines whose centres its frame (PDF points, x0 y0 x1 y1)
+    encloses, taken from whatever element held them -- so dragging a frame down over the next line
+    merges it in, and pulling it back up gives the line away. An element emptied that way is gone;
+    lines a frame gave up that no other frame took become an element of their own where they were
+    (`orphan_id(line index)` names it, stably, from its first line). Where two frames overlap, the
+    earlier element in the plan keeps the line.
+
+    Plan entries are ranges over the line list, and a frame can gather lines that were not next to
+    each other, so the lines are put into a new order in which every element's lines are adjacent:
+    the returned order lists old line indices, and the new plan's ranges index into it. Each
+    element sits where its first line was, which leaves every unframed element where it stood.
+    Ids are the plan's own, decided before any frame, so a frame is found again on the next run.
+    """
+    framed = [entry for entry in plan if entry["id"] in frames]
+    if not framed:
+        return list(range(len(lines))), plan
+    claimed: dict[int, str] = {}
+    for entry in framed:
+        x0, y0, x1, y1 = frames[entry["id"]]
+        for i, line in enumerate(lines):
+            cx = (line.bbox[0] + line.bbox[2]) / 2
+            cy = (line.bbox[1] + line.bbox[3]) / 2
+            if i not in claimed and x0 <= cx <= x1 and y0 <= cy <= y1:
+                claimed[i] = entry["id"]
+
+    groups: list[tuple[dict, list[int]]] = []
+    for entry in plan:
+        own = range(entry["first"], entry["last"] + 1)
+        if entry["id"] not in frames:
+            members = [i for i in own if i not in claimed]
+            if members:
+                groups.append((entry, members))
+            continue
+        members = sorted(i for i, owner in claimed.items() if owner == entry["id"])
+        if members:
+            groups.append((entry, members))
+        run: list[int] = []
+        for i in [*own, None]:
+            if i is not None and i not in claimed:
+                run.append(i)
+                continue
+            if run:
+                groups.append(({"kind": "P", "id": orphan_id(run[0]), "alt": ""}, run))
+                run = []
+    groups.sort(key=lambda group: group[1][0])
+
+    order: list[int] = []
+    out: list[dict] = []
+    for entry, members in groups:
+        out.append({**entry, "first": len(order), "last": len(order) + len(members) - 1})
+        order.extend(members)
+    return order, out
+
+
+def _frame_in_points(frame: tuple[float, float, float, float], width: float,
+                     height: float) -> tuple[float, float, float, float]:
+    """The editor's (left, top, width, height) page percentages as a PDF-space (x0, y0, x1, y1)."""
+    left, top, w, h = frame
+    x0 = left * width / 100
+    y1 = height - top * height / 100
+    return x0, y1 - h * height / 100, x0 + w * width / 100, y1
+
+
 def _column_measures(lines: list[TextLine], roles: list[str]) -> list[tuple[float, float]]:
     """For each line, the (left, right) margins of the column of body text it sits in.
 
@@ -1637,11 +1800,24 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
         return elem
 
     captions: list[tuple[int, pikepdf.Object]] = []      # (first line, the caption element)
+    # Elements marked as cells, waiting for the run of them to end so they can become one table.
+    cells: list[tuple[str, list[int]]] = []
+
+    def close_cells() -> None:
+        if cells:
+            tops.append(_cell_table(pdf, list(cells), lines, document_elem, leaf))
+            cells.clear()
+
     for entry in plan:
         first, last, kind = entry["first"], entry["last"], entry["kind"]
         if any(mcid_of[i] is None for i in range(first, last + 1)):
             continue        # every line of this element was removed by an edit
         indices = list(range(first, last + 1))
+
+        if kind in CELL_TAGS:
+            cells.append((kind, indices))
+            continue
+        close_cells()
 
         if kind == "Table":
             row_tags = edits.tags if edits else {}
@@ -1681,6 +1857,7 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
             captions.append((first, spanning("Caption", document_elem, indices), box))
         else:
             tops.append(spanning(kind, document_elem, indices))
+    close_cells()
 
     # A /Caption is not legal beside the thing it captions -- it belongs inside it. Each is moved
     # into the figure or table it is nearest to; one with nothing left to caption stays where it
@@ -2192,6 +2369,20 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             entry["id"] = f"p{src_page.number}n{content_source[entry['first']]}"
             entry["kind"] = edits.tags.get(entry["id"], entry["kind"])
             entry["alt"] = edits.alts.get(entry["id"], "")
+        # Frames a person drew regroup the lines before anything is numbered. The content lines
+        # are re-ordered along with the plan, so every later step still sees each element's lines
+        # as one contiguous run.
+        frames = {key: _frame_in_points(value, src_page.width, src_page.height)
+                  for key, value in edits.frames.items()}
+        order, plan = _apply_frames(
+            plan, content_lines, frames,
+            lambda index: f"p{src_page.number}o{content_source[index]}")
+        if order != list(range(len(content_lines))):
+            content_lines = [content_lines[i] for i in order]
+            content_roles = [content_roles[i] for i in order]
+            content_source = [content_source[i] for i in order]
+            for entry in plan:      # a line a frame gave up is an element that can be retagged too
+                entry["kind"] = edits.tags.get(entry["id"], entry["kind"])
         plan = [entry for entry in plan if entry["id"] not in edits.removed]
 
         kept = {i for entry in plan for i in range(entry["first"], entry["last"] + 1)}

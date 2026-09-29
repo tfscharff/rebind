@@ -240,9 +240,8 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
             # an action, not one more type to choose between.
             "artifact": {"key": ARTIFACT_KEY, "tag": "Artifact", "label": ARTIFACT_LABEL,
                          "what": ARTIFACT_WHAT},
-            # A second, small keymap -- TH/TD only mean something on a table's row sub-elements
-            # (remediate._element_records), so they are never mixed into the general "keys" list a
-            # librarian sees on an ordinary paragraph.
+            # A second, small keymap for a detected table's row sub-elements
+            # (remediate._element_records): a row is only ever a header row or a data row.
             "rowKeys": [{"key": key, "tag": tag, "label": label, "what": what}
                         for key, tag, label, what in ROW_TAG_KEYS],
         })
@@ -261,6 +260,7 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
             "tags": payload.get("tags") or {},
             "removed": payload.get("removed") or [],
             "alts": payload.get("alts") or {},
+            "frames": payload.get("frames") or {},
         }
         job.status = "running"
         job.stage = "Applying your changes to the tags..."

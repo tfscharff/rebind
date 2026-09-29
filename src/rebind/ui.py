@@ -228,6 +228,13 @@ li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:non
 .ob.gone i{background:var(--muted)}
 .ob:focus{outline:none;border-width:3px;background:color-mix(in srgb,var(--stamp) 18%,transparent);
   box-shadow:0 0 0 3px color-mix(in srgb,var(--stamp) 45%,transparent)}
+/* A frame that can be reshaped says so: a grip in its lower-right corner while it has focus, and
+   the resize cursor over its edges (set as the pointer moves -- see frameZone). */
+.ob.frame{touch-action:none}
+.ob.frame:focus::after{content:"";position:absolute;right:-5px;bottom:-5px;width:9px;height:9px;
+  background:var(--stamp);border:1.5px solid var(--paper);border-radius:2px}
+.ob.framed{border-style:solid;border-color:var(--stamp);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--stamp) 40%,transparent)}
 .pager{flex:none;display:flex;gap:.5rem;align-items:center;justify-content:center}
 .pager .pageno{font-family:var(--mono);font-size:.8rem;color:var(--muted)}
 
@@ -414,7 +421,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // ---- State ---------------------------------------------------------------------------------
   var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
           tags_edit:{},removed:{},alts:{},focused:null,figures:[],checks:[],status:null,
-          palette:false,walked:{},artifact:null,allKeys:[],rowKeys:[]};
+          palette:false,walked:{},artifact:null,allKeys:[],rowKeys:[],
+          frames:{},dragging:false,redrawAfterDrag:false};
 
   function done(id, name, s){
     if(elapsedTimer) clearInterval(elapsedTimer);
@@ -715,7 +723,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     setSaveState('Saving…', true);
     var removed=Object.keys(ed.removed).filter(function(k){ return ed.removed[k]; });
     fetch('/jobs/'+ed.id+'/edits',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({tags:stripArtifacts(ed.tags_edit), removed:removed, alts:ed.alts})})
+      body:JSON.stringify({tags:stripArtifacts(ed.tags_edit), removed:removed, alts:ed.alts,
+                           frames:ed.frames})})
       .then(function(r){return r.json();}).then(function(j){
         if(j.error){ saving=false; setSaveState('Could not save', true); return; }
         awaitRebuild();
@@ -745,7 +754,11 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         ed.pageList=Object.keys(ed.pages).map(Number).sort(function(a,b){return a-b;});
         if(ed.pageList.indexOf(ed.page)<0) ed.page=ed.pageList[0]||1;
       }
-      drawReport(); drawStage(); drawTodo();
+      // Redrawing the boxes mid-drag would pull the frame out from under the pointer; the page
+      // is redrawn when the drag lets go instead.
+      drawReport();
+      if(ed.dragging) ed.redrawAfterDrag=true; else drawStage();
+      drawTodo();
       setSaveState('All changes saved', false);
       if(pending) sendEdits();
     }).catch(function(){ setSaveState('All changes saved', false); });
@@ -767,6 +780,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       ed.tags_edit=(d.edits&&d.edits.tags)||{};
       ed.removed={}; ((d.edits&&d.edits.removed)||[]).forEach(function(k){ ed.removed[k]=true; });
       ed.alts=(d.edits&&d.edits.alts)||{};
+      ed.frames=(d.edits&&d.edits.frames)||{};
       ed.pageList=Object.keys(ed.pages).map(Number).sort(function(a,b){return a-b;});
       if(ed.pageList.indexOf(ed.page)<0) ed.page=ed.pageList[0]||1;
       drawStage();
@@ -782,10 +796,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
 
   function keyFor(tag){
     var found=null;
-    // TH/TD live in a separate keymap from everything else, but a row's label still has to be
-    // found by tag name wherever any element's label is looked up (showType, boxHtml) -- the two
-    // vocabularies never share a tag name, so searching both together is safe.
-    ed.allKeys.concat(ed.rowKeys).forEach(function(k){ if(k.tag===tag) found=k; });
+    // TH/TD are in both keymaps, with the same keys: a table row's own labels ("Header cell") are
+    // written for a row, so the whole-element ones are found first and win.
+    ed.allKeys.concat(ed.rowKeys).forEach(function(k){ if(k.tag===tag && !found) found=k; });
     return found;
   }
 
@@ -845,8 +858,16 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       ? '<b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
         '<b>[</b> <b>]</b> turn the page · <b>Enter</b> lists both'
       : '<b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
-        '<b>+</b> add · <b>−</b> remove · <b>[</b> <b>]</b> turn the page · '+
+        '<b>+</b> add · <b>−</b> remove · <b>Del</b> not read, next · '+
+        '<b>Backspace</b> not read, previous · <b>[</b> <b>]</b> turn the page · '+
         '<b>Enter</b> lists every type';
+    // Only said where it works: a frame is the lines an element holds, which a table's row and
+    // a picture's region do not have.
+    if(e && frameable(e)){
+      sub+='<br><b>Shift + arrows</b> move the frame’s bottom and right edges · '+
+        '<b>Ctrl + Shift + arrows</b> its top and left · or drag it with the mouse. '+
+        'The element becomes the lines inside it.';
+    }
     return '<h2>'+(row? 'Keys for this table row' : 'Keys')+'</h2>'+
       '<p class="sub">'+sub+'</p>'+
       '<dl class="keylist">'+keysFor(e||{}).map(function(k){
@@ -869,12 +890,133 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var k=kindOf(e);
     var untagged=(k==='Artifact');
     var gone=!!ed.removed[e.id]||untagged;
-    var cls='ob'+(gone?' gone':'')+(k==='Figure'?' fig':'');
+    var f=frameOf(e);
+    var cls='ob'+(gone?' gone':'')+(k==='Figure'?' fig':'')+(frameable(e)?' frame':'')+
+      (ed.frames[e.id]?' framed':'');
     return '<span class="'+cls+'" tabindex="0" role="button" data-box="'+esc(e.id)+'"'+
       ' aria-label="'+esc((untagged?'Not read':tagLabel(k))+', item '+(i+1)+': '+
         (e.text||e.alt||'picture').slice(0,80))+'"'+
-      ' style="left:'+e.left+'%;top:'+e.top+'%;width:'+e.width+'%;height:'+e.height+'%">'+
+      ' style="left:'+f.left+'%;top:'+f.top+'%;width:'+f.width+'%;height:'+f.height+'%">'+
       '<i aria-hidden="true">'+(untagged?'—':(i+1))+'</i></span>';
+  }
+
+  // ---- Frames ---------------------------------------------------------------------------------
+  // An element's frame is the region whose lines it holds. Reshaping it is how lines are moved
+  // between elements -- drag the bottom edge of a paragraph Rebind cut short down over the lines it
+  // left behind, and they join it; pull it back up and they are given away. The rebuild decides
+  // membership by which lines' centres the frame encloses. Only elements made of text lines have
+  // one: a table row is decided by its table, and a picture by its region.
+  var FRAME_STEP=0.5;     // percent of the page per arrow press -- under a line on any real page
+
+  function frameable(e){
+    return !e.row && kindOf(e)!=='Artifact' && /n\d+$/.test(e.id);
+  }
+
+  // What is drawn: the frame a person set, where there is one, rather than the box around the lines
+  // it ended up enclosing. Snapping to the lines would undo every press that did not yet reach the
+  // next line, and a frame nudged down three times has to stay three nudges down.
+  function frameOf(e){
+    var f=ed.frames[e.id];
+    return f? {left:f[0],top:f[1],width:f[2],height:f[3]}
+            : {left:e.left,top:e.top,width:e.width,height:e.height};
+  }
+
+  function tidyFrame(f){
+    var r=function(v){ return Math.round(v*100)/100; };
+    var left=Math.min(Math.max(f.left,0),99), top=Math.min(Math.max(f.top,0),99);
+    return {left:r(left), top:r(top),
+            width:r(Math.min(Math.max(f.width,FRAME_STEP),100-left)),
+            height:r(Math.min(Math.max(f.height,FRAME_STEP),100-top))};
+  }
+
+  function placeBox(box, f){
+    box.style.left=f.left+'%'; box.style.top=f.top+'%';
+    box.style.width=f.width+'%'; box.style.height=f.height+'%';
+  }
+
+  function commitFrame(e, f, box){
+    f=tidyFrame(f);
+    ed.frames[e.id]=[f.left,f.top,f.width,f.height];
+    if(box){ placeBox(box, f); box.classList.add('framed'); }
+    applyEdits();
+  }
+
+  // Which edges a point on the box is close enough to grab: none of them means the whole frame.
+  function frameZone(box, x, y){
+    var b=box.getBoundingClientRect(), edge=7;
+    return {l:x-b.left<edge, r:b.right-x<edge, t:y-b.top<edge, b:b.bottom-y<edge};
+  }
+
+  function zoneCursor(z){
+    if((z.t&&z.l)||(z.b&&z.r)) return 'nwse-resize';
+    if((z.t&&z.r)||(z.b&&z.l)) return 'nesw-resize';
+    if(z.l||z.r) return 'ew-resize';
+    if(z.t||z.b) return 'ns-resize';
+    return 'move';
+  }
+
+  // Shift+arrows move the bottom and right edges, Ctrl+Shift+arrows the top and left: the two
+  // corners a frame is held by, on one key each, so a frame can be shaped without a mouse.
+  function nudgeFrame(e, box, key, farCorner){
+    var f=frameOf(e), s=FRAME_STEP;
+    if(farCorner){
+      if(key==='ArrowDown'){ f.height+=s; }
+      if(key==='ArrowUp'){ f.height-=s; }
+      if(key==='ArrowRight'){ f.width+=s; }
+      if(key==='ArrowLeft'){ f.width-=s; }
+    } else {
+      if(key==='ArrowUp'){ f.top-=s; f.height+=s; }
+      if(key==='ArrowDown'){ f.top+=s; f.height-=s; }
+      if(key==='ArrowLeft'){ f.left-=s; f.width+=s; }
+      if(key==='ArrowRight'){ f.left+=s; f.width-=s; }
+    }
+    commitFrame(e, f, box);
+  }
+
+  function wireFrameDrag(box, e){
+    box.addEventListener('pointermove', function(ev){
+      if(!ed.dragging) box.style.cursor=zoneCursor(frameZone(box, ev.clientX, ev.clientY));
+    });
+    box.addEventListener('pointerdown', function(ev){
+      if(ev.button!==0) return;
+      var sheet=document.getElementById('sheet');
+      if(!sheet) return;
+      ev.preventDefault();
+      box.focus();
+      var r=sheet.getBoundingClientRect();
+      var z=frameZone(box, ev.clientX, ev.clientY);
+      var whole=!(z.l||z.r||z.t||z.b);
+      var start=frameOf(e), sx=ev.clientX, sy=ev.clientY, moved=false, now=null;
+      box.setPointerCapture(ev.pointerId);
+      ed.dragging=true;
+      function move(m){
+        // A few pixels of slack, so a click that wobbles is still a click and not a reshape.
+        if(!moved && Math.abs(m.clientX-sx)+Math.abs(m.clientY-sy)<4) return;
+        moved=true;
+        var dx=(m.clientX-sx)/r.width*100, dy=(m.clientY-sy)/r.height*100;
+        var f={left:start.left,top:start.top,width:start.width,height:start.height};
+        if(whole){ f.left+=dx; f.top+=dy; }
+        else {
+          if(z.l){ f.left+=dx; f.width-=dx; }
+          if(z.r){ f.width+=dx; }
+          if(z.t){ f.top+=dy; f.height-=dy; }
+          if(z.b){ f.height+=dy; }
+        }
+        now=tidyFrame(f);
+        placeBox(box, now);
+      }
+      function up(){
+        box.removeEventListener('pointermove', move);
+        box.removeEventListener('pointerup', up);
+        box.removeEventListener('pointercancel', up);
+        ed.dragging=false;
+        if(moved && now){ commitFrame(e, now, box); say('Frame changed. Saving…'); }
+        if(ed.redrawAfterDrag){ ed.redrawAfterDrag=false; drawStage(); }
+      }
+      box.addEventListener('pointermove', move);
+      box.addEventListener('pointerup', up);
+      box.addEventListener('pointercancel', up);
+    });
   }
 
   // What the banner says while an element has focus: the type in big letters, what that type
@@ -977,9 +1119,11 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   }
 
   function wireStage(){
+    // Assigned, not added: this runs again after every save without the pager being redrawn, and
+    // each added listener was one more page turned per click.
     var prev=document.getElementById('edprev'), next=document.getElementById('ednext');
-    if(prev) prev.addEventListener('click',function(){ turnPage(-1); });
-    if(next) next.addEventListener('click',function(){ turnPage(1); });
+    if(prev) prev.onclick=function(){ turnPage(-1); };
+    if(next) next.onclick=function(){ turnPage(1); };
 
     var items=elementsOnPage();
     var boxes=Array.prototype.slice.call(document.querySelectorAll('.ob'));
@@ -992,9 +1136,26 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         if(kindOf(e)==='Figure') openAltPrompt(e.id, false);
       });
       box.addEventListener('click',function(){ box.focus(); });
+      if(frameable(e)) wireFrameDrag(box, e);
       box.addEventListener('keydown',function(ev){
-        if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
         var key=(ev.key||'');
+        if(ev.shiftKey && !ev.altKey && !ev.metaKey && key.indexOf('Arrow')===0){
+          ev.preventDefault();
+          if(frameable(e)) nudgeFrame(e, box, key, !ev.ctrlKey);
+          else say(e.row? 'A table row’s frame is set by its table.'
+                        : 'This one has no frame to move.');
+          return;
+        }
+        if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
+        // Taking out what should not be read, on the keys that mean "delete": Delete carries on
+        // forward like every other edit, Backspace steps back -- for clearing a run of junk
+        // walking up the page as naturally as walking down it.
+        if(key==='Delete'||key==='Backspace'){
+          ev.preventDefault();
+          if(e.row){ say('A table row is not taken out on its own. Mark the table instead.'); return; }
+          setKind(e.id, 'Artifact', key==='Backspace');
+          return;
+        }
         // Tabbing off the end of a page carries on to the next one, so checking a whole document
         // is one unbroken run of Tab rather than a page turn every dozen presses.
         if(key==='Tab' && !ev.shiftKey && index===boxes.length-1){
@@ -1222,7 +1383,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // Setting a type moves on to the next element by itself. Correcting a page is then a single
   // stream of keystrokes with no Tab between them -- and where the type was already right, Tab
   // steps past it. Running off the end of the page carries on to the next one, as Tab does.
-  function setKind(elementId, tag){
+  function setKind(elementId, tag, back){
     var items=elementsOnPage();
     var at=-1;
     items.forEach(function(e,i){ if(e.id===elementId) at=i; });
@@ -1237,6 +1398,11 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     applyEdits();
     say(tagLabel(tag)+' set.');
     var boxes=document.querySelectorAll('.ob');
+    if(back){
+      if(at>0){ boxes[at-1].focus(); return; }
+      if(!turnPage(-1, true) && boxes[at]) boxes[at].focus();
+      return;
+    }
     if(at>=0 && at+1<boxes.length){ boxes[at+1].focus(); return; }
     // A figure just made needs its description before anything else, so stay on it rather than
     // walking past the one thing that still needs a person.

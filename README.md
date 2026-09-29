@@ -196,14 +196,28 @@ figure out of the reading order; other type keys type instead.
 | `l` | List | `m` | Formula | `i` | Index |
 | `e` | Code | `o` | Form field | `n` | No structure |
 | `v` | Footnote | `x` | Not read | `[` `]` | Previous / next page |
+| `h` | Table header cell | `b` | Table data cell | | |
 
-`+` adds the region you are on to the reading order; `−` takes it out.
+`+` adds the region you are on to the reading order; `−` takes it out. `Delete` marks it not read
+and moves on; `Backspace` marks it not read and steps back, for clearing a run of junk upwards.
+
+**Building a table by hand.** Mark each cell with `h` or `b`. A run of consecutive cells becomes one
+`/Table`: rows from vertical overlap (so a wrapped cell stays in its row), columns from clustered left
+edges, empty cells to keep the grid regular. A header cell is scoped to its column when its whole row
+is headers, otherwise to its row.
+
+**Frames.** Each element's box is the region whose lines it holds, and it can be reshaped: drag an
+edge or corner with the mouse (drag the middle to move it), or use `Shift`+arrows for the bottom and
+right edges and `Ctrl`+`Shift`+arrows for the top and left. On the rebuild the element becomes
+exactly the lines whose centres fall inside the frame — dragging a paragraph's bottom edge over the
+lines it was split from merges them; pulling it back up gives them away as an element of their own.
+A table row and a picture have no frame of their own.
 
 `x` is an action, not a type: it marks content as an artifact rather than untagging it, since
 untagged content is a conformance failure. Page furniture and text inside figures are drawn hatched
 as "not read"; giving one a type puts it back into the reading order.
 
-On a table row, only `h` (Header cell) and `b` (Data cell) are offered, letting you correct which
+On a detected table's row, only `h` (Header cell) and `b` (Data cell) are offered, letting you correct which
 rows are headers without retagging the whole table. The key legend is the element's own, not the
 document's: land on a row and it lists those two and nothing else, because nothing else answers
 there.
