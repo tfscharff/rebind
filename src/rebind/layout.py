@@ -64,6 +64,17 @@ MIN_ROWS_FOR_TABLE = 3
 # gate removes the dense flowing rows before the regularity test, which is what finally separates a
 # table from dense multi-column text -- geometry alone (alignment) could not.
 TABLE_ROW_MAX_FILL = 0.8
+# Fill alone cannot tell a table from prose once the gutters are wide: a two-page spread scanned as
+# one sheet puts four columns of ordinary paragraphs side by side with a binding between them, and
+# every row of it comes out "sparse". What a table's cells are that prose lines are not is SHORT --
+# labels and values, not running sentences. So a row only counts towards proving a region is a
+# table when most of its cells are at most TABLE_CELL_MAX_WORDS words, and those proving rows must
+# make up at least TABLE_PROVING_SHARE of the rows finally flagged -- a handful of paragraph-end
+# lines that happen to line up across prose columns do not make the prose a table. On a real sample
+# (1087881.pdf) this took 48 of 51 pages of paragraphs-read-as-tables down to the 3 real exhibits,
+# while the genuine tables in the other samples are untouched (their median cell is two words).
+TABLE_CELL_MAX_WORDS = 5
+TABLE_PROVING_SHARE = 0.5
 # How far apart two flagged rows must sit before they are two tables rather than one, in multiples
 # of the median flagged row height. A table's own row pitch is barely more than one line height; a
 # page carrying two separate tables puts a title, a rule and a band of prose between them. Three is
@@ -550,12 +561,16 @@ def detect_table_lines(lines: list[TextLine]) -> set[int]:
     # recurring columns) -- a dense row (cells covering more than TABLE_ROW_MAX_FILL of the row
     # span, i.e. flowing multi-column text, not a table) must not by itself convince the detector a
     # region is a table. This is what removes the 1905 bulletin's dense three-column articles.
+    # Rows of running text are excluded the same way: most of a proving row's cells must be short
+    # (TABLE_CELL_MAX_WORDS), because a spread's prose columns are sparse too.
     row_cells: list[list[TextLine]] = []
     for cells in all_cells:
         if len(cells) >= MIN_COLUMNS_FOR_TABLE:
             span = cells[-1].bbox[2] - cells[0].bbox[0]
             fill = sum(c.bbox[2] - c.bbox[0] for c in cells) / span if span > 0 else 1.0
-            row_cells.append([] if fill > TABLE_ROW_MAX_FILL else cells)
+            short = sum(1 for c in cells if len(c.text.split()) <= TABLE_CELL_MAX_WORDS)
+            proving = fill <= TABLE_ROW_MAX_FILL and 2 * short > len(cells)
+            row_cells.append(cells if proving else [])
         else:
             row_cells.append([])
 
@@ -597,6 +612,10 @@ def detect_table_lines(lines: list[TextLine]) -> set[int]:
         if len(cells_on_recurring(cells)) >= MIN_COLUMNS_FOR_TABLE
     ]
     if len(table_rows) < MIN_ROWS_FOR_TABLE:
+        return set()
+    # Mostly rows that look like a table, not mostly prose that happens to share its columns.
+    proving = sum(1 for row_index in table_rows if row_cells[row_index])
+    if proving < TABLE_PROVING_SHARE * len(table_rows):
         return set()
 
     flagged: set[int] = set()

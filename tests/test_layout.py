@@ -202,6 +202,35 @@ def test_a_dense_row_on_established_columns_is_still_a_table_row():
     )
 
 
+def test_prose_columns_with_wide_gutters_are_not_a_table():
+    from rebind.layout import detect_table_lines
+    # A two-page spread scanned as one sheet: four columns of prose whose gutters (and the binding
+    # between the pages) are wide enough that each row covers well under 0.8 of its span -- the
+    # density gate alone calls every row "sparse". What gives it away is that the "cells" are lines
+    # of running text, not labels: a real sample (1087881.pdf) had 48 of its 51 pages of ordinary
+    # paragraphs tagged as tables this way.
+    words = "the quick brown fox jumps over the lazy dog again"
+    lines = [_line(40 + c * 150, 700 - r * 14, 140 + c * 150, 710 - r * 14, words)
+             for r in range(12) for c in range(4)]
+    assert detect_table_lines(lines) == set()
+
+
+def test_a_few_short_lines_lining_up_across_prose_columns_are_not_a_table():
+    from rebind.layout import detect_table_lines
+    # Dense prose columns, plus the last lines of three paragraphs that happen to end on the same
+    # rows in every column. Those three short rows are genuinely sparse and genuinely aligned --
+    # but they are three rows out of fifteen, and a table is not mostly prose.
+    words = "the quick brown fox jumps over the lazy dog again"
+    lines = []
+    for r in range(15):
+        short = r in (4, 9, 14)
+        for c in range(4):
+            x0 = 40 + c * 140
+            lines.append(_line(x0, 700 - r * 14, x0 + (40 if short else 125), 710 - r * 14,
+                               "its end." if short else words))
+    assert detect_table_lines(lines) == set()
+
+
 def test_order_page_flags_a_real_table_grid():
     grid = [_grid_line(c, r, f"r{r}c{c}") for r in range(4) for c in range(3)]
     page = Page(number=1, width=612, height=792, lines=tuple(grid), images=())
