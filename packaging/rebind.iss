@@ -6,7 +6,7 @@
 ; and must never change between releases.
 AppId={{11732952-84C2-467D-9E8D-5263D9A81C11}
 AppName=Rebind
-AppVersion=1.0.5
+AppVersion=1.0.6
 AppPublisher=Thomas Scharff
 DefaultDirName={autopf}\Rebind
 DefaultGroupName=Rebind
