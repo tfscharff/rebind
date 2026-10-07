@@ -1490,7 +1490,8 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
             continue
         # An element inserted after another is listed with it (the sort is stable, and the plan
         # already has it straight after), not where its lines happen to sit on the page.
-        order_of[entry["id"]] = order_of.get(edits.after.get(entry["id"], ""), source_index[first])
+        anchor = edits.after.get(entry["id"]) or entry.get("_after", "")
+        order_of[entry["id"]] = order_of.get(anchor, entry.get("_order", source_index[first]))
         members = lines[first:last + 1]
         box = (min(ln.bbox[0] for ln in members), min(ln.bbox[1] for ln in members),
                max(ln.bbox[2] for ln in members), max(ln.bbox[3] for ln in members))
@@ -1728,6 +1729,11 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
         members = sorted({*(i for i, owner in claimed.items() if owner == entry["id"]),
                           *(() if framed_whole else
                             (i for i in own if i not in claimed and i not in given_up))})
+        if framed_whole:
+            # Read as the lines sit inside the frame. Their places in the line order are not to be
+            # trusted for this: a line taken from an element that held it wrongly -- a table read
+            # across both columns -- has the place that element gave it.
+            members = _top_to_bottom(members, lines)
         if members:
             groups.append((entry, members))
         run: list[int] = []
@@ -1737,17 +1743,31 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
                 run.append(i)
                 continue
             if run:
-                groups.append(({"kind": "P", "id": orphan_id(run[0]), "alt": ""}, run))
+                groups.append(({"kind": "P", "id": orphan_id(run[0]), "alt": "",
+                                "_given_up_by": entry["id"]}, run))
                 run = []
-    groups.sort(key=lambda group: group[1][0])
-    groups = _follow_anchors(groups, lambda group: group[0]["id"], after or {})
+    # Each element stays where its own first line was; one whose own lines all went elsewhere goes
+    # where the first of its new ones was.
+    def stands_at(group: tuple[dict, list[int]]) -> int:
+        entry, members = group
+        mine = [i for i in members if entry.get("first", 0) <= i <= entry.get("last", -1)]
+        return min(mine) if mine else min(members)
+
+    groups.sort(key=stands_at)
+    groups = _join_given_up(groups, lines)
+    placed = _given_up_anchors(groups, lines)
+    groups = _follow_anchors(groups, lambda group: group[0]["id"], {**placed, **(after or {})})
 
     order: list[int] = []
     out: list[dict] = []
     for entry, members in groups:
         start = len(order)
+        at = stands_at((entry, members))
         order.extend(members)
-        new_entry = {**entry, "first": start, "last": len(order) - 1}
+        new_entry = {k: v for k, v in entry.items() if k != "_given_up_by"}
+        new_entry.update(first=start, last=len(order) - 1, _at=at)
+        if entry["id"] in placed:
+            new_entry["_after"] = placed[entry["id"]]
         if entry["id"] in row_frames:
             position = {old: start + k for k, old in enumerate(members)}
             original = {i: row_id for row_id, rows in row_frames[entry["id"]] for i in rows}
@@ -1767,6 +1787,78 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
                 lambda item: item[0], after or {})
         out.append(new_entry)
     return order, out
+
+
+def _top_to_bottom(members: list[int], lines: list[TextLine]) -> list[int]:
+    """Line indices in the order they sit on the page: by line, top to bottom, each left to right."""
+    return [i for row in _table_rows([(i, lines[i]) for i in members]) for i, _line in row]
+
+
+def _box(members: list[int], lines: list[TextLine]) -> tuple[float, float, float, float]:
+    return (min(lines[i].bbox[0] for i in members), min(lines[i].bbox[1] for i in members),
+            max(lines[i].bbox[2] for i in members), max(lines[i].bbox[3] for i in members))
+
+
+def _join_given_up(groups: list[tuple[dict, list[int]]], lines: list[TextLine]
+                   ) -> list[tuple[dict, list[int]]]:
+    """Join the lines one element gave up into one paragraph wherever they run on down a column.
+
+    Shrinking a table's rows back off the prose beside it gives that prose up a line at a time --
+    each row lets go of one line -- and five one-line paragraphs is not what was on the page.
+    Runs join when they overlap across and the gap between them is under a line's height.
+    """
+    out: list[tuple[dict, list[int]]] = []
+    for entry, members in groups:
+        source = entry.get("_given_up_by")
+        if source is not None:
+            x0, y0, x1, _y1 = _box(members, lines)
+            for k in range(len(out) - 1, -1, -1):
+                other, theirs = out[k]
+                if other.get("_given_up_by") != source:
+                    continue
+                ox0, oy0, ox1, oy1 = _box(theirs, lines)
+                height = min(lines[i].bbox[3] - lines[i].bbox[1] for i in [*members, *theirs])
+                across = min(x1, ox1) - max(x0, ox0)
+                gap = max(oy0 - _box(members, lines)[3], _box(members, lines)[1] - oy1)
+                if across > 0.5 * min(x1 - x0, ox1 - ox0) and gap < height:
+                    out[k] = (other, _top_to_bottom([*theirs, *members], lines))
+                    break
+            else:
+                out.append((entry, members))
+            continue
+        out.append((entry, members))
+    return out
+
+
+def _given_up_anchors(groups: list[tuple[dict, list[int]]], lines: list[TextLine]
+                      ) -> dict[str, str]:
+    """Where each run of given-up lines is read: after the nearest element above it in its column.
+
+    A given-up line's own place in the line order is where the page's reading order put it, which
+    is wherever the element that held it was -- and an element that held it wrongly (a table read
+    across both columns) put it in the wrong column. So it is placed by where it sits instead:
+    after the closest element above it that starts in the same column (a heading run across both
+    columns does not, so text at the top of the right column is not read before the left one).
+    One with nothing above it stays where it was.
+    """
+    tolerance = 20.0
+    anchors: dict[str, str] = {}
+    boxes = [(entry["id"], _box(members, lines)) for entry, members in groups]
+    for entry, members in groups:
+        if "_given_up_by" not in entry:
+            continue
+        x0, _y0, x1, y1 = _box(members, lines)
+        best: tuple[float, str] | None = None
+        for other_id, (ox0, oy0, ox1, _oy1) in boxes:
+            if other_id == entry["id"] or min(x1, ox1) <= max(x0, ox0):
+                continue
+            if ox0 < x0 - tolerance or oy0 < y1 - 2.0:
+                continue
+            if best is None or oy0 < best[0]:
+                best = (oy0, other_id)
+        if best is not None:
+            anchors[entry["id"]] = best[1]
+    return anchors
 
 
 def _follow_anchors(items: list, key, after: dict[str, str]) -> list:
@@ -2519,6 +2611,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             plan, content_lines, frames,
             lambda index: f"p{src_page.number}o{content_source[index]}", added, edits.removed,
             edits.after)
+        for entry in plan:      # where each element stands in the page's own reading order
+            entry["_order"] = content_source[entry.pop("_at", entry["first"])]
         if order != list(range(len(content_lines))):
             content_lines = [content_lines[i] for i in order]
             content_roles = [content_roles[i] for i in order]

@@ -580,6 +580,46 @@ def test_an_inserted_element_holds_what_its_frame_encloses():
     assert [e["id"] for e in out] == ["A"]
 
 
+def test_lines_a_row_gives_up_are_read_where_they_sit_not_inside_the_table():
+    # A table detected across both columns of a page swallows the prose beside it. Shrinking its
+    # rows back to the left column gives that prose up -- and it belongs in the right column,
+    # after the paragraph above it there, not straight after the table in the left one. Lines given
+    # up together are one paragraph, not one per line.
+    from rebind.extract import TextLine
+    from rebind.remediate import _apply_frames
+
+    def at(x, y, text, w=60):
+        return TextLine(text=text, page=1, bbox=(x, y, x + w, y + 10), font="Times", size=10.0,
+                        bold=False, italic=False)
+
+    lines = [at(72, 730, "left top", 200),
+             at(72, 700, "a1"), at(200, 700, "a2"), at(320, 700, "prose one", 200),
+             at(72, 686, "b1"), at(200, 686, "b2"), at(320, 686, "prose two", 200),
+             at(320, 716, "right above", 200),
+             at(320, 640, "right below", 200)]
+    plan = [{"kind": "P", "first": 0, "last": 0, "id": "L"},
+            {"kind": "Table", "first": 1, "last": 6, "id": "T"},
+            {"kind": "P", "first": 7, "last": 7, "id": "RA"},
+            {"kind": "P", "first": 8, "last": 8, "id": "RB"}]
+    frames = {"Tr0": (60, 695, 290, 715), "Tr1": (60, 681, 290, 699)}
+    order, out = _apply_frames(plan, lines, frames, lambda i: f"o{i}")
+    assert [(e["id"], [lines[order[i]].text for i in range(e["first"], e["last"] + 1)])
+            for e in out if e["id"] != "T"] == [
+        ("L", ["left top"]), ("RA", ["right above"]), ("o3", ["prose one", "prose two"]),
+        ("RB", ["right below"])]
+    assert [e["id"] for e in out].index("T") < [e["id"] for e in out].index("RA")
+
+    # Stretching the right column's paragraph down over that prose joins it back up: the paragraph
+    # stays where it was in the reading order, and reads top to bottom -- even though the lines it
+    # took in come earlier in the page's line order, from inside the table.
+    frames["RA"] = (310, 635, 530, 728)
+    order, out = _apply_frames(plan, lines, frames, lambda i: f"o{i}")
+    assert [(e["id"], [lines[order[i]].text for i in range(e["first"], e["last"] + 1)])
+            for e in out if e["id"] != "T"] == [
+        ("L", ["left top"]), ("RA", ["right above", "prose one", "prose two", "right below"])]
+    assert [e["id"] for e in out].index("T") < [e["id"] for e in out].index("RA")
+
+
 def test_an_inserted_element_follows_the_element_it_was_inserted_after():
     from rebind.extract import TextLine
     from rebind.remediate import _apply_frames
