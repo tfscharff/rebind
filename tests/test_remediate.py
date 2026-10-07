@@ -521,6 +521,73 @@ def test_a_frame_regroups_the_lines_it_encloses():
             for e in out] == [("C", ["c"]), ("o3", ["d"])]
 
 
+def test_a_framed_table_row_regroups_the_cells_it_encloses():
+    from rebind.extract import TextLine
+    from rebind.remediate import _apply_frames, _table_row_groups
+
+    def cell(x, y, text):
+        return TextLine(text=text, page=1, bbox=(x, y, x + 60, y + 10), font="Times", size=10.0,
+                        bold=False, italic=False)
+
+    # A two-column table of three rows, then a stray line under it that detection missed.
+    lines = [cell(72, 700, "h1"), cell(200, 700, "h2"),
+             cell(72, 680, "a1"), cell(200, 680, "a2"),
+             cell(72, 660, "b1"), cell(200, 660, "b2"),
+             cell(72, 640, "c1")]
+    plan = [{"kind": "Table", "first": 0, "last": 5, "id": "T"},
+            {"kind": "P", "first": 6, "last": 6, "id": "S"}]
+
+    def rows(order, out):
+        table = out[0]
+        return [(rid, [lines[order[i]].text for i in members])
+                for rid, members in _table_row_groups(table, [lines[i] for i in order])]
+
+    # Unframed, the rows are the detected ones.
+    order, out = _apply_frames(plan, lines, {}, lambda i: f"o{i}")
+    assert rows(order, out) == [("Tr0", ["h1", "h2"]), ("Tr1", ["a1", "a2"]),
+                                ("Tr2", ["b1", "b2"])]
+
+    # Dragging the last row down over the stray line pulls it into that row and the table.
+    order, out = _apply_frames(plan, lines, {"Tr2": (60, 635, 280, 675)}, lambda i: f"o{i}")
+    assert [e["id"] for e in out] == ["T"]
+    assert rows(order, out) == [("Tr0", ["h1", "h2"]), ("Tr1", ["a1", "a2"]),
+                                ("Tr2", ["b1", "c1", "b2"])]
+
+    # Shrinking a row's frame gives a cell up: it leaves the table as an element of its own.
+    order, out = _apply_frames(plan, lines, {"Tr1": (60, 675, 140, 695)}, lambda i: f"o{i}")
+    assert rows(order, out) == [("Tr0", ["h1", "h2"]), ("Tr1", ["a1"]), ("Tr2", ["b1", "b2"])]
+    assert [e["id"] for e in out] == ["T", "o3", "S"]
+
+
+def test_a_framed_table_row_is_rebuilt_from_what_the_frame_encloses(tmp_path: Path,
+                                                                    verapdf_exe: Path):
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf
+
+    rows = "".join(f"<tr><td>{a}</td><td>{b}</td><td>{c}</td></tr>"
+                   for a, b, c in [("Region", "Sales", "Growth"), ("North", "120", "8"),
+                                   ("South", "95", "3"), ("East", "140", "12")])
+    css = ("table { width: 90%; border-collapse: collapse; } "
+           "td, th { border: 1px solid #000; padding: 10px 40px; text-align: left; }")
+    source = born_digital_pdf(f"<table>{rows}</table><p>Stray</p>", tmp_path / "in.pdf",
+                              extra_css=css)
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    table_rows = [e for e in plain.elements if e.get("row")]
+    assert len(table_rows) == 4
+    last = table_rows[-1]
+    stray = next(e for e in plain.elements if e["text"].startswith("Stray"))
+    left = min(last["left"], stray["left"]) - 1
+    frame = [left, last["top"] - 0.5, last["left"] + last["width"] + 1 - left,
+             stray["top"] + stray["height"] - last["top"] + 1]
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T", edits=Edits(frames={last["id"]: frame}))
+    texts = {e["id"]: e["text"] for e in result.elements}
+    assert "Stray" in texts[last["id"]]
+    assert stray["id"] not in texts
+    assert validate_pdf_ua(out, verapdf_exe=verapdf_exe).compliant
+
+
 def test_a_framed_element_is_rebuilt_from_what_the_frame_encloses(tmp_path: Path,
                                                                      verapdf_exe: Path):
     from rebind.remediate import Edits

@@ -861,12 +861,12 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         '<b>+</b> add · <b>−</b> remove · <b>Del</b> not read, next · '+
         '<b>Backspace</b> not read, previous · <b>[</b> <b>]</b> turn the page · '+
         '<b>Enter</b> lists every type';
-    // Only said where it works: a frame is the lines an element holds, which a table's row and
-    // a picture's region do not have.
+    // Only said where it works: a frame is the lines an element holds, which a picture's region
+    // does not have.
     if(e && frameable(e)){
       sub+='<br><b>Shift + arrows</b> move the frame’s bottom and right edges · '+
         '<b>Ctrl + Shift + arrows</b> its top and left · or drag it with the mouse. '+
-        'The element becomes the lines inside it.';
+        (row? 'The row becomes the cells inside it.' : 'The element becomes the lines inside it.');
     }
     return '<h2>'+(row? 'Keys for this table row' : 'Keys')+'</h2>'+
       '<p class="sub">'+sub+'</p>'+
@@ -905,11 +905,12 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // between elements -- drag the bottom edge of a paragraph Rebind cut short down over the lines it
   // left behind, and they join it; pull it back up and they are given away. The rebuild decides
   // membership by which lines' centres the frame encloses. Only elements made of text lines have
-  // one: a table row is decided by its table, and a picture by its region.
+  // one, a detected table's rows among them (a cell the table missed is dragged into its row); a
+  // picture is decided by its region.
   var FRAME_STEP=0.5;     // percent of the page per arrow press -- under a line on any real page
 
   function frameable(e){
-    return !e.row && kindOf(e)!=='Artifact' && /n\d+$/.test(e.id);
+    return kindOf(e)!=='Artifact' && /n\d+(r\d+)?$/.test(e.id);
   }
 
   // What is drawn: the frame a person set, where there is one, rather than the box around the lines
@@ -1142,8 +1143,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         if(ev.shiftKey && !ev.altKey && !ev.metaKey && key.indexOf('Arrow')===0){
           ev.preventDefault();
           if(frameable(e)) nudgeFrame(e, box, key, !ev.ctrlKey);
-          else say(e.row? 'A table row’s frame is set by its table.'
-                        : 'This one has no frame to move.');
+          else say('This one has no frame to move.');
           return;
         }
         if(ev.ctrlKey||ev.metaKey||ev.altKey) return;

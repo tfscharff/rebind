@@ -1013,10 +1013,11 @@ def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextL
     return [sorted(row, key=lambda cl: cl[1].bbox[0]) for row in rows]
 
 
-def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
+def _tagged_table(pdf: pikepdf.Pdf, rows: list[tuple[str, list[tuple[int, TextLine]]]],
                   document_elem: pikepdf.Object, page_obj: pikepdf.Object, leaf,
-                  table_id: str, row_tags: dict[str, str]) -> pikepdf.Object:
-    """Build a fully tagged `/Table` from a run of table cells: a regular grid of `/TR`s whose
+                  row_tags: dict[str, str]) -> pikepdf.Object:
+    """Build a fully tagged `/Table` from its rows of cells, top to bottom, each as `(row id,
+    [(line index, line)] left to right)` (`_table_row_groups`): a regular grid of `/TR`s whose
     first row is header cells (`/TH` scoped to their column) and the rest data cells (`/TD`) by
     default -- a person can override any row's header/data status per row through the editor
     (`row_tags`, keyed by row id; see `ROW_TAG_KEYS`).
@@ -1026,7 +1027,7 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
     regular, which is what lets assistive technology read a data cell against its column header.
     """
     columns: list[float] = []
-    for x in sorted(line.bbox[0] for _mcid, line in cells):
+    for x in sorted(line.bbox[0] for _row_id, row in rows for _mcid, line in row):
         if not columns or x - columns[-1] > COLUMN_ALIGN_TOLERANCE_PT:
             columns.append(x)
 
@@ -1038,7 +1039,7 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
     trs: list[pikepdf.Object] = []
     header_texts: list[str] = []
     row_count = 0
-    for row_index, row in enumerate(_table_rows(cells)):
+    for row_index, (row_id, row) in enumerate(rows):
         row_count += 1
         tr = pdf.make_indirect(Dictionary(
             Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
@@ -1051,7 +1052,7 @@ def _tagged_table(pdf: pikepdf.Pdf, cells: list[tuple[int, TextLine]],
             by_column.setdefault(column_of(line), []).append((mcid, line))
         # The default guess -- the first detected row is the header -- unless a person corrected
         # this specific row through the editor (Task 3's row sub-elements).
-        override = row_tags.get(f"{table_id}r{row_index}")
+        override = row_tags.get(row_id)
         is_header = override == "TH" if override in ("TH", "TD") else row_index == 0
         cell_type = Name.TH if is_header else Name.TD
         row_cells: list[pikepdf.Object] = []
@@ -1499,12 +1500,10 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
             "editable": True,
         })
         if entry["kind"] == "Table":
-            cells = [(i, lines[i]) for i in range(first, last + 1)]
-            for row_index, row in enumerate(_table_rows(cells)):
-                row_lines = [line for _i, line in row]
+            for row_index, (row_id, row) in enumerate(_table_row_groups(entry, lines)):
+                row_lines = [lines[i] for i in row]
                 rbox = (min(ln.bbox[0] for ln in row_lines), min(ln.bbox[1] for ln in row_lines),
                         max(ln.bbox[2] for ln in row_lines), max(ln.bbox[3] for ln in row_lines))
-                row_id = f"{entry['id']}r{row_index}"
                 default_kind = "TH" if row_index == 0 else "TD"
                 out.append({
                     "id": row_id,
@@ -1640,33 +1639,60 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
     the returned order lists old line indices, and the new plan's ranges index into it. Each
     element sits where its first line was, which leaves every unframed element where it stood.
     Ids are the plan's own, decided before any frame, so a frame is found again on the next run.
+
+    A detected table's rows (`{table id}r{n}`, see `_table_row_groups`) can be framed too. A row's
+    frame takes the lines it encloses into that row -- and into the table, wherever they were --
+    after element frames have had theirs; a line it gives up leaves the table, as above. The
+    table's entry then carries its rows explicitly (`"rows"`), under the ids they had before any
+    frame, so a row keeps its id, its tag and its frame however the others are reshaped.
     """
+    row_frames: dict[str, list[tuple[str, list[int]]]] = {}
+    for entry in plan:
+        if entry["kind"] == "Table":
+            base = _table_row_groups(entry, lines)
+            if any(row_id in frames for row_id, _members in base):
+                row_frames[entry["id"]] = base
     framed = [entry for entry in plan if entry["id"] in frames]
-    if not framed:
+    if not framed and not row_frames:
         return list(range(len(lines))), plan
+
+    def inside(frame, line: TextLine) -> bool:
+        x0, y0, x1, y1 = frame
+        cx = (line.bbox[0] + line.bbox[2]) / 2
+        cy = (line.bbox[1] + line.bbox[3]) / 2
+        return x0 <= cx <= x1 and y0 <= cy <= y1
+
     claimed: dict[int, str] = {}
     for entry in framed:
-        x0, y0, x1, y1 = frames[entry["id"]]
         for i, line in enumerate(lines):
-            cx = (line.bbox[0] + line.bbox[2]) / 2
-            cy = (line.bbox[1] + line.bbox[3]) / 2
-            if i not in claimed and x0 <= cx <= x1 and y0 <= cy <= y1:
+            if i not in claimed and inside(frames[entry["id"]], line):
                 claimed[i] = entry["id"]
+    row_of: dict[int, str] = {}         # line -> the framed row that took it
+    given_up: set[int] = set()          # a framed row's own lines, until a frame takes them again
+    for table_id, base in row_frames.items():
+        for row_id, members in base:
+            if row_id not in frames:
+                continue
+            given_up.update(members)
+            for i, line in enumerate(lines):
+                if (i not in row_of and claimed.get(i, table_id) == table_id
+                        and inside(frames[row_id], line)):
+                    claimed[i] = table_id
+                    row_of[i] = row_id
+    given_up -= row_of.keys()
 
     groups: list[tuple[dict, list[int]]] = []
     for entry in plan:
         own = range(entry["first"], entry["last"] + 1)
-        if entry["id"] not in frames:
-            members = [i for i in own if i not in claimed]
-            if members:
-                groups.append((entry, members))
-            continue
-        members = sorted(i for i, owner in claimed.items() if owner == entry["id"])
+        framed_whole = entry["id"] in frames
+        members = sorted({*(i for i, owner in claimed.items() if owner == entry["id"]),
+                          *(() if framed_whole else
+                            (i for i in own if i not in claimed and i not in given_up))})
         if members:
             groups.append((entry, members))
         run: list[int] = []
         for i in [*own, None]:
-            if i is not None and i not in claimed:
+            if i is not None and i not in claimed and (framed_whole or i in given_up):
                 run.append(i)
                 continue
             if run:
@@ -1677,9 +1703,41 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
     order: list[int] = []
     out: list[dict] = []
     for entry, members in groups:
-        out.append({**entry, "first": len(order), "last": len(order) + len(members) - 1})
+        start = len(order)
         order.extend(members)
+        new_entry = {**entry, "first": start, "last": len(order) - 1}
+        if entry["id"] in row_frames:
+            position = {old: start + k for k, old in enumerate(members)}
+            original = {i: row_id for row_id, rows in row_frames[entry["id"]] for i in rows}
+            by_row: dict[str, list[int]] = {}
+            stray: list[int] = []
+            for i in members:
+                row_id = row_of.get(i) or original.get(i)
+                if row_id is None:
+                    stray.append(i)
+                else:
+                    by_row.setdefault(row_id, []).append(position[i])
+            count = len(row_frames[entry["id"]])
+            for n, row in enumerate(_table_rows([(i, lines[i]) for i in stray])):
+                by_row[f"{entry['id']}r{count + n}"] = [position[i] for i, _line in row]
+            new_entry["rows"] = sorted(by_row.items(), key=lambda item: -max(
+                lines[order[p]].bbox[3] for p in item[1]))
+        out.append(new_entry)
     return order, out
+
+
+def _table_row_groups(entry: dict, lines: list[TextLine]) -> list[tuple[str, list[int]]]:
+    """A table entry's rows, top to bottom, as `(row id, line indices left to right)`.
+
+    The rows a frame settled (`_apply_frames`) when there are any, otherwise the detected ones
+    (`_table_rows`), numbered `{table id}r{n}` from the top.
+    """
+    if "rows" in entry:
+        return [(row_id, sorted(members, key=lambda i: lines[i].bbox[0]))
+                for row_id, members in entry["rows"]]
+    cells = [(i, lines[i]) for i in range(entry["first"], entry["last"] + 1)]
+    return [(f"{entry['id']}r{n}", [i for i, _line in row])
+            for n, row in enumerate(_table_rows(cells))]
 
 
 def _frame_in_points(frame: tuple[float, float, float, float], width: float,
@@ -1821,8 +1879,9 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
 
         if kind == "Table":
             row_tags = edits.tags if edits else {}
-            tops.append(_tagged_table(pdf, [(i, lines[i]) for i in indices],
-                                      document_elem, page_obj, leaf, entry["id"], row_tags))
+            rows = [(row_id, [(i, lines[i]) for i in members])
+                    for row_id, members in _table_row_groups(entry, lines)]
+            tops.append(_tagged_table(pdf, rows, document_elem, page_obj, leaf, row_tags))
         elif kind == "L":
             lst = pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.L, P=document_elem, K=Array([])))

@@ -211,7 +211,9 @@ edge or corner with the mouse (drag the middle to move it), or use `Shift`+arrow
 right edges and `Ctrl`+`Shift`+arrows for the top and left. On the rebuild the element becomes
 exactly the lines whose centres fall inside the frame — dragging a paragraph's bottom edge over the
 lines it was split from merges them; pulling it back up gives them away as an element of their own.
-A table row and a picture have no frame of their own.
+A detected table's header and data rows have frames too: drag a row over a cell the table missed and
+it joins that row (and the table); shrink a row and the cells it lets go leave the table. A picture
+has no frame of its own.
 
 `x` is an action, not a type: it marks content as an artifact rather than untagging it, since
 untagged content is a conformance failure. Page furniture and text inside figures are drawn hatched
