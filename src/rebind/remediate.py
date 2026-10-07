@@ -1743,7 +1743,12 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
                 run.append(i)
                 continue
             if run:
-                groups.append(({"kind": "P", "id": orphan_id(run[0]), "alt": "",
+                # Named from its first line -- unless an element already has that name (one made
+                # of released lines whose frame has since moved off them), then from the next.
+                taken = {e["id"] for e in [*plan, *added]}
+                name = next((orphan_id(i) for i in run if orphan_id(i) not in taken),
+                            orphan_id(run[0]) + "x")
+                groups.append(({"kind": "P", "id": name, "alt": "",
                                 "_given_up_by": entry["id"]}, run))
                 run = []
     # Each element stays where its own first line was; one whose own lines all went elsewhere goes
@@ -2603,9 +2608,13 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # are re-ordered along with the plan, so every later step still sees each element's lines
         # as one contiguous run.
         # Elements a person inserted: an id of their own (`p{page}a{n}`), whatever type they were
-        # given, and the lines their frame encloses.
-        added_id = re.compile(rf"p{src_page.number}a\d+")
-        added = [{"kind": edits.tags.get(key, "P"), "id": key, "alt": edits.alts.get(key, "")}
+        # given, and the lines their frame encloses. An element made of lines a frame released
+        # (`p{page}o{n}`) only exists once that frame is applied, so its own frame is taken the
+        # same way -- and it is placed like any released lines, after what is above it in its
+        # column (`_given_up_anchors`; its own id as the source, so it joins nothing else).
+        added_id = re.compile(rf"p{src_page.number}[ao]\d+x?")
+        added = [{"kind": edits.tags.get(key, "P"), "id": key, "alt": edits.alts.get(key, ""),
+                  **({"_given_up_by": key} if "o" in key[len(f"p{src_page.number}"):] else {})}
                  for key in sorted(frames) if added_id.fullmatch(key)]
         order, plan = _apply_frames(
             plan, content_lines, frames,

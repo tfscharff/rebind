@@ -620,6 +620,39 @@ def test_lines_a_row_gives_up_are_read_where_they_sit_not_inside_the_table():
     assert [e["id"] for e in out].index("T") < [e["id"] for e in out].index("RA")
 
 
+def test_an_element_made_of_released_lines_has_a_frame_of_its_own(tmp_path: Path):
+    # Shrinking a frame releases lines as an element of their own. That element has to be
+    # reshapeable like any other, or what a frame lets go of can never be gathered up again.
+    from rebind.remediate import Edits
+    from tests.fixtures import born_digital_pdf
+
+    source = born_digital_pdf(
+        "<p style='width:220px'>" + "A long paragraph that wraps onto several lines. " * 4
+        + "</p><p>Tail paragraph.</p>", tmp_path / "in.pdf")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    paragraphs = [e for e in plain.elements if e["kind"] == "P"]
+    para, tail = paragraphs[0], paragraphs[-1]
+    assert para["height"] > 3, "the fixture needs a paragraph of several lines"
+
+    # Shrink the paragraph to its first line: the rest is released as an element of its own.
+    shrunk = [para["left"] - 1, para["top"] - 0.3, para["width"] + 2, 1.0]
+    step = remediate(source, tmp_path / "one.pdf", title="T",
+                     edits=Edits(frames={para["id"]: shrunk}))
+    released = next(e for e in step.elements if e["id"].startswith("p1o"))
+
+    # Its frame, stretched down over the tail, gathers that in; it can be retagged too.
+    gather = [released["left"] - 1, released["top"] - 0.3, 60,
+              tail["top"] + tail["height"] - released["top"] + 0.6]
+    result = remediate(source, tmp_path / "two.pdf", title="T", edits=Edits(
+        frames={para["id"]: shrunk, released["id"]: gather}, tags={released["id"]: "BlockQuote"}))
+    out = {e["id"]: e for e in result.elements}
+    assert out[released["id"]]["text"].endswith("Tail paragraph.")
+    assert out[released["id"]]["kind"] == "BlockQuote"
+    assert tail["id"] not in out
+    ids = [e["id"] for e in result.elements]
+    assert ids.index(para["id"]) < ids.index(released["id"])
+
+
 def test_an_inserted_element_follows_the_element_it_was_inserted_after():
     from rebind.extract import TextLine
     from rebind.remediate import _apply_frames

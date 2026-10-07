@@ -919,7 +919,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   var FRAME_STEP=0.5;     // percent of the page per arrow press -- under a line on any real page
 
   function frameable(e){
-    return kindOf(e)!=='Artifact' && /[na]\d+(r\d+)?$/.test(e.id);
+    // n: found by Rebind; a: inserted; o: lines a frame released, which can be gathered up again.
+    return kindOf(e)!=='Artifact' && /[nao]\d+x?(r\d+)?$/.test(e.id);
   }
 
   // What is drawn: the frame a person set, where there is one, rather than the box around the lines
