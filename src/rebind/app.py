@@ -261,6 +261,7 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
             "removed": payload.get("removed") or [],
             "alts": payload.get("alts") or {},
             "frames": payload.get("frames") or {},
+            "after": payload.get("after") or {},
         }
         job.status = "running"
         job.stage = "Applying your changes to the tags..."

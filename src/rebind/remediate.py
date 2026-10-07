@@ -1340,6 +1340,9 @@ class Edits:
     # the page -- the editor's own coordinates. The element becomes exactly the lines whose centres
     # fall inside it (`_apply_frames`).
     frames: dict[str, tuple[float, float, float, float]] = field(default_factory=dict)
+    # inserted element id -> the element it was inserted after, which it follows in the reading
+    # order wherever its lines are on the page (`_apply_frames`).
+    after: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_payload(cls, payload: dict | None) -> Edits:
@@ -1369,6 +1372,7 @@ class Edits:
             alts={str(k): str(v).strip() for k, v in (payload.get("alts") or {}).items()
                   if str(v).strip()},
             frames={k: v for k, v in frames.items() if v is not None},
+            after={str(k): str(v) for k, v in (payload.get("after") or {}).items()},
         )
 
 
@@ -1479,16 +1483,20 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
     stay with it. It is stripped before the records reach the editor.
     """
     out = []
+    order_of: dict[str, int] = {}
     for entry in plan:
         first, last = entry["first"], entry["last"]
         if mcid_of[first] is None:
             continue
+        # An element inserted after another is listed with it (the sort is stable, and the plan
+        # already has it straight after), not where its lines happen to sit on the page.
+        order_of[entry["id"]] = order_of.get(edits.after.get(entry["id"], ""), source_index[first])
         members = lines[first:last + 1]
         box = (min(ln.bbox[0] for ln in members), min(ln.bbox[1] for ln in members),
                max(ln.bbox[2] for ln in members), max(ln.bbox[3] for ln in members))
         out.append({
             "id": entry["id"],
-            "_order": source_index[first],
+            "_order": order_of[entry["id"]],
             "page": src_page.number,
             "kind": entry["kind"],
             "alt": entry.get("alt", ""),
@@ -1507,7 +1515,7 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
                 default_kind = "TH" if row_index == 0 else "TD"
                 out.append({
                     "id": row_id,
-                    "_order": source_index[first],
+                    "_order": order_of[entry["id"]],
                     "page": src_page.number,
                     "kind": edits.tags.get(row_id, default_kind),
                     "text": " ".join(ln.text.strip() for ln in row_lines).strip()[:300],
@@ -1625,8 +1633,8 @@ def plan_page(lines: list[TextLine], page_roles: list[str],
 def _apply_frames(plan: list[dict], lines: list[TextLine],
                   frames: dict[str, tuple[float, float, float, float]],
                   orphan_id, added: list[dict] | None = None,
-                  removed: set[str] | frozenset[str] = frozenset()
-                  ) -> tuple[list[int], list[dict]]:
+                  removed: set[str] | frozenset[str] = frozenset(),
+                  after: dict[str, str] | None = None) -> tuple[list[int], list[dict]]:
     """Regroup a page's plan around the frames a person drew: `(new line order, new plan)`.
 
     A framed element becomes exactly the lines whose centres its frame (PDF points, x0 y0 x1 y1)
@@ -1638,7 +1646,10 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
 
     `added` are elements a person inserted (Insert in the editor): entries with an id and a kind
     but no lines of their own, which hold whatever their frame encloses, after the plan's own
-    frames have had theirs. One whose frame encloses nothing yet is left out.
+    frames have had theirs. One whose frame encloses nothing yet is left out. An inserted element
+    or row named in `after` is read straight after the element or row it was inserted after,
+    wherever its own lines sit on the page -- inserting is putting something into the sequence at
+    a place a person chose.
 
     Plan entries are ranges over the line list, and a frame can gather lines that were not next to
     each other, so the lines are put into a new order in which every element's lines are adjacent:
@@ -1729,6 +1740,7 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
                 groups.append(({"kind": "P", "id": orphan_id(run[0]), "alt": ""}, run))
                 run = []
     groups.sort(key=lambda group: group[1][0])
+    groups = _follow_anchors(groups, lambda group: group[0]["id"], after or {})
 
     order: list[int] = []
     out: list[dict] = []
@@ -1749,10 +1761,36 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
                     by_row.setdefault(row_id, []).append(position[i])
             for n, row in enumerate(_table_rows([(i, lines[i]) for i in stray])):
                 by_row[f"{entry['id']}s{n}"] = [position[i] for i, _line in row]
-            new_entry["rows"] = sorted(by_row.items(), key=lambda item: -max(
-                lines[order[p]].bbox[3] for p in item[1]))
+            new_entry["rows"] = _follow_anchors(
+                sorted(by_row.items(), key=lambda item: -max(
+                    lines[order[p]].bbox[3] for p in item[1])),
+                lambda item: item[0], after or {})
         out.append(new_entry)
     return order, out
+
+
+def _follow_anchors(items: list, key, after: dict[str, str]) -> list:
+    """`items` with each one named in `after` moved to straight after the item it names.
+
+    One whose anchor is not among `items` stays where it was. Placed one at a time, so an item
+    inserted after an item that was itself inserted follows it, and the latest of several
+    inserted after the same item comes first -- straight after the item, as it was when made.
+    """
+    out = [item for item in items if key(item) not in after]
+    pending = [item for item in items if key(item) in after]
+    while pending:
+        placed = False
+        for item in list(pending):
+            ids = [key(x) for x in out]
+            if after[key(item)] in ids:
+                out.insert(ids.index(after[key(item)]) + 1, item)
+                pending.remove(item)
+                placed = True
+        if not placed:
+            break
+    for item in pending:        # anchor gone: back where it would have been
+        out.insert(min(len(out), items.index(item)), item)
+    return out
 
 
 def _table_row_groups(entry: dict, lines: list[TextLine]) -> list[tuple[str, list[int]]]:
@@ -2479,7 +2517,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                  for key in sorted(frames) if added_id.fullmatch(key)]
         order, plan = _apply_frames(
             plan, content_lines, frames,
-            lambda index: f"p{src_page.number}o{content_source[index]}", added, edits.removed)
+            lambda index: f"p{src_page.number}o{content_source[index]}", added, edits.removed,
+            edits.after)
         if order != list(range(len(content_lines))):
             content_lines = [content_lines[i] for i in order]
             content_roles = [content_roles[i] for i in order]

@@ -421,7 +421,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // ---- State ---------------------------------------------------------------------------------
   var ed={id:null,name:null,elements:[],pages:{},tags:[],keys:[],page:1,pageList:[],
           tags_edit:{},removed:{},alts:{},focused:null,figures:[],checks:[],status:null,
-          palette:false,walked:{},artifact:null,allKeys:[],rowKeys:[],
+          palette:false,walked:{},artifact:null,allKeys:[],rowKeys:[],after:{},
           frames:{},dragging:false,redrawAfterDrag:false};
 
   function done(id, name, s){
@@ -724,7 +724,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var removed=Object.keys(ed.removed).filter(function(k){ return ed.removed[k]; });
     fetch('/jobs/'+ed.id+'/edits',{method:'POST',headers:{'content-type':'application/json'},
       body:JSON.stringify({tags:stripArtifacts(ed.tags_edit), removed:removed, alts:ed.alts,
-                           frames:ed.frames})})
+                           frames:ed.frames, after:ed.after})})
       .then(function(r){return r.json();}).then(function(j){
         if(j.error){ saving=false; setSaveState('Could not save', true); return; }
         awaitRebuild();
@@ -781,6 +781,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       ed.removed={}; ((d.edits&&d.edits.removed)||[]).forEach(function(k){ ed.removed[k]=true; });
       ed.alts=(d.edits&&d.edits.alts)||{};
       ed.frames=(d.edits&&d.edits.frames)||{};
+      ed.after=(d.edits&&d.edits.after)||{};
       ed.elements=withInserted(ed.elements);
       ed.pageList=Object.keys(ed.pages).map(Number).sort(function(a,b){return a-b;});
       if(ed.pageList.indexOf(ed.page)<0) ed.page=ed.pageList[0]||1;
@@ -953,7 +954,12 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // Which edges a point on the box is close enough to grab: none of them means the whole frame.
   function frameZone(box, x, y){
     var b=box.getBoundingClientRect(), edge=7;
-    return {l:x-b.left<edge, r:b.right-x<edge, t:y-b.top<edge, b:b.bottom-y<edge};
+    var z={l:x-b.left<edge, r:b.right-x<edge, t:y-b.top<edge, b:b.bottom-y<edge};
+    // A frame thinner than two grips -- a new one always is -- would have both opposite edges
+    // grabbed at once, and dragging both just moves it. Take the nearer one, so it can be stretched.
+    if(z.t && z.b){ z.t=y<b.top+b.height/2; z.b=!z.t; }
+    if(z.l && z.r){ z.l=x<b.left+b.width/2; z.r=!z.l; }
+    return z;
   }
 
   function zoneCursor(z){
@@ -1121,6 +1127,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
                 : 'p'+e.page+'a'+nextNumber(new RegExp('^p'+e.page+'a(\\d+)'));
     var f=tidyFrame({left:e.left, top:e.top+e.height+0.2, width:e.width, height:FRAME_STEP});
     ed.frames[id]=[f.left,f.top,f.width,f.height];
+    ed.after[id]=e.id;
     ed.elements=withInserted(ed.elements);
     ed.focused=id;
     drawStage();
@@ -1149,9 +1156,16 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     Object.keys(ed.frames).forEach(function(id){
       var e=insertedPlaceholder(id, out);
       if(!e) return;
-      var at=-1;
-      out.forEach(function(x, i){ if(x.page===e.page && x.top<=e.top) at=i; });
-      if(at<0) out.forEach(function(x, i){ if(at<0 && x.page>=e.page) at=i-1; });
+      // Straight after the element it was inserted after -- past that element's own table rows,
+      // when it is a table -- and only by position when that element is gone.
+      var at=-1, anchor=ed.after[id];
+      out.forEach(function(x, i){ if(x.id===anchor) at=i; });
+      if(at>=0){
+        while(at+1<out.length && out[at+1].row && out[at+1].id.indexOf(anchor+'r')===0) at++;
+      } else {
+        out.forEach(function(x, i){ if(x.page===e.page && x.top<=e.top) at=i; });
+        if(at<0) out.forEach(function(x, i){ if(at<0 && x.page>=e.page) at=i-1; });
+      }
       out.splice(at<0? out.length : at+1, 0, e);
     });
     return out;
@@ -1164,6 +1178,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var items=elementsOnPage(), at=-1;
     items.forEach(function(x,i){ if(x.id===e.id) at=i; });
     delete ed.frames[e.id]; delete ed.tags_edit[e.id]; delete ed.removed[e.id];
+    delete ed.after[e.id];
     ed.elements=ed.elements.filter(function(x){ return x.id!==e.id; });
     var rest=elementsOnPage();
     var to=rest[back? Math.max(at-1,0) : Math.min(at, rest.length-1)];

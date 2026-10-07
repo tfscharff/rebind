@@ -198,7 +198,8 @@ figure out of the reading order; other type keys type instead.
 | `v` | Footnote | `x` | Not read | `[` `]` | Previous / next page |
 | `h` | Table header cell | `b` | Table data cell | | |
 
-`Insert` adds a new element: an empty frame just below the one you are on, which becomes whatever
+`Insert` adds a new element right after the one you are on in the reading order: an empty frame
+just below it, which becomes whatever
 lines you drag it (or `Shift`+arrow it) over — including lines Rebind set aside as page furniture.
 On something marked not read, `Insert` puts it back instead. `Delete` deletes the element (marks it
 not read) and moves on; `Backspace` does the same and steps back, for clearing a run of junk

@@ -580,6 +580,73 @@ def test_an_inserted_element_holds_what_its_frame_encloses():
     assert [e["id"] for e in out] == ["A"]
 
 
+def test_an_inserted_element_follows_the_element_it_was_inserted_after():
+    from rebind.extract import TextLine
+    from rebind.remediate import _apply_frames
+
+    def line(y, text):
+        return TextLine(text=text, page=1, bbox=(72, y, 300, y + 10), font="Times", size=10.0,
+                        bold=False, italic=False)
+
+    lines = [line(700, "a"), line(686, "b"), line(672, "c"), line(40, "footer")]
+    plan = [{"kind": "P", "first": 0, "last": 0, "id": "A"},
+            {"kind": "P", "first": 1, "last": 1, "id": "B"},
+            {"kind": "P", "first": 2, "last": 2, "id": "C"}]
+    added = [{"kind": "P", "id": "p1a0", "alt": ""}, {"kind": "P", "id": "p1a1", "alt": ""}]
+    frames = {"p1a0": (60, 35, 320, 55), "p1a1": (60, 0, 320, 0.5)}
+    # The footer comes last on the page, but the element framed over it was inserted after A.
+    order, out = _apply_frames(plan, lines, frames, lambda i: f"o{i}", added, after={"p1a0": "A"})
+    assert [e["id"] for e in out] == ["A", "p1a0", "B", "C"]
+
+
+def test_an_inserted_row_follows_the_row_it_was_inserted_after():
+    from rebind.extract import TextLine
+    from rebind.remediate import _apply_frames, _table_row_groups
+
+    def cell(x, y, text):
+        return TextLine(text=text, page=1, bbox=(x, y, x + 60, y + 10), font="Times", size=10.0,
+                        bold=False, italic=False)
+
+    lines = [cell(72, 700, "h1"), cell(200, 700, "h2"),
+             cell(72, 680, "a1"), cell(200, 680, "a2"),
+             cell(72, 640, "c1")]
+    plan = [{"kind": "Table", "first": 0, "last": 3, "id": "T"},
+            {"kind": "P", "first": 4, "last": 4, "id": "S"}]
+    order, out = _apply_frames(plan, lines, {"Tr2": (60, 635, 280, 655)}, lambda i: f"o{i}",
+                               after={"Tr2": "Tr0"})
+    table = next(e for e in out if e["id"] == "T")
+    assert [rid for rid, _m in _table_row_groups(table, [lines[i] for i in order])] == [
+        "Tr0", "Tr2", "Tr1"]
+
+
+def test_an_inserted_element_is_listed_and_tagged_where_it_was_inserted(tmp_path: Path):
+    from rebind.remediate import Edits
+    from tests.fixtures import born_digital_pdf
+
+    body = "".join(
+        f"<p>Body paragraph {i} of the running text on this page.</p>" for i in range(1, 60))
+    source = born_digital_pdf(
+        body, tmp_path / "in.pdf",
+        extra_css="@page { margin: 50pt; "
+                  "@bottom-center { content: 'Running footer'; font-size: 8pt; } }")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    page_one = [e for e in plain.elements if e["page"] == 1]
+    first = next(e for e in page_one if e["kind"] != "Artifact")
+    footer = next(e for e in page_one if "Running footer" in e["text"])
+    frame = [footer["left"] - 1, footer["top"] - 0.5, footer["width"] + 2, footer["height"] + 1]
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T",
+                       edits=Edits(frames={"p1a0": frame}, after={"p1a0": first["id"]}))
+    ids = [e["id"] for e in result.elements if e["page"] == 1]
+    assert ids[ids.index(first["id"]) + 1] == "p1a0"
+    # The tagged reading order agrees with the editor.
+    by_mcid = _mcid_text(out, 0)
+    tagged = [by_mcid[k] for k in sorted(by_mcid)]
+    at = tagged.index(next(t for t in tagged if "Running footer" in t))
+    assert at > 0 and tagged[at - 1].strip() in first["text"]
+    assert all(t.strip() in first["text"] for t in tagged[:at])
+
+
 def test_table_rows_can_be_inserted_and_removed():
     from rebind.extract import TextLine
     from rebind.remediate import _apply_frames, _table_row_groups
