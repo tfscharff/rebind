@@ -244,7 +244,7 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.0.8.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.0.9.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:
