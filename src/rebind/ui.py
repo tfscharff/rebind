@@ -802,11 +802,17 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     return found;
   }
 
-  // Which keymap answers to the keyboard on this element: the row-only one for a table row's
-  // sub-element, the general one for everything else. A table row never sees "make this a
-  // Division"; an ordinary paragraph never sees "make this a header cell".
+  // Every element answers to the whole keymap. On a table row, h and b set that row; any other
+  // type is about the table the row belongs to (setKind), so p on a row of a false table turns the
+  // whole thing back into a paragraph instead of doing nothing.
   function keysFor(e){
-    return e.row? ed.rowKeys : ed.allKeys;
+    return ed.allKeys;
+  }
+
+  function tableOfRow(elementId){
+    var row=false;
+    ed.elements.forEach(function(x){ if(x.id===elementId && x.row) row=true; });
+    return row? elementId.replace(/r\d+$/, '') : null;
   }
 
   function tagLabel(t){
@@ -854,13 +860,12 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // worked were printed nowhere on the screen.
   function keysHtml(e){
     var row=!!(e&&e.row);
-    var sub=row
-      ? '<b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
-        '<b>[</b> <b>]</b> turn the page · <b>Enter</b> lists both'
-      : '<b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
+    var sub='<b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
         '<b>+</b> add · <b>−</b> remove · <b>Del</b> not read, next · '+
         '<b>Backspace</b> not read, previous · <b>[</b> <b>]</b> turn the page · '+
         '<b>Enter</b> lists every type';
+    if(row) sub+='<br>On a table row, <b>h</b> and <b>b</b> set the row. Every other key, '+
+        'and <b>−</b> or <b>Del</b>, applies to the whole table.';
     // Only said where it works: a frame is the lines an element holds, which a picture's region
     // does not have.
     if(e && frameable(e)){
@@ -868,7 +873,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         '<b>Ctrl + Shift + arrows</b> its top and left · or drag it with the mouse. '+
         (row? 'The row becomes the cells inside it.' : 'The element becomes the lines inside it.');
     }
-    return '<h2>'+(row? 'Keys for this table row' : 'Keys')+'</h2>'+
+    return '<h2>Keys</h2>'+
       '<p class="sub">'+sub+'</p>'+
       '<dl class="keylist">'+keysFor(e||{}).map(function(k){
         return '<div><dt><kbd>'+esc(k.key)+'</kbd></dt><dd>'+esc(k.label)+'</dd></div>';
@@ -1038,13 +1043,14 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     // pair of controls rather than hiding among the types. Whichever one does nothing here is
     // disabled instead of absent, so the pair stays in the same place on every element.
     var out=(k==='Artifact');
-    if(!e.row){
+    {
       h+='<div class="addrem">'+
         '<button type="button" class="btn ghost small" id="addel"'+(out?'':' disabled')+
         ' title="Add this to the reading order"><b>+</b> Add</button>'+
         '<button type="button" class="btn ghost small" id="delel"'+(out?' disabled':'')+
         ' title="Take this out of the reading order"><b>−</b> Remove</button>'+
         '<span class="hint">'+(out? 'Not read. + puts it into the reading order.'
+                                  : e.row? 'In the reading order. − takes the whole table out.'
                                   : 'In the reading order. − takes it out.')+'</span></div>';
     }
     if(k==='Figure'){
@@ -1152,7 +1158,6 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         // walking up the page as naturally as walking down it.
         if(key==='Delete'||key==='Backspace'){
           ev.preventDefault();
-          if(e.row){ say('A table row is not taken out on its own. Mark the table instead.'); return; }
           setKind(e.id, 'Artifact', key==='Backspace');
           return;
         }
@@ -1179,10 +1184,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
           return;
         }
         if(key==='['||key===']'){ ev.preventDefault(); turnPage(key===']'?1:-1); return; }
-        // The two edits that are not "what is this?", on the obvious pair of keys -- meaningless
-        // on a table row, which is never independently added or removed (see showType).
-        if(!e.row && (key==='+'||key==='=')){ ev.preventDefault(); addElement(e.id); return; }
-        if(!e.row && (key==='-'||key==='_')){ ev.preventDefault(); setKind(e.id, 'Artifact'); return; }
+        // The two edits that are not "what is this?", on the obvious pair of keys. On a table row,
+        // removing is the table's (setKind).
+        if(key==='+'||key==='='){ ev.preventDefault(); addElement(e.id); return; }
+        if(key==='-'||key==='_'){ ev.preventDefault(); setKind(e.id, 'Artifact'); return; }
         if(key==='ArrowDown'||key==='ArrowUp'){
           var to=boxes[index+(key==='ArrowDown'?1:-1)];
           if(to){ ev.preventDefault(); to.focus(); }
@@ -1207,8 +1212,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
           return;
         }
         // The key sets the type straight away. Enter is only for when you cannot remember which
-        // key you want; knowing it should never cost you a menu. A row answers to its own, smaller
-        // keymap (keysFor) rather than the whole document's.
+        // key you want; knowing it should never cost you a menu.
         var hit=null;
         keysFor(e).forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });
         if(hit){ ev.preventDefault(); setKind(e.id, hit); }
@@ -1384,6 +1388,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // stream of keystrokes with no Tab between them -- and where the type was already right, Tab
   // steps past it. Running off the end of the page carries on to the next one, as Tab does.
   function setKind(elementId, tag, back){
+    // A row is only ever a header row or a data row; any other type is the table's.
+    var table=tableOfRow(elementId);
+    if(table && tag!=='TH' && tag!=='TD'){
+      setKind(table, tag, back);
+      say('Whole table: '+tagLabel(tag)+'.');
+      return;
+    }
     var items=elementsOnPage();
     var at=-1;
     items.forEach(function(e,i){ if(e.id===elementId) at=i; });
