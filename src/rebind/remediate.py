@@ -1624,7 +1624,9 @@ def plan_page(lines: list[TextLine], page_roles: list[str],
 
 def _apply_frames(plan: list[dict], lines: list[TextLine],
                   frames: dict[str, tuple[float, float, float, float]],
-                  orphan_id) -> tuple[list[int], list[dict]]:
+                  orphan_id, added: list[dict] | None = None,
+                  removed: set[str] | frozenset[str] = frozenset()
+                  ) -> tuple[list[int], list[dict]]:
     """Regroup a page's plan around the frames a person drew: `(new line order, new plan)`.
 
     A framed element becomes exactly the lines whose centres its frame (PDF points, x0 y0 x1 y1)
@@ -1634,6 +1636,10 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
     (`orphan_id(line index)` names it, stably, from its first line). Where two frames overlap, the
     earlier element in the plan keeps the line.
 
+    `added` are elements a person inserted (Insert in the editor): entries with an id and a kind
+    but no lines of their own, which hold whatever their frame encloses, after the plan's own
+    frames have had theirs. One whose frame encloses nothing yet is left out.
+
     Plan entries are ranges over the line list, and a frame can gather lines that were not next to
     each other, so the lines are put into a new order in which every element's lines are adjacent:
     the returned order lists old line indices, and the new plan's ranges index into it. Each
@@ -1642,17 +1648,28 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
 
     A detected table's rows (`{table id}r{n}`, see `_table_row_groups`) can be framed too. A row's
     frame takes the lines it encloses into that row -- and into the table, wherever they were --
-    after element frames have had theirs; a line it gives up leaves the table, as above. The
-    table's entry then carries its rows explicitly (`"rows"`), under the ids they had before any
-    frame, so a row keeps its id, its tag and its frame however the others are reshaped.
+    after element frames have had theirs; a line it gives up leaves the table, as above. A framed
+    row id the table never had is a row a person inserted. A row whose id is in `removed` leaves
+    the table: its lines become an entry under the row's own id, marked `"removed_row"`, for the
+    caller to drop with the other removed elements. The table's entry then carries its rows
+    explicitly (`"rows"`), under the ids they had before any frame, so a row keeps its id, its tag
+    and its frame however the others are reshaped.
     """
+    added = [{**entry, "first": 0, "last": -1} for entry in (added or [])]
     row_frames: dict[str, list[tuple[str, list[int]]]] = {}
-    for entry in plan:
-        if entry["kind"] == "Table":
-            base = _table_row_groups(entry, lines)
-            if any(row_id in frames for row_id, _members in base):
-                row_frames[entry["id"]] = base
-    framed = [entry for entry in plan if entry["id"] in frames]
+    new_rows: dict[str, list[str]] = {}
+    for entry in [*plan, *added]:
+        if entry["kind"] != "Table":
+            continue
+        base = _table_row_groups(entry, lines) if entry["last"] >= entry["first"] else []
+        known = {row_id for row_id, _members in base}
+        extra = sorted((key for key in frames
+                        if key not in known and re.fullmatch(re.escape(entry["id"]) + r"r\d+", key)),
+                       key=lambda key: int(key[len(entry["id"]) + 1:]))
+        if extra or any(row_id in frames or row_id in removed for row_id in known):
+            row_frames[entry["id"]] = base
+            new_rows[entry["id"]] = extra
+    framed = [entry for entry in [*plan, *added] if entry["id"] in frames]
     if not framed and not row_frames:
         return list(range(len(lines))), plan
 
@@ -1669,10 +1686,16 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
                 claimed[i] = entry["id"]
     row_of: dict[int, str] = {}         # line -> the framed row that took it
     given_up: set[int] = set()          # a framed row's own lines, until a frame takes them again
+    dropped: dict[str, list[int]] = {}  # a removed row -> its lines
     for table_id, base in row_frames.items():
         for row_id, members in base:
-            if row_id not in frames:
-                continue
+            if row_id in removed:
+                dropped[row_id] = members
+                given_up.update(members)
+        framing = [(row_id, members) for row_id, members in base
+                   if row_id in frames and row_id not in removed]
+        framing += [(row_id, []) for row_id in new_rows[table_id] if row_id not in removed]
+        for row_id, members in framing:
             given_up.update(members)
             for i, line in enumerate(lines):
                 if (i not in row_of and claimed.get(i, table_id) == table_id
@@ -1680,9 +1703,15 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
                     claimed[i] = table_id
                     row_of[i] = row_id
     given_up -= row_of.keys()
+    dropped_line = {i: row_id for row_id, members in dropped.items() for i in members
+                    if i not in claimed}
 
     groups: list[tuple[dict, list[int]]] = []
-    for entry in plan:
+    for row_id, members in dropped.items():
+        mine = [i for i in members if dropped_line.get(i) == row_id]
+        if mine:
+            groups.append(({"kind": "P", "id": row_id, "alt": "", "removed_row": True}, mine))
+    for entry in [*plan, *added]:
         own = range(entry["first"], entry["last"] + 1)
         framed_whole = entry["id"] in frames
         members = sorted({*(i for i, owner in claimed.items() if owner == entry["id"]),
@@ -1692,7 +1721,8 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
             groups.append((entry, members))
         run: list[int] = []
         for i in [*own, None]:
-            if i is not None and i not in claimed and (framed_whole or i in given_up):
+            if (i is not None and i not in claimed and i not in dropped_line
+                    and (framed_whole or i in given_up)):
                 run.append(i)
                 continue
             if run:
@@ -1713,13 +1743,12 @@ def _apply_frames(plan: list[dict], lines: list[TextLine],
             stray: list[int] = []
             for i in members:
                 row_id = row_of.get(i) or original.get(i)
-                if row_id is None:
+                if row_id is None or row_id in removed:
                     stray.append(i)
                 else:
                     by_row.setdefault(row_id, []).append(position[i])
-            count = len(row_frames[entry["id"]])
             for n, row in enumerate(_table_rows([(i, lines[i]) for i in stray])):
-                by_row[f"{entry['id']}r{count + n}"] = [position[i] for i, _line in row]
+                by_row[f"{entry['id']}s{n}"] = [position[i] for i, _line in row]
             new_entry["rows"] = sorted(by_row.items(), key=lambda item: -max(
                 lines[order[p]].bbox[3] for p in item[1]))
         out.append(new_entry)
@@ -2391,6 +2420,18 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # reading". Anything with a tag override is content, whatever it would otherwise have been.
         line_ids = [f"p{src_page.number}n{index}" for index in range(len(lines))]
         promoted = {index for index, key in enumerate(line_ids) if key in edits.tags}
+        # A frame drawn on this page reaches lines Rebind set aside as well: drawing one over a
+        # running head or a stray label is how it gets read, the same as tagging it. A line inside
+        # a described picture stays the picture's.
+        page_key = re.compile(rf"p{src_page.number}[a-z]")
+        frames = {key: _frame_in_points(value, src_page.width, src_page.height)
+                  for key, value in edits.frames.items() if page_key.match(key)}
+        for index, ln in enumerate(lines):
+            if id(ln) in owner_figure:
+                continue
+            cx, cy = (ln.bbox[0] + ln.bbox[2]) / 2, (ln.bbox[1] + ln.bbox[3]) / 2
+            if any(x0 <= cx <= x1 and y0 <= cy <= y1 for x0, y0, x1, y1 in frames.values()):
+                promoted.add(index)
         is_artifact = [
             index not in promoted
             and id(ln) not in owner_figure
@@ -2431,17 +2472,22 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # Frames a person drew regroup the lines before anything is numbered. The content lines
         # are re-ordered along with the plan, so every later step still sees each element's lines
         # as one contiguous run.
-        frames = {key: _frame_in_points(value, src_page.width, src_page.height)
-                  for key, value in edits.frames.items()}
+        # Elements a person inserted: an id of their own (`p{page}a{n}`), whatever type they were
+        # given, and the lines their frame encloses.
+        added_id = re.compile(rf"p{src_page.number}a\d+")
+        added = [{"kind": edits.tags.get(key, "P"), "id": key, "alt": edits.alts.get(key, "")}
+                 for key in sorted(frames) if added_id.fullmatch(key)]
         order, plan = _apply_frames(
             plan, content_lines, frames,
-            lambda index: f"p{src_page.number}o{content_source[index]}")
+            lambda index: f"p{src_page.number}o{content_source[index]}", added, edits.removed)
         if order != list(range(len(content_lines))):
             content_lines = [content_lines[i] for i in order]
             content_roles = [content_roles[i] for i in order]
             content_source = [content_source[i] for i in order]
             for entry in plan:      # a line a frame gave up is an element that can be retagged too
                 entry["kind"] = edits.tags.get(entry["id"], entry["kind"])
+        # A table row taken out is listed as a row that is not read, so it can be put back.
+        dropped_rows = [entry for entry in plan if entry.get("removed_row")]
         plan = [entry for entry in plan if entry["id"] not in edits.removed]
 
         kept = {i for entry in plan for i in range(entry["first"], entry["last"] + 1)}
@@ -2456,6 +2502,25 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             mcids[content_source[index]] = next_mcid
             next_mcid += 1
         records = _element_records(src_page, plan, content_lines, mcid_of, edits, content_source)
+        in_dropped_row: set[int] = set()
+        for entry in dropped_rows:
+            members = content_lines[entry["first"]:entry["last"] + 1]
+            in_dropped_row.update(content_source[i]
+                                  for i in range(entry["first"], entry["last"] + 1))
+            x0 = min(ln.bbox[0] for ln in members)
+            y0 = min(ln.bbox[1] for ln in members)
+            x1 = max(ln.bbox[2] for ln in members)
+            y1 = max(ln.bbox[3] for ln in members)
+            records.append({
+                **_untagged_record(src_page, entry["id"], members[0],
+                                   content_source[entry["first"]]),
+                "text": " ".join(ln.text.strip() for ln in members).strip()[:300],
+                "left": round(100 * x0 / src_page.width, 2),
+                "top": round(100 * (src_page.height - y1) / src_page.height, 2),
+                "width": round(100 * (x1 - x0) / src_page.width, 2),
+                "height": round(100 * (y1 - y0) / src_page.height, 2),
+                "row": True,
+            })
         # Lines Rebind set aside are listed too, marked as untagged, so the editor can offer them.
         # They sit at the position they occupy on the page, so the list stays the page's order.
         #
@@ -2471,7 +2536,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             if index in {content_source[e] for e in range(len(content_source))
                          if mcid_of[e] is not None}:
                 continue
-            if id(line) in owner_figure or id(line) in inside_undescribed:
+            if (id(line) in owner_figure or id(line) in inside_undescribed
+                    or index in in_dropped_row):
                 continue
             records.append(_untagged_record(src_page, line_ids[index], line, index))
         page_elements.extend(_records_in_reading_order(records))

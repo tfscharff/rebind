@@ -175,13 +175,13 @@ def test_the_right_column_is_the_walk_the_element_and_the_keys():
 
 
 def test_the_key_legend_follows_the_element_you_are_standing_on():
-    # A table row answers to h and b and to nothing else. The legend used to be drawn once from
-    # the document's own keymap and never redrawn, so a row showed seventeen keys that did nothing
-    # and neither of the two that did. That is why the row keys could not be found.
+    # The legend used to be drawn once and never redrawn, so the row keys could not be found; then
+    # a row swapped it for a two-key map and every other key went dead. Now every element shows
+    # the whole keymap, and a row says which keys are its own.
     script = _script()
     keys = script[script.index("function keysHtml("):script.index("function drawKeys(")]
     assert "keysFor(e||{})" in keys, "the legend asks the same question the keyboard does"
-    assert "Keys for this table row" in keys
+    assert "On a table row" in keys
     show = script[script.index("function showType("):script.index("// The best opening line")]
     assert "drawKeys(e);" in show, "landing on an element redraws its legend"
 
@@ -193,6 +193,7 @@ def test_adding_and_removing_an_element_are_an_obvious_pair():
     assert "key==='+'||key==='='" in script
     assert "key==='-'||key==='_'" in script
     assert "function addElement(" in script
+    assert "key==='Insert'" in script and "deleteElement(e, key==='Backspace')" in script
     assert 'id="addel"' in script and 'id="delel"' in script
 
 

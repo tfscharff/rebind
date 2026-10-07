@@ -559,6 +559,105 @@ def test_a_framed_table_row_regroups_the_cells_it_encloses():
     assert [e["id"] for e in out] == ["T", "o3", "S"]
 
 
+def test_an_inserted_element_holds_what_its_frame_encloses():
+    from rebind.extract import TextLine
+    from rebind.remediate import _apply_frames
+
+    def line(y, text):
+        return TextLine(text=text, page=1, bbox=(72, y, 300, y + 10), font="Times", size=10.0,
+                        bold=False, italic=False)
+
+    lines = [line(700, "a"), line(686, "b"), line(672, "c")]
+    plan = [{"kind": "P", "first": 0, "last": 2, "id": "A"}]
+    added = [{"kind": "H2", "id": "p1a0", "alt": ""}]
+    order, out = _apply_frames(plan, lines, {"p1a0": (60, 682, 320, 698)}, lambda i: f"o{i}",
+                               added)
+    assert [(e["id"], e["kind"], [lines[order[i]].text for i in range(e["first"], e["last"] + 1)])
+            for e in out] == [("A", "P", ["a", "c"]), ("p1a0", "H2", ["b"])]
+
+    # An inserted element whose frame encloses nothing yet is not an element.
+    order, out = _apply_frames(plan, lines, {"p1a0": (400, 0, 450, 10)}, lambda i: f"o{i}", added)
+    assert [e["id"] for e in out] == ["A"]
+
+
+def test_table_rows_can_be_inserted_and_removed():
+    from rebind.extract import TextLine
+    from rebind.remediate import _apply_frames, _table_row_groups
+
+    def cell(x, y, text):
+        return TextLine(text=text, page=1, bbox=(x, y, x + 60, y + 10), font="Times", size=10.0,
+                        bold=False, italic=False)
+
+    lines = [cell(72, 700, "h1"), cell(200, 700, "h2"),
+             cell(72, 680, "a1"), cell(200, 680, "a2"),
+             cell(72, 660, "b1"), cell(200, 660, "b2"),
+             cell(72, 640, "c1")]
+    plan = [{"kind": "Table", "first": 0, "last": 5, "id": "T"},
+            {"kind": "P", "first": 6, "last": 6, "id": "S"}]
+
+    def rows(order, out):
+        table = next(e for e in out if e["id"] == "T")
+        return [(rid, [lines[order[i]].text for i in members])
+                for rid, members in _table_row_groups(table, [lines[i] for i in order])]
+
+    # A row the table never had, framed over the stray line, becomes a new last row.
+    order, out = _apply_frames(plan, lines, {"Tr3": (60, 635, 280, 655)}, lambda i: f"o{i}")
+    assert rows(order, out)[-1] == ("Tr3", ["c1"])
+    assert [e["id"] for e in out] == ["T"]
+
+    # A removed row leaves the table, under its own id, for the caller to drop.
+    order, out = _apply_frames(plan, lines, {}, lambda i: f"o{i}", removed={"Tr1"})
+    assert [r for r, _cells in rows(order, out)] == ["Tr0", "Tr2"]
+    dropped = next(e for e in out if e["id"] == "Tr1")
+    assert dropped.get("removed_row")
+    assert [lines[order[i]].text for i in range(dropped["first"], dropped["last"] + 1)] == [
+        "a1", "a2"]
+
+
+def test_a_removed_table_row_is_offered_back_and_still_validates(tmp_path: Path,
+                                                                  verapdf_exe: Path):
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf_with_table
+
+    source = born_digital_pdf_with_table(tmp_path / "in.pdf")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    second = [e for e in plain.elements if e.get("row")][1]
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T", edits=Edits(removed={second["id"]}))
+    row = next(e for e in result.elements if e["id"] == second["id"])
+    assert row["kind"] == "Artifact" and row.get("row") and "North" in row["text"]
+    table = next(e for e in result.elements if e["kind"] == "Table")
+    assert "North" not in table["text"]
+    # Its lines are listed once, as the row -- not again one by one.
+    assert not [e for e in result.elements if e["text"] == "North"]
+    assert validate_pdf_ua(out, verapdf_exe=verapdf_exe).compliant
+
+
+def test_an_inserted_element_can_take_in_a_line_rebind_set_aside(tmp_path: Path,
+                                                                  verapdf_exe: Path):
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import born_digital_pdf
+
+    body = "".join(
+        f"<p>Body paragraph {i} of the running text on this page.</p>" for i in range(1, 60))
+    source = born_digital_pdf(
+        body, tmp_path / "in.pdf",
+        extra_css="@page { margin: 50pt; "
+                  "@bottom-center { content: 'Running footer'; font-size: 8pt; } }")
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    footer = next(e for e in plain.elements
+                  if e["page"] == 1 and "Running footer" in e["text"])
+    assert footer["kind"] == "Artifact"
+    frame = [footer["left"] - 1, footer["top"] - 0.5, footer["width"] + 2, footer["height"] + 1]
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T", edits=Edits(frames={"p1a0": frame}))
+    inserted = next(e for e in result.elements if e["id"] == "p1a0")
+    assert inserted["kind"] == "P" and "Running footer" in inserted["text"]
+    assert validate_pdf_ua(out, verapdf_exe=verapdf_exe).compliant
+
+
 def test_a_framed_table_row_is_rebuilt_from_what_the_frame_encloses(tmp_path: Path,
                                                                     verapdf_exe: Path):
     from rebind.remediate import Edits

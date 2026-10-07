@@ -198,8 +198,13 @@ figure out of the reading order; other type keys type instead.
 | `v` | Footnote | `x` | Not read | `[` `]` | Previous / next page |
 | `h` | Table header cell | `b` | Table data cell | | |
 
-`+` adds the region you are on to the reading order; `−` takes it out. `Delete` marks it not read
-and moves on; `Backspace` marks it not read and steps back, for clearing a run of junk upwards.
+`Insert` adds a new element: an empty frame just below the one you are on, which becomes whatever
+lines you drag it (or `Shift`+arrow it) over — including lines Rebind set aside as page furniture.
+On something marked not read, `Insert` puts it back instead. `Delete` deletes the element (marks it
+not read) and moves on; `Backspace` does the same and steps back, for clearing a run of junk
+upwards. Deleting an element you inserted just removes its frame. On a table row, `h`/`b` set the
+row, `Insert` adds a new row below it, `Delete` takes that row out of the table, and every other
+type key retypes the whole table. (`+` and `−` still work as `Insert` and `Delete`.)
 
 **Building a table by hand.** Mark each cell with `h` or `b`. A run of consecutive cells becomes one
 `/Table`: rows from vertical overlap (so a wrapped cell stays in its row), columns from clustered left

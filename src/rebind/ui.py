@@ -750,7 +750,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   function refreshElements(){
     fetch('/jobs/'+ed.id+'/elements').then(function(r){return r.json();}).then(function(d){
       if(!d.error){
-        ed.elements=d.elements||[]; ed.pages=d.pages||{};
+        ed.elements=withInserted(d.elements||[]); ed.pages=d.pages||{};
         ed.pageList=Object.keys(ed.pages).map(Number).sort(function(a,b){return a-b;});
         if(ed.pageList.indexOf(ed.page)<0) ed.page=ed.pageList[0]||1;
       }
@@ -781,6 +781,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       ed.removed={}; ((d.edits&&d.edits.removed)||[]).forEach(function(k){ ed.removed[k]=true; });
       ed.alts=(d.edits&&d.edits.alts)||{};
       ed.frames=(d.edits&&d.edits.frames)||{};
+      ed.elements=withInserted(ed.elements);
       ed.pageList=Object.keys(ed.pages).map(Number).sort(function(a,b){return a-b;});
       if(ed.pageList.indexOf(ed.page)<0) ed.page=ed.pageList[0]||1;
       drawStage();
@@ -861,11 +862,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   function keysHtml(e){
     var row=!!(e&&e.row);
     var sub='<b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
-        '<b>+</b> add · <b>−</b> remove · <b>Del</b> not read, next · '+
-        '<b>Backspace</b> not read, previous · <b>[</b> <b>]</b> turn the page · '+
+        '<b>Ins</b> new element below (or put back one not read) · '+
+        '<b>Del</b> delete, next · <b>Backspace</b> delete, previous · '+
+        '<b>[</b> <b>]</b> turn the page · '+
         '<b>Enter</b> lists every type';
-    if(row) sub+='<br>On a table row, <b>h</b> and <b>b</b> set the row. Every other key, '+
-        'and <b>−</b> or <b>Del</b>, applies to the whole table.';
+    if(row) sub+='<br>On a table row, <b>h</b> and <b>b</b> set the row, <b>Ins</b> adds a row '+
+        'below it and <b>Del</b> takes the row out. Every other type key applies to the whole '+
+        'table.';
     // Only said where it works: a frame is the lines an element holds, which a picture's region
     // does not have.
     if(e && frameable(e)){
@@ -900,7 +903,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       (ed.frames[e.id]?' framed':'');
     return '<span class="'+cls+'" tabindex="0" role="button" data-box="'+esc(e.id)+'"'+
       ' aria-label="'+esc((untagged?'Not read':tagLabel(k))+', item '+(i+1)+': '+
-        (e.text||e.alt||'picture').slice(0,80))+'"'+
+        (e.text||e.alt||(e.inserted? 'empty, frame it over lines' : 'picture')).slice(0,80))+'"'+
       ' style="left:'+f.left+'%;top:'+f.top+'%;width:'+f.width+'%;height:'+f.height+'%">'+
       '<i aria-hidden="true">'+(untagged?'—':(i+1))+'</i></span>';
   }
@@ -915,7 +918,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   var FRAME_STEP=0.5;     // percent of the page per arrow press -- under a line on any real page
 
   function frameable(e){
-    return kindOf(e)!=='Artifact' && /n\d+(r\d+)?$/.test(e.id);
+    return kindOf(e)!=='Artifact' && /[na]\d+(r\d+)?$/.test(e.id);
   }
 
   // What is drawn: the frame a person set, where there is one, rather than the box around the lines
@@ -1045,13 +1048,14 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var out=(k==='Artifact');
     {
       h+='<div class="addrem">'+
-        '<button type="button" class="btn ghost small" id="addel"'+(out?'':' disabled')+
-        ' title="Add this to the reading order"><b>+</b> Add</button>'+
+        '<button type="button" class="btn ghost small" id="addel"'+
+        ' title="'+(out? 'Put this back into the reading order' : 'Add a new element below this')+
+        '"><b>Ins</b> '+(out? 'Put back' : (e.row? 'New row' : 'New element'))+'</button>'+
         '<button type="button" class="btn ghost small" id="delel"'+(out?' disabled':'')+
-        ' title="Take this out of the reading order"><b>−</b> Remove</button>'+
-        '<span class="hint">'+(out? 'Not read. + puts it into the reading order.'
-                                  : e.row? 'In the reading order. − takes the whole table out.'
-                                  : 'In the reading order. − takes it out.')+'</span></div>';
+        ' title="Take this out of the reading order"><b>Del</b> Delete</button>'+
+        '<span class="hint">'+(out? 'Not read. Ins puts it back.'
+                                  : e.row? 'In the reading order. Del takes this row out.'
+                                  : 'In the reading order. Del takes it out.')+'</span></div>';
     }
     if(k==='Figure'){
       // A figure is the one thing a machine cannot finish. The box is here the moment you land on
@@ -1067,7 +1071,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var add=document.getElementById('addel');
     if(add) add.addEventListener('click', function(){ addElement(e.id); });
     var del=document.getElementById('delel');
-    if(del) del.addEventListener('click', function(){ setKind(e.id, 'Artifact'); });
+    if(del) del.addEventListener('click', function(){ deleteElement(e, false); });
     var box=document.getElementById('altnow');
     // On 'change', not on 'input'. Every keystroke used to start a save, and a save re-runs the
     // whole conversion -- so typing a sentence queued a rebuild per letter and the page stuttered
@@ -1090,11 +1094,83 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   function addElement(elementId){
     var known=null;
     ed.elements.forEach(function(e){ if(e.id===elementId) known=e; });
-    if(!known || kindOf(known)!=='Artifact'){
-      say('That is already in the reading order.');
-      return;
+    if(!known) return;
+    if(kindOf(known)==='Artifact'){ setKind(elementId, known.row? 'TD' : 'P'); return; }
+    insertAfter(known);
+  }
+
+  // ---- Inserted elements ----------------------------------------------------------------------
+  // Insert puts a new, empty frame just under the element you are on: it holds nothing until it is
+  // dragged (or Shift+arrowed) over lines, and then it is an element made of them, a paragraph
+  // until it is given another type. On a table row the new frame is a new row of that table. Its
+  // id is its own (`p{page}a{n}`, or the table's next row number), so it is found again on every
+  // rebuild; one that holds nothing yet is not in the server's list and is kept here instead.
+  var INSERTED=/^p(\d+)a\d+$/;
+
+  function nextNumber(pattern){
+    var n=-1;
+    ed.elements.map(function(x){ return x.id; }).concat(Object.keys(ed.frames)).forEach(function(id){
+      var m=pattern.exec(id); if(m) n=Math.max(n, parseInt(m[1],10));
+    });
+    return n+1;
+  }
+
+  function insertAfter(e){
+    var table=e.row? tableOfRow(e.id) : null;
+    var id=table? table+'r'+nextNumber(new RegExp('^'+table+'r(\\d+)$'))
+                : 'p'+e.page+'a'+nextNumber(new RegExp('^p'+e.page+'a(\\d+)'));
+    var f=tidyFrame({left:e.left, top:e.top+e.height+0.2, width:e.width, height:FRAME_STEP});
+    ed.frames[id]=[f.left,f.top,f.width,f.height];
+    ed.elements=withInserted(ed.elements);
+    ed.focused=id;
+    drawStage();
+    applyEdits();
+    say((table? 'New row' : 'New element')+' added below. Drag its frame, or use Shift + arrows, '+
+        'over the lines it should hold.');
+  }
+
+  // A new row of a table on this page, or an inserted element, that the server did not list
+  // because its frame holds nothing yet.
+  function insertedPlaceholder(id, list){
+    var f=ed.frames[id], m=/^p(\d+)/.exec(id);
+    if(!f || !m || list.some(function(x){ return x.id===id; })) return null;
+    var row=false;
+    if(!INSERTED.test(id)){
+      var t=/^(.*)r\d+$/.exec(id);
+      if(!t || !list.some(function(x){ return x.id===t[1] && kindOf(x)==='Table'; })) return null;
+      row=true;
     }
-    setKind(elementId, 'P');
+    return {id:id, page:parseInt(m[1],10), kind:row? 'TD' : 'P', text:'', inserted:true,
+            left:f[0], top:f[1], width:f[2], height:f[3], editable:true, row:row};
+  }
+
+  function withInserted(list){
+    var out=list.slice();
+    Object.keys(ed.frames).forEach(function(id){
+      var e=insertedPlaceholder(id, out);
+      if(!e) return;
+      var at=-1;
+      out.forEach(function(x, i){ if(x.page===e.page && x.top<=e.top) at=i; });
+      if(at<0) out.forEach(function(x, i){ if(at<0 && x.page>=e.page) at=i-1; });
+      out.splice(at<0? out.length : at+1, 0, e);
+    });
+    return out;
+  }
+
+  // Delete: an element Rebind found stops being read; one a person inserted is simply taken away,
+  // giving its lines back to whatever held them before.
+  function deleteElement(e, back){
+    if(!INSERTED.test(e.id) && !e.inserted){ setKind(e.id, 'Artifact', back); return; }
+    var items=elementsOnPage(), at=-1;
+    items.forEach(function(x,i){ if(x.id===e.id) at=i; });
+    delete ed.frames[e.id]; delete ed.tags_edit[e.id]; delete ed.removed[e.id];
+    ed.elements=ed.elements.filter(function(x){ return x.id!==e.id; });
+    var rest=elementsOnPage();
+    var to=rest[back? Math.max(at-1,0) : Math.min(at, rest.length-1)];
+    ed.focused=to? to.id : null;
+    drawStage();
+    applyEdits();
+    say('Inserted element deleted.');
   }
 
   function altGuess(e){
@@ -1158,9 +1234,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         // walking up the page as naturally as walking down it.
         if(key==='Delete'||key==='Backspace'){
           ev.preventDefault();
-          setKind(e.id, 'Artifact', key==='Backspace');
+          deleteElement(e, key==='Backspace');
           return;
         }
+        if(key==='Insert'){ ev.preventDefault(); addElement(e.id); return; }
         // Tabbing off the end of a page carries on to the next one, so checking a whole document
         // is one unbroken run of Tab rather than a page turn every dozen presses.
         if(key==='Tab' && !ev.shiftKey && index===boxes.length-1){
@@ -1187,7 +1264,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         // The two edits that are not "what is this?", on the obvious pair of keys. On a table row,
         // removing is the table's (setKind).
         if(key==='+'||key==='='){ ev.preventDefault(); addElement(e.id); return; }
-        if(key==='-'||key==='_'){ ev.preventDefault(); setKind(e.id, 'Artifact'); return; }
+        if(key==='-'||key==='_'){ ev.preventDefault(); deleteElement(e, false); return; }
         if(key==='ArrowDown'||key==='ArrowUp'){
           var to=boxes[index+(key==='ArrowDown'?1:-1)];
           if(to){ ev.preventDefault(); to.focus(); }
@@ -1390,7 +1467,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   function setKind(elementId, tag, back){
     // A row is only ever a header row or a data row; any other type is the table's.
     var table=tableOfRow(elementId);
-    if(table && tag!=='TH' && tag!=='TD'){
+    if(table && tag!=='TH' && tag!=='TD' && tag!=='Artifact'){
       setKind(table, tag, back);
       say('Whole table: '+tagLabel(tag)+'.');
       return;
