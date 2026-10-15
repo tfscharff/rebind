@@ -186,3 +186,59 @@ def test_a_download_that_fails_its_checksum_is_discarded(tmp_path: Path, monkeyp
     monkeypatch.setattr(layout_model, "MODEL_URL", bogus.as_uri())
     assert layout_model.ensure_model(report=None) is None
     assert not list((tmp_path / "models").glob("*"))
+
+
+def test_a_displayed_equation_and_its_number_are_one_formula():
+    first = line("f(x) = a x^2 + b x", (200, 500, 360, 512))
+    second = line("+ c", (260, 484, 290, 496))
+    number = line("(3)", (520, 492, 540, 504))
+    prose = line("where a, b and c are constants.", (72, 460, 400, 472))
+    regions = (Region("display_formula", (195, 480, 365, 515), 0.9),
+               Region("formula_number", (515, 488, 545, 508), 0.8),
+               Region("text", (70, 455, 405, 476), 0.95))
+    lines = [first, second, number, prose]
+    hints = hints_for(lines, regions)
+    assert hints.formulas == {id(first): 0, id(second): 0, id(number): 0}
+    roles = ["Formula", "Formula", "Formula", "P"]
+    assert plan_page(lines, roles, None, hints) == [{"kind": "Formula", "first": 0, "last": 2},
+                                                    {"kind": "P", "first": 3, "last": 3}]
+
+
+def test_an_equation_number_with_no_equation_beside_it_is_left_alone():
+    number = line("(3)", (520, 492, 540, 504))
+    hints = hints_for([number], (Region("formula_number", (515, 488, 545, 508), 0.8),))
+    assert not hints.formulas
+
+
+def test_a_boxed_equation_is_tagged_as_a_formula_and_takes_a_description(
+        tmp_path: Path, monkeypatch, verapdf_exe: Path):
+    """The model's equation region becomes a /Formula. Undescribed, a screen reader reads its own
+    text; described, it reads the words the person gave -- and either way the document conforms."""
+    from rebind import layout_model
+    from rebind.extract import extract_pages
+    from rebind.remediate import Edits
+    from rebind.validate import validate_pdf_ua
+
+    source = born_digital_pdf(
+        "<p>The curve is given by the equation below, for constants a, b and c.</p>"
+        "<p style='text-align:center'>y = ax2 + bx + c</p>"
+        "<p>Its turning point lies where the derivative vanishes.</p>", tmp_path / "in.pdf")
+    page = next(iter(extract_pages(source)))
+    equation = next(ln for ln in page.lines if ln.text.strip().startswith("y = "))
+    x0, y0, x1, y1 = equation.bbox
+    regions = (Region("display_formula", (x0 - 4, y0 - 4, x1 + 4, y1 + 4), 0.9),)
+    monkeypatch.setattr(layout_model, "page_regions", lambda *args, **kwargs: regions)
+
+    plain = remediate(source, tmp_path / "plain.pdf", title="T")
+    formulas = [e for e in plain.elements if e["kind"] == "Formula"]
+    assert [e["text"] for e in formulas] == ["y = ax2 + bx + c"]
+
+    words = "y equals a x squared plus b x plus c"
+    out = tmp_path / "described.pdf"
+    remediate(source, out, title="T", edits=Edits(alts={formulas[0]["id"]: words}))
+    with pikepdf.open(out) as pdf:
+        tagged = [elem for elem in pdf.Root.StructTreeRoot.K[0].K if str(elem.S) == "/Formula"]
+    assert [str(elem.Alt) for elem in tagged] == [words]
+    for target in (tmp_path / "plain.pdf", out):
+        report = validate_pdf_ua(target, verapdf_exe=verapdf_exe)
+        assert report.compliant, report.summary()

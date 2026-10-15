@@ -54,6 +54,10 @@ PROSE = frozenset({"text", "abstract", "footnote", "vision_footnote", "reference
 TITLES = frozenset({"doc_title", "paragraph_title"})
 CAPTION = "figure_title"
 TABLE = "table"
+# A displayed equation, and the "(3)" set beside it. Inline formulas are not used: they sit inside a
+# line of prose, and a line is the smallest thing Rebind can tag.
+FORMULA = "display_formula"
+FORMULA_NUMBER = "formula_number"
 PICTURES = frozenset({"image", "chart"})
 
 _CACHE_PAGES = 5000
@@ -77,6 +81,7 @@ class PageHints:
     blocks: dict[int, int] = field(default_factory=dict)        # prose/title/caption region
     tables: dict[int, int] | None = None                        # table region
     captions: dict[int, int] = field(default_factory=dict)      # a table's caption region
+    formulas: dict[int, int] = field(default_factory=dict)      # a displayed equation's region
     not_headings: set[int] = field(default_factory=set)
 
 
@@ -245,6 +250,15 @@ def _gap(a: tuple[float, float, float, float], b: tuple[float, float, float, flo
     return dx + dy
 
 
+def _equation_beside(number: Region, usable: list[tuple[int, Region]]) -> int | None:
+    """The displayed equation level with an equation number: the nearest one it shares a row with."""
+    level = [(index, region) for index, region in usable if region.label == FORMULA
+             and min(region.bbox[3], number.bbox[3]) > max(region.bbox[1], number.bbox[1])]
+    if not level:
+        return None
+    return min(level, key=lambda item: _gap(item[1].bbox, number.bbox))[0]
+
+
 def hints_for(lines, regions: tuple[Region, ...] | None) -> PageHints:
     """Assign each line to the region its centre falls in (the smallest, where boxes nest).
 
@@ -256,6 +270,9 @@ def hints_for(lines, regions: tuple[Region, ...] | None) -> PageHints:
     lines* -- run in with a paragraph, it is part of that paragraph whatever its size. On its own in
     a "text" box, the model's word is not enough: on a sparse page it calls a real chapter title
     text about as often as not, and a lost heading costs the reader their navigation.
+
+    An equation number joins the equation level with it, so "(3)" is read as part of equation 3
+    rather than as a paragraph of its own.
     """
     if regions is None:
         return PageHints()
@@ -290,6 +307,16 @@ def hints_for(lines, regions: tuple[Region, ...] | None) -> PageHints:
             prose.add(key)
         elif region.label in TITLES:
             hints.blocks[key] = index
+        elif region.label == FORMULA:
+            hints.blocks[key] = index
+            hints.formulas[key] = index
+            prose.add(key)
+        elif region.label == FORMULA_NUMBER:
+            equation = _equation_beside(region, usable)
+            if equation is not None:
+                hints.blocks[key] = equation
+                hints.formulas[key] = equation
+                prose.add(key)
         elif region.label == CAPTION:
             hints.blocks[key] = index
             prose.add(key)

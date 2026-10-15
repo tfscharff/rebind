@@ -237,7 +237,7 @@ def test_landing_on_an_undescribed_picture_asks_for_a_description():
     # element, as they tab onto it -- with Rebind's own guess already in the box.
     script = _script()
     assert "function openAltPrompt(" in script
-    assert "if(kindOf(e)==='Figure') openAltPrompt(e.id, false);" in script
+    assert "if(describable(e)) openAltPrompt(e.id, false);" in script
     prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
     assert "altGuess(e)" in prompt, "the guess must be pre-filled, not an empty box"
     # It asks in the right column, not in a sheet over the page: the picture being described is in
@@ -267,14 +267,14 @@ def test_landing_on_a_picture_never_captures_the_walk():
     prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
     assert "if(ev.key==='Tab' && !ev.shiftKey){ ev.preventDefault(); accept(); return; }" in prompt
     # Enter on a picture edits the description; everywhere else it still opens the type list.
-    assert "if(kindOf(e)==='Figure') openAltPrompt(e.id, true); else openPalette(e.id);" in script
+    assert "if(describable(e)) openAltPrompt(e.id, true); else openPalette(e.id);" in script
 
 
 def test_enter_opens_the_hotkey_palette_and_escape_leaves_it_alone():
     script = _script()
     # Everywhere except a picture, where Enter goes into the description instead -- that is the
     # work on a picture, and the list of types is not.
-    assert "if(kindOf(e)==='Figure') openAltPrompt(e.id, true); else openPalette(e.id);" in script
+    assert "if(describable(e)) openAltPrompt(e.id, true); else openPalette(e.id);" in script
     assert "ev.key==='Escape'" in script
     assert "'aria-modal','true'" in script, "the palette must trap a screen reader inside it"
 
@@ -306,7 +306,7 @@ def test_a_picture_is_named_as_a_figure_with_its_key():
     # other element, with the key that sets it beside the name.
     script = _script()
     prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
-    assert "var fkey=keyFor('Figure');" in prompt
+    assert "var fkey=keyFor(formula? 'Formula' : 'Figure');" in prompt
     assert "Describe this<" not in prompt and "'Describe this'" not in prompt
     assert "<kbd class=\"tag\">" in prompt
 
@@ -318,3 +318,16 @@ def test_x_takes_a_picture_out_of_the_reading_order_like_anywhere_else():
     handler = script[script.index("box.addEventListener('keydown'"):script.index("var hit=null;")]
     assert handler.index("ed.artifact&&ed.artifact.key") < handler.index("key.length===1")
     assert "setKind(e.id, 'Artifact'); return;" in handler
+
+
+def test_a_formula_is_described_like_a_picture_but_still_retags_on_its_keys():
+    # The layout model tags displayed equations as /Formula, and a formula's text read out as
+    # written ("y = ax2 + bx + c") is not the equation. So a formula gets the same description box
+    # as a picture -- but typing on it still retags it, because the model can be wrong about what is
+    # an equation, and its own text pre-filled and accepted unchanged is not a description.
+    script = _script()
+    assert "return k==='Figure' || k==='Formula';" in script
+    handler = script[script.index("box.addEventListener('keydown'"):script.index("var hit=null;")]
+    assert "if(kindOf(e)==='Figure' && key.length===1){" in handler
+    prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
+    assert "if(formula && !before && text===(e.text||'').trim()) text='';" in prompt

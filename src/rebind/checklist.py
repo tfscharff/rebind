@@ -447,7 +447,9 @@ def _alt_text_checks(pdf: pikepdf.Pdf, tree: _Tree, undescribed: tuple) -> list[
                      PASS if not needs_alt else NEEDS_YOU,
                      "Everything else that needs a description has one." if not needs_alt
                      else f"{len(needs_alt)} formulas or form elements have no description.",
-                     need="" if not needs_alt else "Describe each one.", action=""))
+                     need="" if not needs_alt else "Describe each one: on a formula, Enter opens "
+                                                   "its description.",
+                     action="" if not needs_alt else "goto", locations=_where(tree, needs_alt)))
     return out
 
 

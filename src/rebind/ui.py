@@ -1232,7 +1232,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         ed.focused=e.id; showType(e); noteWalked(ed.page);
         // Landing on a picture shows the description beside it, with the guess ready -- but does
         // not take focus. Tab still means "next element"; Enter is what goes in and edits.
-        if(kindOf(e)==='Figure') openAltPrompt(e.id, false);
+        if(describable(e)) openAltPrompt(e.id, false);
       });
       box.addEventListener('click',function(){ box.focus(); });
       if(frameable(e)) wireFrameDrag(box, e);
@@ -1268,10 +1268,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         // list of types is not. Everywhere else Enter still opens the list.
         if(key==='Enter'){
           ev.preventDefault();
-          if(kindOf(e)==='Figure') openAltPrompt(e.id, true); else openPalette(e.id);
+          if(describable(e)) openAltPrompt(e.id, true); else openPalette(e.id);
           return;
         }
-        if(key===' '&&kindOf(e)==='Figure'){
+        if(key===' '&&describable(e)){
           ev.preventDefault();
           openAltPrompt(e.id, true);
           return;
@@ -1367,6 +1367,15 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // walk stops for. Landing on a figure that has no description yet opens this with Rebind's own
   // guess already in the box: the work is to read one line and press Enter, not to compose from
   // nothing. Nothing here is ever written into the document unless the person leaves it there.
+  // A formula is described the same way: its text is all Rebind knows of it, and "y = ax2 + bx + c"
+  // read out character by character is not the equation. Unlike a picture, typing on a formula
+  // still retags it -- the layout model can be wrong about what is an equation -- so its
+  // description opens on Enter or Space, and shows beside it on landing.
+  function describable(e){
+    var k=kindOf(e);
+    return k==='Figure' || k==='Formula';
+  }
+
   function needsAlt(e){
     if(kindOf(e)!=='Figure') return false;
     var have=ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'');
@@ -1388,8 +1397,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var e=null;
     ed.elements.forEach(function(x){ if(x.id===elementId) e=x; });
     if(!e) return;
+    var formula=kindOf(e)==='Formula';
     var guess=(ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'')) || altGuess(e);
-    var thumb=figThumb(elementId);
+    var thumb=formula? '' : figThumb(elementId);
     // In the right column, where the element you are standing on is already described -- not in a
     // sheet over the page. The picture being described is in the middle column, and a dialog on
     // top of it covers the one thing you need to look at to answer the question.
@@ -1398,16 +1408,20 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     // Named like every other element, with its key beside it. The panel used to say "Describe
     // this", which told you what to do but not what Rebind had decided this was -- and the type is
     // exactly what you are being asked to confirm by describing it.
-    var fkey=keyFor('Figure');
+    var fkey=keyFor(formula? 'Formula' : 'Figure');
+    var sub=formula
+      ? 'A formula. Say it in words — left as it is, a screen reader reads its text as written.'
+      : guess? 'A picture. Describe it — Rebind guessed from the page.'
+             : 'A picture. Describe it — Rebind found no caption to guess from.';
     host.innerHTML='<div class="altprompt" id="altprompt" role="group" '+
-      'aria-label="Describe this picture">'+
-      '<p class="what">'+esc(fkey? fkey.label : 'Figure')+
+      'aria-label="'+(formula? 'Describe this formula' : 'Describe this picture')+'">'+
+      '<p class="what">'+esc(fkey? fkey.label : (formula? 'Formula' : 'Figure'))+
       (fkey&&fkey.key? '<kbd class="tag">'+esc(fkey.key)+'</kbd>' : '')+'</p>'+
-      '<p class="sub">'+(guess? 'A picture. Describe it — Rebind guessed from the page.'
-                              : 'A picture. Describe it — Rebind found no caption to guess from.')+
-      '</p>'+
+      '<p class="sub">'+sub+'</p>'+
       (thumb? '<img class="altshot" src="'+esc(thumb)+'" alt="The picture being described">':'')+
-      '<textarea id="altinput" rows="7" placeholder="A short description of the picture">'+
+      '<textarea id="altinput" rows="7" placeholder="'+
+      (formula? 'The formula in words, e.g. y equals a x squared plus b x plus c'
+               : 'A short description of the picture')+'">'+
       esc(guess)+'</textarea>'+
       '<div class="altact"><button type="button" class="btn small" id="altok">Use this</button>'+
       '<button type="button" class="btn ghost small" id="altskip">Skip</button></div>'+
@@ -1424,6 +1438,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     function accept(){
       var text=input.value.trim();
       var before=ed.alts[elementId]!==undefined? ed.alts[elementId] : (e.alt||'');
+      // A formula's box starts with its own text. Accepting that unchanged is not a description:
+      // the text is what a screen reader reads anyway.
+      if(formula && !before && text===(e.text||'').trim()) text='';
       closeAltPrompt();
       // Only a real change starts a save. Accepting Rebind's own guess unchanged -- which is most
       // of them, and the whole point of pre-filling it -- costs nothing and does not rebuild the

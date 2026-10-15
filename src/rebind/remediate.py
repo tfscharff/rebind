@@ -1670,6 +1670,17 @@ def plan_page(lines: list[TextLine], page_roles: list[str],
             i = j + 1
             continue
 
+        # An equation is the lines in its own region, the number beside it included -- and
+        # nothing else, whatever the margins say.
+        if page_roles[i] == "Formula":
+            j = i
+            while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == "Formula"
+                   and continues(i, j + 1, lambda _index, _first: False)):
+                j += 1
+            plan.append({"kind": "Formula", "first": i, "last": j})
+            i = j + 1
+            continue
+
         # A heading runs on the same way a paragraph does, on its own simpler evidence: a title
         # too long for one line is one title, and leaving it as two elements puts a phantom entry
         # in a screen reader's heading list and a pause in the middle of the title.
@@ -2141,7 +2152,12 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
                    max(lines[i].bbox[3] for i in indices))
             captions.append((first, spanning("Caption", document_elem, indices), box))
         else:
-            tops.append(spanning(kind, document_elem, indices))
+            elem = spanning(kind, document_elem, indices)
+            # A formula's description in words, where the person gave one. Without it a screen
+            # reader reads the formula's own text, which is all Rebind knows of it.
+            if kind == "Formula" and entry.get("alt"):
+                elem.Alt = String(entry["alt"])
+            tops.append(elem)
     close_cells()
 
     # A /Caption is not legal beside the thing it captions -- it belongs inside it. Each is moved
@@ -2675,8 +2691,11 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             if artifact or (id(line) in owner_figure and index not in promoted):
                 continue
             content_lines.append(line)
+            # A displayed equation the layout model boxed is a formula, not a paragraph. Its text is
+            # still what the page says; a description in words is the person's to add.
             content_roles.append(
-                "Caption" if id(line) in caption_of and role == "P" else role)
+                "Caption" if id(line) in caption_of and role == "P"
+                else "Formula" if id(line) in hints.formulas and role == "P" else role)
             content_source.append(index)
 
         caption_groups = _caption_groups(content_lines, content_roles, caption_of, caption_blocks,

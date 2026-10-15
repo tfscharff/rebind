@@ -86,6 +86,7 @@ tables and their titles, footnotes. Where it boxed a line, its boxes decide:
 - **Table titles** — a title next to a table becomes the table's `/Caption`, inside it, first.
 - **Page furniture** — running heads, feet and folios the model is confident of become artifacts.
 - **Headings** — a large line run in with other lines in one text block is not a heading.
+- **Equations** — a displayed equation, with the number set beside it, becomes one `/Formula`.
 
 Where it boxed nothing, or is unsure, the geometric rules decide as before. The model groups lines;
 it never supplies text, so a wrong box can only group wrongly, which the editor corrects.
@@ -116,6 +117,10 @@ it never supplies text, so a wrong box can only group wrongly, which the editor 
 - **Tables** `/Table` → `/TR` → `/TD` as a regular grid. Top row is `/TH` scoped to its column,
   empty cells fill gaps, and the table carries an `/Alt` summary of column/row count and header
   text.
+- **Formulas** `/Formula` — displayed equations, found by the layout model or marked with `m`.
+  Undescribed, a screen reader reads the formula's own text; the editor takes a description in
+  words exactly as it does for a picture (Enter or Space on the formula), which becomes its `/Alt`.
+  The report lists undescribed formulas and goes to them.
 - **Figures** `/Figure` with `/Alt` — see below.
 - **Links** — external URIs tagged with an object reference to the annotation. Removed rather than
   carried through: internal links using legacy page/coordinate destinations (PDF/UA-2 requires
@@ -269,14 +274,16 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.1.1.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.2.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:
 
 - Page dewarp for spine-curved scans.
 - Detection of an uncaptioned figure on a scan.
-- Mathematics, chemistry and music recognition.
+- Recognizing mathematics into MathML, chemistry and music. Equations are found and tagged, but
+  their content is the text layer's or the recognizer's, and a description in words is the
+  person's to give.
 - A source document's own internal navigation, which is dropped rather than rebuilt (ADR 0006).
 - Single-character OCR specks in body text still become elements of their own.
 - Byte-reproducible output (ADR 0003).
