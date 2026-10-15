@@ -282,7 +282,7 @@ Not implemented:
 
 ## Runtime
 
-Local only — no API key, no GPU, no network. The Windows installer (~86 MB) is unsigned, so
+Local only — no API key, no GPU, no network. The Windows installer (~205 MB, most of it the page-layout model) is unsigned, so
 SmartScreen warns on first run.
 
 ## License

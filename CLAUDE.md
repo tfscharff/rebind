@@ -101,6 +101,9 @@ uv run pyinstaller packaging/rebind.spec --noconfirm          # -> packaging/dis
 & "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" packaging\rebind.iss  # -> packaging/Output/
 ```
 Thomas installs and tests builds himself; **don't run the installer.**
+If Windows keeps a handle on `packaging/dist/rebind` (search indexer/Defender, minutes at a time),
+don't wait: build with `--distpath packaging/dist_alt --workpath packaging/build_alt` and compile
+with `ISCC.exe /DDistDir=dist_alt packagingebind.iss`.
 
 ## Workflow
 
