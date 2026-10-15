@@ -89,7 +89,6 @@ PDF 2.0 header and updated XMP (`pdfuaid:part=2`).
 ## Commands
 
 ```bash
-uv run python scripts/fetch_models.py   # once per clone: models/pp_doc_layoutv3.onnx (130 MB, gitignored)
 uv run pytest              # default suite (~4 min); the layout model is off except in tests marked layout_model
 uv run pytest -m packaging # opt-in: rebuilds the frozen bundle and OCRs through the .exe (~1 min)
 uv run ruff check .
@@ -103,7 +102,8 @@ uv run pyinstaller packaging/rebind.spec --noconfirm          # -> packaging/dis
 Thomas installs and tests builds himself; **don't run the installer.**
 If Windows keeps a handle on `packaging/dist/rebind` (search indexer/Defender, minutes at a time),
 don't wait: build with `--distpath packaging/dist_alt --workpath packaging/build_alt` and compile
-with `ISCC.exe /DDistDir=dist_alt packagingebind.iss`.
+with `ISCC.exe /DDistDir=dist_alt packaging
+ebind.iss`.
 
 ## Workflow
 
@@ -118,8 +118,9 @@ with `ISCC.exe /DDistDir=dist_alt packagingebind.iss`.
 
 ## Gotchas (still live)
 
-- **The layout model is not in git** (130 MB > GitHub's file limit). `scripts/fetch_models.py`
-  downloads it with a SHA-256 check; the PyInstaller spec refuses to build without it. On sparse
+- **The layout model is not in git** (130 MB > GitHub's file limit). `layout_model.ensure_model`
+  downloads it into `models/` with a SHA-256 check on first use from a clone -- called by the
+  `rebind` CLI, the PyInstaller spec and the `layout_model` tests; never in the frozen app. On sparse
   synthetic pages it calls real big headings "text" at ~0.6 — which is why a heading is demoted
   only when it sits in a multi-line text block, and furniture needs score ≥ 0.7.
 

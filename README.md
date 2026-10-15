@@ -22,12 +22,13 @@ quits it.
 git clone https://github.com/tfscharff/rebind
 cd rebind
 uv sync                # https://docs.astral.sh/uv/
-uv run python scripts/fetch_models.py   # the page-layout model, 130 MB, once
 uv run rebind serve
 ```
 
-Without the layout model Rebind still runs, on its geometric rules alone (see *Layout model*).
-`REBIND_LAYOUT_MODEL=off` switches it off on purpose.
+The first run from a clone downloads the page-layout model (130 MB, too large for the repository)
+into `models/` and checks its SHA-256; the installer already carries it, and the installed app never
+downloads anything. Offline, Rebind still runs on its geometric rules alone (see *Layout model*)
+and tries again next time. `REBIND_LAYOUT_MODEL=off` switches the model off on purpose.
 
 On Windows, `rebind.cmd` in the clone does the same.
 
@@ -268,7 +269,7 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.1.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.1.1.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:

@@ -17,7 +17,6 @@ Requires PyInstaller (installed via the `dev` extra) and a GTK3-Runtime-Win64 in
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import sys
 import time
@@ -35,22 +34,21 @@ PORT = 8756
 
 
 @pytest.fixture(scope="module")
-def frozen_exe() -> Path:
+def frozen_exe(tmp_path_factory) -> Path:
     """Build the frozen bundle once for this module's tests and return the .exe path."""
     if sys.platform != "win32":
         pytest.skip("Frozen build is Windows-only (PyInstaller spec vendors GTK3-Runtime Win64).")
 
-    # Its own folders, not the release build's: Windows (search indexing, Defender) can hold a
-    # handle on a freshly built bundle folder for minutes, and a release was once stuck behind a
-    # test that could not clear packaging/dist.
-    dist_dir = PACKAGING_DIR / "dist_test" / "rebind"
-    build_dir = PACKAGING_DIR / "build_test"
-    shutil.rmtree(dist_dir, ignore_errors=True)
-    shutil.rmtree(build_dir, ignore_errors=True)
+    # A fresh folder every run, never the release build's. The exe this test launches opens a
+    # browser tab, and a browser it starts can outlive it holding a handle on a folder: before
+    # `app._open_browser` started it from the home folder, Firefox kept packaging/dist locked and
+    # the next build there failed with "Access is denied".
+    root = tmp_path_factory.mktemp("frozen")
+    dist_dir = root / "dist" / "rebind"
 
     result = subprocess.run(
         [sys.executable, "-m", "PyInstaller", "rebind.spec", "--noconfirm",
-         "--distpath", "dist_test", "--workpath", "build_test"],
+         "--distpath", str(root / "dist"), "--workpath", str(root / "build")],
         cwd=PACKAGING_DIR,
         capture_output=True,
         text=True,

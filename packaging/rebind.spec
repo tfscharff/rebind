@@ -12,8 +12,9 @@ a stray import can never pull the 40 MB GTK stack back into the bundle.)
 live inside rapidocr_onnxruntime and must be collected as data or the frozen exe finds no models.
 
 The page-layout model (PP-DocLayoutV3, `rebind.layout_model`) is not inside any package: it is
-fetched into the clone's `models/` by `scripts/fetch_models.py` and bundled from there. The build
-fails without it rather than quietly shipping an app that falls back to geometry alone.
+fetched into the clone's `models/` (by `ensure_model`, right here if it is missing) and bundled
+from there. The build fails without it rather than quietly shipping an app that falls back to
+geometry alone.
 The real bundle is guarded by `pytest -m packaging` (it OCRs through the shipping exe).
 """
 import os
@@ -40,11 +41,13 @@ for package in (
 # Only modules unique to the WeasyPrint HTML renderer. NOT lxml (pikepdf needs it for XMP
 # metadata) and NOT fontTools -- both are used by runtime deps; excluding them crashes the
 # frozen exe at convert time even though the dev suite, which has them, stays green.
-_LAYOUT_MODEL = os.path.join(os.path.dirname(os.path.abspath(SPEC)), "..", "models",
-                             "pp_doc_layoutv3.onnx")
-if not os.path.isfile(_LAYOUT_MODEL):
-    raise SystemExit("models/pp_doc_layoutv3.onnx is missing: run scripts/fetch_models.py")
-datas.append((_LAYOUT_MODEL, "models"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(SPEC)), "..", "src"))
+from rebind.layout_model import ensure_model  # noqa: E402
+
+_LAYOUT_MODEL = ensure_model()
+if _LAYOUT_MODEL is None:
+    raise SystemExit("the page-layout model could not be fetched into models/ -- see above")
+datas.append((str(_LAYOUT_MODEL), "models"))
 
 _EXCLUDES = [
     "weasyprint", "pydyf", "cssselect2", "tinycss2", "cairocffi", "cairosvg", "pyphen",

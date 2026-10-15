@@ -435,6 +435,23 @@ def _hold_single_instance_mutex() -> None:
     ctypes.windll.kernel32.CreateMutexW(None, False, "RebindSingleInstanceMutex")
 
 
+def _open_browser(url: str) -> None:
+    """Open `url` in the default browser, started from the user's home folder.
+
+    A browser launched from here inherits this process's working folder, and keeps it open for as
+    long as the browser runs -- long after Rebind itself has exited. From the installed app that is
+    the install folder; from a test build, the bundle folder, which Firefox held locked until the
+    next build of it failed with "Access is denied". Started from home, it holds nothing of ours.
+    """
+    if sys.platform == "win32":
+        try:
+            os.startfile(url, cwd=str(Path.home()))
+            return
+        except OSError:
+            pass
+    webbrowser.open(url)
+
+
 def main() -> None:
     import uvicorn
 
@@ -455,7 +472,7 @@ def main() -> None:
     log_config["handlers"]["access"]["filename"] = str(_log_file_path())
     log_config["handlers"]["access"].pop("stream", None)
 
-    threading.Timer(1.5, lambda: webbrowser.open(f"http://{HOST}:{PORT}/")).start()
+    threading.Timer(1.5, lambda: _open_browser(f"http://{HOST}:{PORT}/")).start()
     uvicorn.run(create_app(exit_when_idle=True), host=HOST, port=PORT, log_level="info",
                 log_config=log_config)
 

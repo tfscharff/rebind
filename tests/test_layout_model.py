@@ -162,3 +162,27 @@ def test_two_tables_side_by_side_stay_two_tables_in_the_reading_order():
     table_of = {**{id(ln): 0 for ln in left}, **{id(ln): 1 for ln in right}}
     walk = [p.line.text for p in _splice_tables(placed, set(table_of), table_of)]
     assert walk == [ln.text for ln in left + right], walk
+
+
+def test_a_failed_fetch_leaves_nothing_behind_and_does_not_raise(tmp_path: Path, monkeypatch):
+    """Offline on first run, a source checkout carries on with the geometric rules and tries
+    again next time -- no exception, and no half-written file mistaken for the model."""
+    from rebind import layout_model
+
+    monkeypatch.setattr(layout_model, "_model_dir", lambda: tmp_path / "models")
+    monkeypatch.setattr(layout_model, "MODEL_URL", (tmp_path / "missing.onnx").as_uri())
+    said: list[str] = []
+    assert layout_model.ensure_model(report=said.append) is None
+    assert not list((tmp_path / "models").glob("*"))
+    assert said and "geometric rules" in said[-1]
+
+
+def test_a_download_that_fails_its_checksum_is_discarded(tmp_path: Path, monkeypatch):
+    from rebind import layout_model
+
+    bogus = tmp_path / "bogus.onnx"
+    bogus.write_bytes(b"not the model")
+    monkeypatch.setattr(layout_model, "_model_dir", lambda: tmp_path / "models")
+    monkeypatch.setattr(layout_model, "MODEL_URL", bogus.as_uri())
+    assert layout_model.ensure_model(report=None) is None
+    assert not list((tmp_path / "models").glob("*"))
