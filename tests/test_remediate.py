@@ -2120,3 +2120,27 @@ def test_ocr_headings_are_isolated_against_their_neighbours_in_reading_order():
     found = _ocr_heading_sizes([*left, *right])
 
     assert [ln.text for ln in [*left, *right] if id(ln) in found] == ["Chapter 2: Rival Images"]
+
+
+def test_a_figure_is_read_in_its_own_column():
+    """On a two-column page a figure is read after the text above it in its own column. Taking the
+    first line anywhere below it put a left-column music example in the middle of the right-hand
+    column of a real book, whose lower half is "below" it too."""
+    from rebind.extract import TextLine
+    from rebind.remediate import _figure_anchor
+
+    def line(x: float, y: float) -> TextLine:
+        return TextLine(text="words", page=1, bbox=(x, y, x + 220, y + 10), font="Times",
+                        size=10.0, bold=False, italic=False)
+
+    left = [line(72, y) for y in (700, 680, 660, 300, 280)]
+    right = [line(320, y) for y in (700, 680, 660, 640, 300, 280)]
+    lines = left + right                    # reading order: the left column, then the right
+    mcids = list(range(len(lines)))
+
+    left_figure = (80.0, 400.0, 280.0, 640.0)
+    assert _figure_anchor(lines, mcids, 0, {}, left_figure) == 3       # before the left's lower text
+    right_figure = (330.0, 400.0, 530.0, 620.0)
+    assert _figure_anchor(lines, mcids, 0, {}, right_figure) == 9      # in the right column
+    bottom_left = (80.0, 100.0, 280.0, 260.0)
+    assert _figure_anchor(lines, mcids, 0, {}, bottom_left) == 5       # before the right column

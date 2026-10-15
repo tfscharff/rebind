@@ -36,6 +36,10 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
 - `formula_reader.py` — LaTeX-OCR (pix2tex ONNX, inference adapted from RapidLaTeXOCR with a
   greedy decoder) reads a `/Formula`'s picture into LaTeX; `speak` puts LaTeX into words. Only a
   *draft* in the editor (`alt_guess`), never written to the PDF unless the person accepts it.
+- `music.py` — finds printed music by its staves (strip-by-strip line detection, chained across
+  the page; deskews, tolerates warped/faded scans), groups staves into examples, and drafts a
+  description of their layout and clefs (`alt_guess` only). Pure OpenCV geometry, no model. Key,
+  time and bar counts were tried and dropped as unreliable on real scans.
 - `weights.py` — registry of the model files not in git (layout + equation reader), with pinned
   SHA-256s; `ensure_weights` fetches missing ones into `models/` from a clone (never when frozen).
 - `remediate.py` — builds the tagged output: keeps each page's pixels/vector untouched, lays an

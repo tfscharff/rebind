@@ -1415,10 +1415,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
           ? 'A formula. Rebind read it from the page as below — check it against the equation'+
             ' before you use it.'
           : 'A formula. Say it in words — left as it is, a screen reader reads its text as written.')
+      : e.music
+        ? 'Music. Rebind read how its staves are laid out, below — add what the music is'+
+          ' (the piece, the passage, what it shows), and check the rest against the page.'
       : guess? 'A picture. Describe it — Rebind guessed from the page.'
              : 'A picture. Describe it — Rebind found no caption to guess from.';
     host.innerHTML='<div class="altprompt" id="altprompt" role="group" '+
-      'aria-label="'+(formula? 'Describe this formula' : 'Describe this picture')+'">'+
+      'aria-label="'+(formula? 'Describe this formula' : e.music? 'Describe this music' : 'Describe this picture')+'">'+
       '<p class="what">'+esc(fkey? fkey.label : (formula? 'Formula' : 'Figure'))+
       (fkey&&fkey.key? '<kbd class="tag">'+esc(fkey.key)+'</kbd>' : '')+'</p>'+
       '<p class="sub">'+sub+'</p>'+

@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
-from . import contrast, formula_reader, layout_model, recolor, review
+from . import contrast, formula_reader, layout_model, music, recolor, review
 from .extract import Page, TextLine, extract_pages
 from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines, order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
@@ -137,6 +137,9 @@ FIGURE_SAME_ROW_FRACTION = 0.5
 # The longest a callout label runs to ("Ventral", "2-10 ml glass syringe", "3 mm"). Longer than
 # this, inside a guessed figure box, is a sentence -- prose the picture sits around, not part of it.
 FIGURE_LABEL_MAX_WORDS = 6
+# A picture found some other way over the same music gives way to the music's own box, unless it is
+# this many times bigger -- then it is a picture with music in it, and keeps its box.
+MUSIC_REPLACES_AREA = 2.0
 # A speck on a scan (`_is_speck`): a line of up to this many marks with no letter or digit in it...
 SPECK_MAX_MARKS = 3
 # ...or a line this short that the layout model found outside any region of words.
@@ -1293,6 +1296,25 @@ def _figure_text_strict(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
             and len(line.text.split()) <= FIGURE_LABEL_MAX_WORDS]
 
 
+def _area(bbox: tuple) -> float:
+    return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+
+
+def _music_text(lines: list[TextLine], example) -> list[TextLine]:
+    """What a music example owns of the page's text: anything on its staves, which is notation the
+    recogniser misread whatever it came out as, and the short labels around them -- figures under a
+    bass, a tempo marking. Never its caption ("Ex. 24."), which is read in its own right."""
+    owned = []
+    for line in lines:
+        if any(_center_in_box(line.bbox, band) for band in example.bands):
+            owned.append(line)      # even one that opens like a caption: it is on the stave
+        elif (_center_in_box(line.bbox, example.bbox) and not music.is_label(line.text)
+              and not _is_caption_marker(line.text)
+              and len(line.text.split()) <= FIGURE_LABEL_MAX_WORDS):
+            owned.append(line)
+    return owned
+
+
 def _figure_text(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
     """The lines belonging to a figure: its own callout labels, not the prose around it.
 
@@ -1336,19 +1358,34 @@ def _figure_anchor(lines: list[TextLine], mcids: list[int | None], figure_index:
 
     Reading order is a sequence, so a figure needs a place in it. Its own labels were already
     spliced to the right height by the layout pass, so the line following them is where the figure
-    belongs; failing that (a figure with no labels of its own) the first content line starting
-    below the figure serves the same purpose.
+    belongs. Failing that (a figure with no labels of its own) it is read straight after the text
+    above it *in its own column* -- the last line over it that it shares any width with -- or, with
+    nothing above, before the first such line below it. Taking simply the first line anywhere below
+    the figure put a left-hand column's music examples into the middle of the right-hand column on
+    a real two-column page, since the right column's lower half is "below" them too.
     """
     seen_own_text = False
+    content: list[tuple[TextLine, int]] = []
     for line, mcid in zip(lines, mcids):
         if owner_figure.get(id(line)) == figure_index:
             seen_own_text = True
             continue
         if mcid is None:
             continue
-        if seen_own_text or line.bbox[3] <= bbox[1]:
+        if seen_own_text:
             return mcid
-    return None
+        content.append((line, mcid))
+    middle = (bbox[1] + bbox[3]) / 2
+    column = [k for k, (line, _mcid) in enumerate(content)
+              if _horizontally_overlaps(line.bbox, bbox)]
+    above = [k for k in column if (content[k][0].bbox[1] + content[k][0].bbox[3]) / 2 > middle]
+    if above:
+        after = max(above) + 1
+        return content[after][1] if after < len(content) else None
+    below = [k for k in column if k not in above]
+    if below:
+        return content[min(below)][1]
+    return next((mcid for line, mcid in content if line.bbox[3] <= bbox[1]), None)
 
 
 def _top_index_for(tops: list, owners: list, anchor: int | None) -> int:
@@ -2573,6 +2610,33 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         scan_regions: set[str] = set()
         modelled: set[str] = set()
         scanned = used_ocr or src_page.number in invisible_pages or _is_full_page_scan(src_page)
+        # Printed music, found by its staves (see `music`) -- first, because it is the surest
+        # thing on the page about what a picture is. It replaces a picture found some other way
+        # over the same music, unless that picture is much bigger than the music (a photograph of a
+        # manuscript page, say), which keeps its own box.
+        music_of: dict[str, music.Example] = {}
+        # The page at full resolution, rendered once and only if something needs it.
+        rendered: list = []
+
+        def full_render(number: int = src_page.number, held: list = rendered):
+            if not held:
+                held.append(render_page_to_image(render_source, number, dpi=dpi))
+            return held[0]
+
+        if scanned or src_page.drawings or src_page.images:
+            for index, example in enumerate(music.examples_for_page(
+                    source, src_page.number, src_page.width, src_page.height, list(lines),
+                    keep_out=lambda line: music.is_label(line.text) or _is_caption_marker(line.text),
+                    render=(lambda: (full_render(), dpi)) if scanned else None)):
+                covering = [(fid, bbox) for fid, bbox in figures
+                            if _boxes_overlap(bbox, example.bbox)]
+                if any(_area(bbox) > MUSIC_REPLACES_AREA * _area(example.bbox)
+                       for _fid, bbox in covering):
+                    continue
+                figures = [(fid, bbox) for fid, bbox in figures if (fid, bbox) not in covering]
+                fid = f"p{src_page.number}s{index}"
+                figures.append((fid, example.bbox))
+                music_of[fid] = example
         if scanned:
             pictures = [(f"p{src_page.number}m{index}", bbox)
                         for index, bbox in enumerate(hints.pictures)
@@ -2602,6 +2666,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         caption_blocks: list[list[TextLine]] = []
 
         def caption_for(fid: str, bbox: tuple) -> str | None:
+            # Music is never described on its own: its label opens the draft the person checks.
+            if fid in music_of:
+                return None
             used: list[TextLine] = []
             local = anchored.get(fid) or _figure_caption(lines, bbox, used)
             if local and _caption_is_substantial(local):
@@ -2629,7 +2696,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # worse than an empty box.
         claimed = {text for text in effective_alt.values() if text}
         for fid, bbox in figures:
-            if effective_alt[fid]:
+            # Music is labelled beside its staves with a bare "Ex. 238.", never a sentence; a
+            # "caption" found beside it is the next column's text.
+            if effective_alt[fid] or fid in music_of:
                 continue
             beside = [(text, used) for text, used in _side_captions(lines, bbox)
                       if text not in claimed]
@@ -2658,8 +2727,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         described = [(fid, bbox) for fid, bbox in figures if effective_alt[fid]]
         undescribed = [(fid, bbox) for fid, bbox in figures if not effective_alt[fid]]
         rebuild = _has_marked_content(page)
-        page_image = (render_page_to_image(render_source, src_page.number, dpi=dpi)
-                      if rebuild or figures else None)
+        page_image = full_render() if rebuild or figures else None
 
         # Classify every line before anything is drawn. Three kinds, and only one of them is the
         # document's content:
@@ -2669,6 +2737,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         #     loose labels ("A", "B", "3 mm") a screen reader would read out as if it were prose;
         #   * everything else -> ordinary content, tagged with its own MCID.
         def figure_text(fid: str, fbox: tuple) -> list[TextLine]:
+            if fid in music_of:
+                return _music_text(lines, music_of[fid])
             return (_figure_text_strict(lines, fbox) if fid in scan_regions or fid in modelled
                     else _figure_text(lines, fbox))
 
@@ -2975,6 +3045,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             fig_bottom = 100 * (src_page.height - bbox[1]) / src_page.height
             fig_left = 100 * bbox[0] / src_page.width
 
+            fig_right = 100 * bbox[2] / src_page.width
+
             def after(elem, top=fig_top, bottom=fig_bottom, left=fig_left) -> bool:
                 """Whether `elem` is read after this figure: on a later row, or beside it and
                 further right."""
@@ -2985,11 +3057,33 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                     bottom - top, max(elem["height"], 0.01))
                 return elem["left"] > left if same_row else elem["top"] > top
 
-            position = next((i for i, elem in enumerate(page_elements) if after(elem)),
-                            len(page_elements))
+            # In its own column, as in the document (`_figure_anchor`): straight after the last
+            # element above it that shares any of its width, else before the first one below.
+            middle = (fig_top + fig_bottom) / 2
+            column = [i for i, elem in enumerate(page_elements)
+                      if elem["page"] == src_page.number
+                      and elem["kind"] not in ("Figure", "Artifact")
+                      and elem["left"] < fig_right and elem["left"] + elem["width"] > fig_left]
+            above = [i for i in column
+                     if page_elements[i]["top"] + page_elements[i]["height"] / 2 < middle]
+            if above:
+                position = max(above) + 1
+            elif column:
+                position = min(column)
+            else:
+                position = next((i for i, elem in enumerate(page_elements) if after(elem)),
+                                len(page_elements))
+            # Pictures placed at the same spot already, above or before this one, stay first.
+            while (position < len(page_elements)
+                   and page_elements[position]["page"] == src_page.number
+                   and page_elements[position]["kind"] == "Figure"
+                   and not after(page_elements[position])):
+                position += 1
+            figure_id = next(fid for fid, fbox in figures if fbox == bbox)
             page_elements.insert(position, {
-                "id": next(fid for fid, fbox in figures if fbox == bbox),
+                "id": figure_id,
                 "page": src_page.number, "kind": "Figure", "text": "", "alt": alt,
+                **({"music": True} if figure_id in music_of else {}),
                 "left": round(100 * bbox[0] / src_page.width, 2),
                 "top": round(100 * (src_page.height - bbox[3]) / src_page.height, 2),
                 "width": round(100 * (bbox[2] - bbox[0]) / src_page.width, 2),
@@ -3008,9 +3102,13 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             # page-break artifact) is still the best opening line anyone has: it is offered to the
             # editor as a starting point for the person to finish, never written into the document
             # unedited. Nothing is invented -- an empty box stays empty.
+            label = (anchored.get(fid) or _figure_caption(lines, bbox) or "").strip()
+            # Music comes with a draft read off its staves, after its own label where it has one.
+            if fid in music_of:
+                label = " ".join(part for part in (music.label_for(music_of[fid], lines),
+                                                   music_of[fid].draft) if part)
             undescribed_figures.append({
-                "id": fid, "page": src_page.number,
-                "alt_guess": (anchored.get(fid) or _figure_caption(lines, bbox) or "").strip(),
+                "id": fid, "page": src_page.number, "alt_guess": label,
                 "thumb": _crop_data_uri(page_image, bbox, src_page.width, src_page.height)})
 
     struct_root.ParentTree = pdf.make_indirect(Dictionary(Nums=parent_tree_nums))

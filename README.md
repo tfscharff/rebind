@@ -136,15 +136,16 @@ it never supplies text, so a wrong box can only group wrongly, which the editor 
 
 ### Figures
 
-Found four ways:
+Found five ways:
 
-1. **Placed images**, read from the file.
-2. **Drawn figures** — line art leaves no image object, so it is found by anchoring on its caption:
+1. **Printed music**, by its staves — see below.
+2. **Placed images**, read from the file.
+3. **Drawn figures** — line art leaves no image object, so it is found by anchoring on its caption:
    everything drawn in the band above a `Fig. N …` caption.
-3. **Pictures on a scan, boxed by the layout model.** A scanned sheet is one raster and an
+4. **Pictures on a scan, boxed by the layout model.** A scanned sheet is one raster and an
    illustration on it is a patch of that raster, not an object. The layout model looks at the whole
    page and boxes pictures and charts as such (score ≥ 0.6).
-4. **Regions of a scan, from its pixels**, for whatever the model did not box. OCR says where the
+5. **Regions of a scan, from its pixels**, for whatever the model did not box. OCR says where the
    words are, those are masked out, and the remaining ink is closed into blobs. A blob qualifies if
    it covers ≥1.5% of the page, is solid enough to be a picture, is not mostly text, and does not
    reach three page edges (what does is the scanner's dark strip at the spine or platen edge).
@@ -168,6 +169,32 @@ starting point.
 A figure's callout labels ("A", "B", "3 mm") belong to the figure, described or not, and are drawn
 inside it rather than left loose in the reading order — so do the scraps a recogniser makes of
 the picture's own lettering.
+
+A figure is read where it sits in its own column: after the text above it that shares any of its
+width. On a two-column page, a figure in the left column is no longer read in the middle of the
+right one.
+
+**Music.** PDF/UA has no tag for notation, so a music example is a figure, and what a reader needs
+is a description. It is found by its staves: five long, evenly spaced lines, closer together than
+lines of text. The search runs strip by strip across the page and chains the pieces, so a tilted or
+warped scan and a stave with worn-away stretches still come out as one stave each, while two
+examples set side by side on one line stay two. Staves stacked with no prose or caption between
+them are one example; a sentence between them, an "Ex. 25." label, or an exercise number over the
+left end of a stave starts the next. Five lines with words in their spaces are a ruled table, not
+music. Born-digital pages are searched too when they carry drawings or images.
+
+The example's box takes in what is printed on and around its staves — ledger lines, figures under a
+bass, a tempo — and everything read as text on the staves belongs to the figure, so a screen reader
+no longer meets note heads read as letters. The example's label stays outside it, read in its own
+right.
+
+A music example always goes to the editor to be described, with a draft: its own label, then how it
+is laid out and its clefs — "Ex. 238. Music in two lines, each on two staves: treble and bass
+clefs." Lines are told apart by the clefs repeating down the example; a clef that cannot be told is
+left out, and so is the layout with it. Key signatures, time signatures and bar counts were tried
+and left out: on two real scanned books they came out wrong too often to offer, and a wrong key is
+worse than none. The draft is only a start; what the music is — the piece, the passage, what it
+shows — is the person's to add.
 
 **Specks.** On a scanned page, a line the recogniser read out of dirt is not read and not listed in
 the editor: a line of nothing but marks ("|", "~", "."), or one or two characters the layout model
@@ -289,14 +316,16 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.4.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.5.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:
 
 - Page dewarp for spine-curved scans.
-- Mathematics as MathML, chemistry and music. Equations are found, tagged and given a drafted
+- Mathematics as MathML, and chemistry. Equations are found, tagged and given a drafted
   description in words for the person to check, but not converted to MathML.
+- Reading music: its notes, key and time, and output as MusicXML. Music examples are found, kept
+  as figures and given a draft of their layout and clefs only.
 - A source document's own internal navigation, which is dropped rather than rebuilt (ADR 0006).
 - Byte-reproducible output (ADR 0003).
 
