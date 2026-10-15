@@ -32,10 +32,10 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
 
-    # A source checkout fetches the page-layout model on first use; the installed app carries it.
-    from .layout_model import ensure_model
+    # A source checkout fetches its models on first use; the installed app carries them.
+    from .weights import ensure_weights
 
-    ensure_model(report=lambda message: print(message, file=sys.stderr))
+    ensure_weights(report=lambda message: print(message, file=sys.stderr))
 
     if args.command == "serve":
         from .app import main as serve_main

@@ -1,8 +1,8 @@
-"""Fetch the page-layout model into `models/` (gitignored), verifying its SHA-256.
+"""Fetch the model files into `models/` (gitignored), each checked against its SHA-256.
 
-Not normally needed: a source checkout fetches it on first use (`rebind.layout_model.ensure_model`,
-called by the `rebind` command, the PyInstaller spec and the test suite). This is the explicit
-version, for fetching ahead of time.
+Not normally needed: a source checkout fetches them on first use (`rebind.weights.ensure_weights`,
+called by the `rebind` command, the PyInstaller spec and the tests that need a model). This is the
+explicit version, for fetching ahead of time.
 
     uv run python scripts/fetch_models.py
 """
@@ -13,10 +13,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from rebind.layout_model import ensure_model  # noqa: E402
+from rebind.weights import ensure_weights, model_dir  # noqa: E402
 
 if __name__ == "__main__":
-    path = ensure_model()
-    if path is None:
+    if not ensure_weights():
         sys.exit(1)
-    print(f"{path} is present")
+    print(f"all models present in {model_dir()}")

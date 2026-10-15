@@ -145,6 +145,7 @@ def test_frozen_exe_serves_and_ocrs(frozen_exe: Path, tmp_path: Path):
         assert "REBIND" in (ocr_body["recovered"] or "").upper()
         # ...and the page-layout model loads from inside the bundle too.
         assert ocr_body["layout_model"] is True, "the layout model did not load from the bundle"
+        assert ocr_body["formula_reader"] is True, "the equation reader did not load from the bundle"
 
         # Convert a real PDF end to end through the frozen exe. This is the load-bearing check that
         # ocr-smoke alone does not give: it drives the full remediate -> pikepdf/XMP path, which

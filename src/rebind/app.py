@@ -361,13 +361,14 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         does too. Text is drawn with Pillow and recognized; the endpoint reports what it read.
 
         It also runs the page-layout model over the same picture and reports whether it loaded
-        (`layout_model`): without it the app still works, on geometry alone, so a bundle missing
-        the model would pass every other check while quietly doing worse.
+        (`layout_model`), and whether the equation reader loads (`formula_reader`): without either
+        the app still works, so a bundle missing one would pass every other check while quietly
+        doing less.
         """
         import numpy as np
         from PIL import Image, ImageDraw, ImageFont
 
-        from rebind import layout_model
+        from rebind import formula_reader, layout_model
         from rebind.ocr import OcrEngine, recognize
 
         expected = "REBIND OCR SMOKE 12345"
@@ -384,7 +385,7 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
             regions = layout_model.detect_regions(np.asarray(image), 760.0, 120.0)
             return JSONResponse({"status": "ok", "success": "REBIND" in recovered.upper(),
                                  "recovered": recovered, "layout_model": regions is not None,
-                                 "error": None})
+                                 "formula_reader": formula_reader.available(), "error": None})
         except Exception as exc:  # noqa: BLE001 -- surface the real error, do not mask it
             return JSONResponse({"status": "error", "success": False, "recovered": None,
                                  "error": f"{type(exc).__name__}: {exc}",

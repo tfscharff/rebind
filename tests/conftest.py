@@ -75,3 +75,17 @@ def _layout_model_only_where_asked(request, monkeypatch):
     from rebind import layout_model
     if layout_model.ensure_model() is None:
         pytest.skip("layout model could not be fetched (offline?)")
+
+
+@pytest.fixture(autouse=True)
+def _formula_reader_only_where_asked(request, monkeypatch):
+    """The equation reader loads 179 MB of models and reads each formula it is shown. Tests that
+    tag a formula without being about reading one would pay for it, so it is off unless a test is
+    marked `formula_reader`; those fetch the models if missing and skip only if that fails."""
+    if request.node.get_closest_marker("formula_reader") is None:
+        monkeypatch.setenv("REBIND_FORMULA_READER", "off")
+        return
+    monkeypatch.delenv("REBIND_FORMULA_READER", raising=False)
+    from rebind import weights
+    if not weights.ensure_weights():
+        pytest.skip("models could not be fetched (offline?)")

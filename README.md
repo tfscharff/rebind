@@ -25,8 +25,8 @@ uv sync                # https://docs.astral.sh/uv/
 uv run rebind serve
 ```
 
-The first run from a clone downloads the page-layout model (130 MB, too large for the repository)
-into `models/` and checks its SHA-256; the installer already carries it, and the installed app never
+The first run from a clone downloads the page-layout model (130 MB) and the equation reader
+(179 MB), both too large for the repository, into `models/` and checks their SHA-256s; the installer already carries it, and the installed app never
 downloads anything. Offline, Rebind still runs on its geometric rules alone (see *Layout model*)
 and tries again next time. `REBIND_LAYOUT_MODEL=off` switches the model off on purpose.
 
@@ -120,7 +120,12 @@ it never supplies text, so a wrong box can only group wrongly, which the editor 
 - **Formulas** `/Formula` — displayed equations, found by the layout model or marked with `m`.
   Undescribed, a screen reader reads the formula's own text; the editor takes a description in
   words exactly as it does for a picture (Enter or Space on the formula), which becomes its `/Alt`.
-  The report lists undescribed formulas and goes to them.
+  The box comes with a draft: the equation is read from its picture into LaTeX by LaTeX-OCR
+  (pix2tex, on the CPU, about half a second each) and put into words — "omega sub d equals the
+  square root of omega sub 0 squared minus gamma squared". The reader slips (a double prime read
+  as a prime, a zero as the letter O), so the draft is never written into the document unless the
+  person accepts it, and the box says to check it against the page. The report lists undescribed
+  formulas and goes to them.
 - **Figures** `/Figure` with `/Alt` — see below.
 - **Links** — external URIs tagged with an object reference to the annotation. Removed rather than
   carried through: internal links using legacy page/coordinate destinations (PDF/UA-2 requires
@@ -274,7 +279,7 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.2.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.3.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:
@@ -290,7 +295,7 @@ Not implemented:
 
 ## Runtime
 
-Local only — no API key, no GPU, no network. The Windows installer (~205 MB, most of it the page-layout model) is unsigned, so
+Local only — no API key, no GPU, no network. The Windows installer (~360 MB, most of it the page-layout model and the equation reader) is unsigned, so
 SmartScreen warns on first run.
 
 ## License

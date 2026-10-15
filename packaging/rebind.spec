@@ -11,10 +11,10 @@ a stray import can never pull the 40 MB GTK stack back into the bundle.)
 `collect_all` pulls each package's native binaries AND data -- the ONNX models and YAML config
 live inside rapidocr_onnxruntime and must be collected as data or the frozen exe finds no models.
 
-The page-layout model (PP-DocLayoutV3, `rebind.layout_model`) is not inside any package: it is
-fetched into the clone's `models/` (by `ensure_model`, right here if it is missing) and bundled
-from there. The build fails without it rather than quietly shipping an app that falls back to
-geometry alone.
+The models (`rebind.weights`: the page-layout model and the equation reader) are not inside any
+package: they are fetched into the clone's `models/` (by `ensure_weights`, right here if missing)
+and bundled from there, at the same paths. The build fails without them rather than quietly
+shipping an app that falls back to doing less.
 The real bundle is guarded by `pytest -m packaging` (it OCRs through the shipping exe).
 """
 import os
@@ -42,12 +42,12 @@ for package in (
 # metadata) and NOT fontTools -- both are used by runtime deps; excluding them crashes the
 # frozen exe at convert time even though the dev suite, which has them, stays green.
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(SPEC)), "..", "src"))
-from rebind.layout_model import ensure_model  # noqa: E402
+from rebind.weights import WEIGHTS, ensure_weights, model_dir  # noqa: E402
 
-_LAYOUT_MODEL = ensure_model()
-if _LAYOUT_MODEL is None:
-    raise SystemExit("the page-layout model could not be fetched into models/ -- see above")
-datas.append((str(_LAYOUT_MODEL), "models"))
+if not ensure_weights():
+    raise SystemExit("the models could not all be fetched into models/ -- see above")
+for _name in WEIGHTS:
+    datas.append((str(model_dir() / _name), os.path.dirname(os.path.join("models", _name))))
 
 _EXCLUDES = [
     "weasyprint", "pydyf", "cssselect2", "tinycss2", "cairocffi", "cairosvg", "pyphen",

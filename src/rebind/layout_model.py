@@ -13,18 +13,13 @@ cannot put a word on the page that was not there (invariant 1). Regions below MI
 ignored, and with no model at all (`page_regions` returns None) every rule falls back to what it
 did before.
 
-The model file is not in the repository (130 MB, over GitHub's file limit). The installer carries
-it, and the installed app never downloads anything. A source checkout fetches it once, on first use
-(`ensure_model`, called by the `rebind` command, the PyInstaller spec and the test suite) -- the
-same step as `uv sync` fetching packages, verified against a pinned SHA-256.
+The model file is not in the repository (130 MB, over GitHub's file limit): see `weights`.
 """
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
-import sys
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -32,12 +27,11 @@ from pathlib import Path
 
 import numpy as np
 
+from . import weights
+
 log = logging.getLogger(__name__)
 
-MODEL_FILE = "pp_doc_layoutv3.onnx"
-MODEL_URL = ("https://www.modelscope.cn/models/RapidAI/RapidLayout/resolve/v1.2.0/onnx/"
-             "pp_doc_layout/pp_doc_layoutv3.onnx")
-MODEL_SHA256 = "250dbad1dfb9e4983fab75e1bf5085cd56ec3f41d5c7d0f8623ec74856e7aa67"
+MODEL_FILE = "pp_doc_layoutv3.onnx"      # registered in `weights.WEIGHTS`
 
 # The model resizes every page to 800 x 800 itself, so a modest render loses nothing.
 REGION_DPI = 150
@@ -85,58 +79,14 @@ class PageHints:
     not_headings: set[int] = field(default_factory=set)
 
 
-def _model_dir() -> Path:
-    if getattr(sys, "frozen", False):
-        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent)) / "models"
-    return Path(__file__).resolve().parents[2] / "models"
-
-
 def model_path() -> Path | None:
     """Where the model is: inside the frozen bundle, or in the clone's `models/` folder."""
-    path = _model_dir() / MODEL_FILE
-    return path if path.is_file() else None
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return weights.weight_path(MODEL_FILE)
 
 
 def ensure_model(report=print) -> Path | None:
-    """Make sure a source checkout has the model, downloading it once if it is missing.
-
-    Never downloads in the installed app (it carries the model), and never raises: offline, the
-    checkout simply runs on the geometric rules and the next run tries again. `report` gets one
-    line before a download and one after, since 130 MB takes a minute.
-    """
-    path = model_path()
-    if path is not None or getattr(sys, "frozen", False):
-        return path
-    import urllib.request
-
-    target = _model_dir() / MODEL_FILE
-    partial = target.with_suffix(".part")
-    try:
-        target.parent.mkdir(exist_ok=True)
-        if report:
-            report(f"Downloading the page-layout model (130 MB, once) to {target.parent} ...")
-        urllib.request.urlretrieve(MODEL_URL, partial)
-        actual = _sha256(partial)
-        if actual != MODEL_SHA256:
-            raise ValueError(f"checksum mismatch: got {actual}, expected {MODEL_SHA256}")
-        partial.replace(target)
-    except Exception as exc:     # offline, or a bad download: carry on without it
-        partial.unlink(missing_ok=True)
-        if report:
-            report(f"Could not fetch the page-layout model ({exc}); "
-                   "continuing with the geometric rules only.")
-        return None
-    if report:
-        report("Page-layout model ready.")
-    return target
+    """Make sure a source checkout has the model, fetching it once if it is missing (`weights`)."""
+    return weights.fetch(MODEL_FILE, report)
 
 
 _engine = None
@@ -325,5 +275,7 @@ def hints_for(lines, regions: tuple[Region, ...] | None) -> PageHints:
     members: dict[int, int] = {}
     for key in prose:
         members[hints.blocks[key]] = members.get(hints.blocks[key], 0) + 1
-    hints.not_headings = {key for key in prose if members[hints.blocks[key]] > 1}
+    # An equation is never a heading, however large it is set.
+    hints.not_headings = ({key for key in prose if members[hints.blocks[key]] > 1}
+                          | set(hints.formulas))
     return hints

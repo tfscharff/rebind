@@ -1,6 +1,6 @@
 [project]
 name = "rebind"
-version = "1.2.0"
+version = "1.3.0"
 description = "Accessible PDF remediation for damaged library scans"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -50,6 +50,7 @@ addopts = "-v -m \"not packaging\""
 pythonpath = ["."]
 markers = [
     "packaging: slow, opt-in tests that build the frozen PyInstaller bundle and exercise it. Run with `uv run pytest -m packaging`.",
+    "formula_reader: runs the equation reader (needs models/, fetched on first use); every other test runs with it switched off.",
     "layout_model: runs the page-layout model (needs models/, see scripts/fetch_models.py); every other test runs with it switched off.",
     "slow: long-running tests (e.g. the 300-page document). Included by default; deselect with `-m 'not slow'`.",
 ]

@@ -33,6 +33,11 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
   paragraphs = text blocks, tables = table regions, table titles = captions, confident
   header/footer/folio = artifacts. Groups lines only, never supplies text. No model file → `None`
   → geometric rules exactly as before. Regions cached per (file, mtime, page).
+- `formula_reader.py` — LaTeX-OCR (pix2tex ONNX, inference adapted from RapidLaTeXOCR with a
+  greedy decoder) reads a `/Formula`'s picture into LaTeX; `speak` puts LaTeX into words. Only a
+  *draft* in the editor (`alt_guess`), never written to the PDF unless the person accepts it.
+- `weights.py` — registry of the model files not in git (layout + equation reader), with pinned
+  SHA-256s; `ensure_weights` fetches missing ones into `models/` from a clone (never when frozen).
 - `remediate.py` — builds the tagged output: keeps each page's pixels/vector untouched, lays an
   *invisible* (render mode 3) tagged text layer over it, and builds the PDF/UA structure tree.
 - `validate.py` — runs veraPDF and parses its report. `ui.py` — the inline browser app.
@@ -118,11 +123,17 @@ ebind.iss`.
 
 ## Gotchas (still live)
 
-- **The layout model is not in git** (130 MB > GitHub's file limit). `layout_model.ensure_model`
-  downloads it into `models/` with a SHA-256 check on first use from a clone -- called by the
-  `rebind` CLI, the PyInstaller spec and the `layout_model` tests; never in the frozen app. On sparse
-  synthetic pages it calls real big headings "text" at ~0.6 — which is why a heading is demoted
-  only when it sits in a multi-line text block, and furniture needs score ≥ 0.7.
+- **The models are not in git** (layout 130 MB, equation reader 179 MB; GitHub's limit is 100 MB).
+  `weights.ensure_weights` downloads them into `models/` with SHA-256 checks on first use from a
+  clone -- called by the `rebind` CLI, the PyInstaller spec and the model-marked tests; never in
+  the frozen app. Tests run with both models off (`REBIND_LAYOUT_MODEL`/`REBIND_FORMULA_READER`)
+  unless marked `layout_model` / `formula_reader`.
+- **The RapidLaTeXOCR package is not a dependency on purpose**: it pins numpy<2 (rapid-layout
+  needs >=2), samples tokens randomly (breaks determinism) and pulls in LGPL chardet. Its ~150
+  lines of inference are adapted in `formula_reader.py` instead.
+- **The layout model calls real big headings "text" at ~0.6 on sparse synthetic pages** — which
+  is why a heading is demoted only when it sits in a multi-line text block, and furniture needs
+  score ≥ 0.7.
 
 - **`sys.stdout` is `None` in the `console=False` frozen build** on every real launch (double-click,
   Start menu) — no inherited handle. Anything touching `sys.stdout` at import/config time crashes

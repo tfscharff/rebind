@@ -331,3 +331,15 @@ def test_a_formula_is_described_like_a_picture_but_still_retags_on_its_keys():
     assert "if(kindOf(e)==='Figure' && key.length===1){" in handler
     prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
     assert "if(formula && !before && text===(e.text||'').trim()) text='';" in prompt
+
+
+def test_a_formula_offers_its_drafted_description_and_says_to_check_it():
+    # The equation reader drafts a description from the formula's picture. It is offered in the
+    # box, labelled as something to check against the page -- and on landing, Tab moves on
+    # without it, so a draft is only ever saved by someone who opened it and accepted it.
+    script = _script()
+    guess = script[script.index("function altGuess(e){"):script.index("function focusBox(")]
+    assert "if(e.alt_guess) return e.alt_guess;" in guess
+    prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
+    assert "check it against the equation" in prompt
+    assert "Tab moves on without it" in prompt

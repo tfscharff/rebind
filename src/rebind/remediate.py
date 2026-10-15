@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
-from . import contrast, layout_model, recolor, review
+from . import contrast, formula_reader, layout_model, recolor, review
 from .extract import Page, TextLine, extract_pages
 from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines, order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
@@ -1558,6 +1558,15 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
     return out
 
 
+def _record_box(record: dict, src_page) -> tuple[float, float, float, float]:
+    """An editor record's box back in PDF points (its left/top/width/height are page percents)."""
+    x0 = record["left"] * src_page.width / 100
+    x1 = (record["left"] + record["width"]) * src_page.width / 100
+    y1 = src_page.height - record["top"] * src_page.height / 100
+    y0 = y1 - record["height"] * src_page.height / 100
+    return (x0, y0, x1, y1)
+
+
 def _untagged_record(src_page, element_id: str, line: TextLine, order: int) -> dict:
     """A line Rebind left out of the structure tree -- page furniture, or text inside a figure --
     offered to the editor so it can be given a tag and read after all."""
@@ -2787,6 +2796,16 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                     or index in in_dropped_row):
                 continue
             records.append(_untagged_record(src_page, line_ids[index], line, index))
+        # A formula with no description yet gets a draft of one, read from its picture
+        # (`formula_reader`) -- offered in the editor for the person to check, never written into
+        # the document on its own.
+        drafts = formula_reader.drafts_for_page(
+            source, src_page.number, src_page.width, src_page.height,
+            {record["id"]: _record_box(record, src_page) for record in records
+             if record.get("kind") == "Formula" and not record.get("alt")})
+        for record in records:
+            if record["id"] in drafts:
+                record["alt_guess"] = drafts[record["id"]]
         page_elements.extend(_records_in_reading_order(records))
 
         # Draw each described figure (a crop of the rendered region) inside a tagged /Figure,

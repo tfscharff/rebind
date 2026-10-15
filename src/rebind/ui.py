@@ -1190,6 +1190,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   }
 
   function altGuess(e){
+    if(e.alt_guess) return e.alt_guess;
     var guess='';
     ed.figures.forEach(function(f){ if(f.id===e.id && f.alt_guess) guess=f.alt_guess; });
     return guess || e.text || '';
@@ -1410,7 +1411,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     // exactly what you are being asked to confirm by describing it.
     var fkey=keyFor(formula? 'Formula' : 'Figure');
     var sub=formula
-      ? 'A formula. Say it in words — left as it is, a screen reader reads its text as written.'
+      ? (e.alt_guess
+          ? 'A formula. Rebind read it from the page as below — check it against the equation'+
+            ' before you use it.'
+          : 'A formula. Say it in words — left as it is, a screen reader reads its text as written.')
       : guess? 'A picture. Describe it — Rebind guessed from the page.'
              : 'A picture. Describe it — Rebind found no caption to guess from.';
     host.innerHTML='<div class="altprompt" id="altprompt" role="group" '+
@@ -1427,6 +1431,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       '<button type="button" class="btn ghost small" id="altskip">Skip</button></div>'+
       '<p class="hint">'+(enter? 'Enter or Tab accepts and moves on · Shift+Enter for a new line'+
         ' · Esc goes back to the page'
+        : formula? 'Enter to check and edit this · Tab moves on without it'
         : 'Enter to edit this · Tab accepts it and moves on')+'</p></div>';
     // The keys are of no use while the question on screen is a sentence, and the column is only so
     // tall: folding them away is what makes room for the picture and a description box worth
