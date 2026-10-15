@@ -28,6 +28,11 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
   confidence; sub-threshold text becomes an honest placeholder.
 - `profile.py` — document-global typographic profile (born-digital heading sizes).
 - `layout.py` — recursive XY-cut for reading order; `detect_table_lines` flags grid regions.
+- `layout_model.py` — PP-DocLayoutV3 (via rapid-layout, onnxruntime) boxes each page's regions;
+  `hints_for` turns them into hints that override the geometric rules where the model boxed a line:
+  paragraphs = text blocks, tables = table regions, table titles = captions, confident
+  header/footer/folio = artifacts. Groups lines only, never supplies text. No model file → `None`
+  → geometric rules exactly as before. Regions cached per (file, mtime, page).
 - `remediate.py` — builds the tagged output: keeps each page's pixels/vector untouched, lays an
   *invisible* (render mode 3) tagged text layer over it, and builds the PDF/UA structure tree.
 - `validate.py` — runs veraPDF and parses its report. `ui.py` — the inline browser app.
@@ -84,7 +89,8 @@ PDF 2.0 header and updated XMP (`pdfuaid:part=2`).
 ## Commands
 
 ```bash
-uv run pytest              # default suite, fast (~1 min)
+uv run python scripts/fetch_models.py   # once per clone: models/pp_doc_layoutv3.onnx (130 MB, gitignored)
+uv run pytest              # default suite (~4 min); the layout model is off except in tests marked layout_model
 uv run pytest -m packaging # opt-in: rebuilds the frozen bundle and OCRs through the .exe (~1 min)
 uv run ruff check .
 ```
@@ -108,6 +114,11 @@ Thomas installs and tests builds himself; **don't run the installer.**
   `docs/decisions/`. Full progress ledger: `.superpowers/sdd/progress.md`.
 
 ## Gotchas (still live)
+
+- **The layout model is not in git** (130 MB > GitHub's file limit). `scripts/fetch_models.py`
+  downloads it with a SHA-256 check; the PyInstaller spec refuses to build without it. On sparse
+  synthetic pages it calls real big headings "text" at ~0.6 — which is why a heading is demoted
+  only when it sits in a multi-line text block, and furniture needs score ≥ 0.7.
 
 - **`sys.stdout` is `None` in the `console=False` frozen build** on every real launch (double-click,
   Start menu) — no inherited handle. Anything touching `sys.stdout` at import/config time crashes

@@ -359,10 +359,15 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         dependency in the bundle and is never touched by server startup (its import is lazy).
         ADR 0005 proved a standalone frozen probe OCRs offline; this proves the *shipping* bundle
         does too. Text is drawn with Pillow and recognized; the endpoint reports what it read.
+
+        It also runs the page-layout model over the same picture and reports whether it loaded
+        (`layout_model`): without it the app still works, on geometry alone, so a bundle missing
+        the model would pass every other check while quietly doing worse.
         """
         import numpy as np
         from PIL import Image, ImageDraw, ImageFont
 
+        from rebind import layout_model
         from rebind.ocr import OcrEngine, recognize
 
         expected = "REBIND OCR SMOKE 12345"
@@ -376,8 +381,10 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
                 engine=OcrEngine(),
             )
             recovered = " ".join(line.text for line in lines)
+            regions = layout_model.detect_regions(np.asarray(image), 760.0, 120.0)
             return JSONResponse({"status": "ok", "success": "REBIND" in recovered.upper(),
-                                 "recovered": recovered, "error": None})
+                                 "recovered": recovered, "layout_model": regions is not None,
+                                 "error": None})
         except Exception as exc:  # noqa: BLE001 -- surface the real error, do not mask it
             return JSONResponse({"status": "error", "success": False, "recovered": None,
                                  "error": f"{type(exc).__name__}: {exc}",

@@ -60,3 +60,18 @@ def untagged_pdf(tmp_path: Path) -> Path:
     pdf.add_blank_page(page_size=(612, 792))
     pdf.save(target)
     return target
+
+
+@pytest.fixture(autouse=True)
+def _layout_model_only_where_asked(request, monkeypatch):
+    """The layout model costs about two seconds a page. Most of this suite tests the geometric
+    rules -- still what Rebind falls back to with no model -- on synthetic pages, so the model is
+    switched off unless a test is marked `layout_model`, which then needs the model file
+    (`scripts/fetch_models.py`) and skips without it."""
+    if request.node.get_closest_marker("layout_model") is None:
+        monkeypatch.setenv("REBIND_LAYOUT_MODEL", "off")
+        return
+    monkeypatch.delenv("REBIND_LAYOUT_MODEL", raising=False)
+    from rebind import layout_model
+    if layout_model.model_path() is None:
+        pytest.skip("layout model not fetched (run scripts/fetch_models.py)")

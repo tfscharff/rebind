@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
-from . import contrast, recolor, review
+from . import contrast, layout_model, recolor, review
 from .extract import Page, TextLine, extract_pages
 from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines, order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
@@ -456,7 +456,8 @@ def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, floa
 
 
 def _caption_groups(content_lines: list[TextLine], content_roles: list[str],
-                    caption_of: dict[int, int], blocks: list[list[TextLine]]) -> list[int | None]:
+                    caption_of: dict[int, int], blocks: list[list[TextLine]],
+                    boxed: set[int] | frozenset[int] = frozenset()) -> list[int | None]:
     """Which caption each content line belongs to, with the strays in between folded in.
 
     A caption's own lines are known exactly. What is not is what the recogniser dropped between
@@ -467,6 +468,10 @@ def _caption_groups(content_lines: list[TextLine], content_roles: list[str],
     arm's length of it horizontally. It has to be near in both, or an unrelated line level with the
     caption on the other side of the page would join it -- which is the same mistake as reading
     across a gutter.
+
+    A line a layout model already placed in a block of its own (`boxed`) is never folded in: the
+    model has seen the gutter. A table title in the left column of a journal page took the two
+    lines of body text level with it in the right column, which sat closer than arm's length.
     """
     groups: list[int | None] = [caption_of.get(id(line)) for line in content_lines]
     if not blocks:
@@ -474,7 +479,7 @@ def _caption_groups(content_lines: list[TextLine], content_roles: list[str],
     extents = [(min(ln.bbox[0] for ln in b), min(ln.bbox[1] for ln in b),
                 max(ln.bbox[2] for ln in b), max(ln.bbox[3] for ln in b)) for b in blocks]
     for index, (line, role) in enumerate(zip(content_lines, content_roles)):
-        if groups[index] is not None or role != "P":
+        if groups[index] is not None or role != "P" or id(line) in boxed:
             continue
         centre = (line.bbox[1] + line.bbox[3]) / 2
         for group, (bx0, by0, bx1, by1) in enumerate(extents):
@@ -721,8 +726,9 @@ def _merge_bare_markers(lines: list[TextLine]) -> list[TextLine]:
 
 
 def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int,
-               profile) -> tuple[list[TextLine], bool, object]:
-    """The page's text lines in reading order, whether OCR was used, and the page's layout.
+               profile) -> tuple[list[TextLine], bool, object, layout_model.PageHints]:
+    """The page's text lines in reading order, whether OCR was used, the page's layout, and what
+    the layout model saw on it (`layout_model.hints_for`; empty when there is no model).
 
     Reading order comes from `layout.order_page`'s recursive XY-cut, NOT from a top-to-bottom sort.
     On a single-column page the two agree. On a two-column page they emphatically do not: a
@@ -731,6 +737,7 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int,
     Reading Order" check exists to catch. The cut was written and tested long before this, but the
     pipeline was still sorting by y; that gap is what `review.page_order` now reports on.
     """
+    image = None
     if src_page.has_text_layer:
         lines = list(src_page.lines)
         used_ocr = False
@@ -744,9 +751,13 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int,
     # held out of the column cut (see order_page) instead of being read as column structure.
     boxes = _page_figures(page)
     boxes += [(fid, bbox) for fid, bbox, _cap in _vector_figures(page, lines, boxes)]
-    layout = order_page(page, profile, tuple(bbox for _fid, bbox in boxes))
-    ordered = [placed.line for placed in layout.lines]
-    return _merge_bare_markers(ordered), used_ocr, layout
+    regions = layout_model.page_regions(source, src_page.number, src_page.width,
+                                        src_page.height, image)
+    layout = order_page(page, profile, tuple(bbox for _fid, bbox in boxes),
+                        layout_model.hints_for(lines, regions))
+    ordered = _merge_bare_markers([placed.line for placed in layout.lines])
+    # Hints are keyed by line identity, and merging a bare bullet into its item makes a new line.
+    return ordered, used_ocr, layout, layout_model.hints_for(ordered, regions)
 
 
 def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, font: pikepdf.Object, name: str) -> None:
@@ -899,7 +910,8 @@ def _height_tiers(heights: list[float]) -> list[float]:
     return tiers
 
 
-def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
+def _structure_roles(per_page: list[tuple], profile,
+                     not_headings: list[set[int]] | None = None) -> list[list[str]]:
     """A structure type ('P' or 'H1'..'H6') for each line, per page.
 
     Born-digital headings come from the document-global typographic profile. Recognizer output
@@ -907,6 +919,12 @@ def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
     instead recovered geometrically -- size, isolation and shortness together (`_ocr_heading_sizes`)
     -- with heading levels assigned from document-global size tiers. Levels are then normalized so
     the sequence starts at H1 and never skips a level, which PDF/UA requires (7.4.2).
+
+    `not_headings[page]` holds the ids of lines a layout model saw inside a block of running text
+    or a caption. However large their type, they are not headings: on a journal's first page the
+    "ORIGINAL ARTICLE" kicker and the authors' names are set bigger than the body, and were tagged
+    H1 on size alone. They are left out before levels are assigned, so the outline still starts at
+    H1 and never skips.
     """
     ocr_headings: list[dict[int, float]] = []   # per page: {id(line): height} for OCR headings
     for src_page, lines, used_ocr in per_page:
@@ -922,11 +940,15 @@ def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
         return len(tiers) or 1
 
     raw: list[list[int]] = []   # per page: 0 for paragraph, or the raw heading level (>=1)
-    for (src_page, lines, used_ocr), page_headings in zip(per_page, ocr_headings):
+    for page_index, ((src_page, lines, used_ocr), page_headings) in enumerate(
+            zip(per_page, ocr_headings)):
         page_is_ocr = used_ocr or _is_ocr_over_scan(src_page)
+        prose = not_headings[page_index] if not_headings else set()
         page_levels: list[int] = []
         for line in lines:
-            if page_is_ocr:
+            if id(line) in prose:
+                page_levels.append(0)
+            elif page_is_ocr:
                 page_levels.append(tier_level(page_headings[id(line)]) if id(line) in page_headings else 0)
             elif line.ocr_confidence is not None:
                 page_levels.append(0)
@@ -966,17 +988,23 @@ def _structure_roles(per_page: list[tuple], profile) -> list[list[str]]:
     # yet still failed Adobe's check: H2, H3, H2, H2, H2, [new style] -- tracking the historical
     # max (3, from the H3) let the new style become H4; tracking the CURRENT depth (2, since the
     # H3 branch had already closed by returning to H2) correctly gives it H3 instead.
+    #
+    # A new style goes one level below the deepest OPEN heading set larger than it, not below
+    # whatever happens to be open. A journal's "Abstract" (10pt) comes before its "Introduction"
+    # (12pt); nesting each new style under the last one made Introduction a subsection of
+    # Abstract, and every section of the paper a level deeper than it should be.
     level_map: dict[int, int] = {}
-    current_depth = 0
+    branch: list[tuple[int, int]] = []      # the open headings, (raw, level), shallowest first
     for page_levels in raw:
         for lvl in page_levels:
             if not lvl:
                 continue
-            if lvl in level_map:
-                current_depth = level_map[lvl]   # back to (or still at) a level already open
-                continue
-            level_map[lvl] = 1 if lvl <= first_raw else min(current_depth + 1, 6)
-            current_depth = level_map[lvl]
+            if lvl not in level_map:
+                larger = [level for raw_level, level in branch if raw_level < lvl]
+                level_map[lvl] = 1 if lvl <= first_raw else min(
+                    (larger[-1] if larger else 0) + 1, 6)
+            level = level_map[lvl]
+            branch = [(r, v) for r, v in branch if v < level] + [(lvl, level)]
 
     return [
         [f"H{level_map[lvl]}" if lvl else "P" for lvl in page_levels]
@@ -1546,7 +1574,8 @@ def _untagged_record(src_page, element_id: str, line: TextLine, order: int) -> d
 
 
 def plan_page(lines: list[TextLine], page_roles: list[str],
-              caption_groups: list[int | None] | None = None) -> list[dict]:
+              caption_groups: list[int | None] | None = None,
+              hints: layout_model.PageHints | None = None) -> list[dict]:
     """Group a page's content lines into the elements the structure tree will hold.
 
     This is the whole of Rebind's per-page structural judgement, expressed as plain data before any
@@ -1561,11 +1590,35 @@ def plan_page(lines: list[TextLine], page_roles: list[str],
     recogniser drops stray marks between its lines, each of which breaks a run of "consecutive
     lines with the same role". The caption search already decided which lines are one caption --
     this just carries that decision through instead of trying to re-derive it from geometry.
+
+    `hints` is what a layout model saw on the page (`layout_model.hints_for`). Where it boxed two
+    neighbouring lines, its boxes decide: lines in one block of text are one paragraph, lines in
+    different blocks are not, and a table is exactly the lines in its table region. Where it boxed
+    neither, the geometric rules below decide as they always have. The model is far better at this
+    than measuring margins: a born-digital paragraph whose lines each carry a slightly different
+    font came out as one element per line, and a paragraph that runs down past a table's foot was
+    cut where the table's rows ended.
     """
     n = len(lines)
     groups = caption_groups if caption_groups is not None else [None] * n
-    table_line_ids = detect_table_lines(lines)
-    is_table = [id(line) in table_line_ids for line in lines]
+    modelled = hints is not None and hints.tables is not None
+    if modelled:
+        table_of = [hints.tables.get(id(line)) for line in lines]
+    else:
+        table_line_ids = detect_table_lines(lines)
+        table_of = [0 if id(line) in table_line_ids else None for line in lines]
+    is_table = [region is not None for region in table_of]
+    block_of = [hints.blocks.get(id(line)) for line in lines] if hints else [None] * n
+    # The geometric detector misses sparse rows, so it bridges a few unflagged lines; a table
+    # region already contains its sparse rows, and anything outside it is not part of the table.
+    table_gap = 0 if modelled else MAX_INTERNAL_TABLE_GAP
+
+    def continues(first: int, index: int, same) -> bool:
+        before, here = block_of[index - 1], block_of[index]
+        if before is not None and here is not None:
+            return before == here
+        return same(index, first)
+
     measures = _column_measures(lines, page_roles)
     plan: list[dict] = []
     i = 0
@@ -1576,9 +1629,11 @@ def plan_page(lines: list[TextLine], page_roles: list[str],
             last = i
             j = i + 1
             # (j - last - 1) is the count of undetected lines since the last detected row.
-            while j < n and (j - last - 1) <= MAX_INTERNAL_TABLE_GAP:
-                if is_table[j]:
+            while j < n and (j - last - 1) <= table_gap:
+                if table_of[j] == table_of[i]:
                     last = j
+                elif is_table[j]:
+                    break       # another table
                 j += 1
             plan.append({"kind": "Table", "first": i, "last": last})
             i = last + 1
@@ -1608,7 +1663,8 @@ def plan_page(lines: list[TextLine], page_roles: list[str],
             j = i
             while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == page_roles[i]
                    and not _is_list_item(lines[j + 1].text)
-                   and _same_paragraph(lines, i, j + 1, measures)):
+                   and continues(i, j + 1, lambda index, first: _same_paragraph(
+                       lines, first, index, measures))):
                 j += 1
             plan.append({"kind": page_roles[i], "first": i, "last": j})
             i = j + 1
@@ -1620,7 +1676,7 @@ def plan_page(lines: list[TextLine], page_roles: list[str],
         if page_roles[i].startswith("H"):
             j = i
             while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == page_roles[i]
-                   and _same_heading(lines, j + 1)):
+                   and continues(i, j + 1, lambda index, _first: _same_heading(lines, index))):
                 j += 1
             plan.append({"kind": page_roles[i], "first": i, "last": j})
             i = j + 1
@@ -2022,6 +2078,7 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
         return elem
 
     captions: list[tuple[int, pikepdf.Object]] = []      # (first line, the caption element)
+    table_boxes: dict[tuple, tuple] = {}                 # a table's objgen -> its lines' box
     # Elements marked as cells, waiting for the run of them to end so they can become one table.
     cells: list[tuple[str, list[int]]] = []
 
@@ -2045,7 +2102,12 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
             row_tags = edits.tags if edits else {}
             rows = [(row_id, [(i, lines[i]) for i in members])
                     for row_id, members in _table_row_groups(entry, lines)]
-            tops.append(_tagged_table(pdf, rows, document_elem, page_obj, leaf, row_tags))
+            table = _tagged_table(pdf, rows, document_elem, page_obj, leaf, row_tags)
+            table_boxes[table.objgen] = (min(lines[i].bbox[0] for i in indices),
+                                         min(lines[i].bbox[1] for i in indices),
+                                         max(lines[i].bbox[2] for i in indices),
+                                         max(lines[i].bbox[3] for i in indices))
+            tops.append(table)
         elif kind == "L":
             lst = pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.L, P=document_elem, K=Array([])))
@@ -2093,7 +2155,7 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
     # (clause 8.2.5.27), which one of several siblings cannot be.
     taken: set = set()
     for first, caption, box in captions:
-        host = _caption_host(list(caption_hosts or []) + tops, box, taken)
+        host = _caption_host(list(caption_hosts or []) + tops, box, taken, table_boxes)
         if host is None:
             caption.S = Name.P
             tops.insert(_position_for(tops, first, plan), caption)
@@ -2101,24 +2163,36 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
         taken.add(host.objgen)
         caption.P = host
         kids = host.get("/K")
-        host.K = Array(list(kids) + [caption]) if isinstance(kids, Array) else Array(
-            [kids, caption] if kids is not None else [caption])
+        kids = list(kids) if isinstance(kids, Array) else ([kids] if kids is not None else [])
+        # A table's title set above it is read before it, as its first child; anything else is
+        # read after what it captions.
+        host_box = table_boxes.get(host.objgen)
+        above = host_box is not None and (box[1] + box[3]) / 2 > host_box[3]
+        host.K = Array([caption] + kids if above else kids + [caption])
     return tops, owners
 
 
-def _caption_host(tops: list, box: tuple, taken: set) -> pikepdf.Object | None:
+def _caption_host(tops: list, box: tuple, taken: set,
+                  table_boxes: dict | None = None) -> pikepdf.Object | None:
     """The figure or table a caption belongs inside: the nearest one that has not got one already.
 
     Nearness is measured between boxes, so a caption in the margin goes to the picture beside it
     rather than to whichever figure happened to be built last. A figure records its own box (in
-    `/A /BBox`); a table does not, so tables stay a fallback taken in reverse build order.
+    `/A /BBox`); a table's comes from `table_boxes`, the box its lines span. Taking the last table
+    built instead put the title of a page's first table inside its second.
     """
+    table_boxes = table_boxes or {}
     best, best_gap = None, None
     for elem in tops:
-        if str(elem.get("/S")) != "/Figure" or elem.objgen in taken:
+        if elem.objgen in taken:
             continue
-        layout = elem.get("/A")
-        bbox = layout.get("/BBox") if layout is not None else None
+        if str(elem.get("/S")) == "/Figure":
+            layout = elem.get("/A")
+            bbox = layout.get("/BBox") if layout is not None else None
+        elif str(elem.get("/S")) == "/Table":
+            bbox = table_boxes.get(elem.objgen)
+        else:
+            continue
         if bbox is None:
             continue
         fx0, fy0, fx1, fy1 = (float(v) for v in bbox)
@@ -2350,16 +2424,18 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     # Pass one: recover each page's text lines (from its text layer or OCR) in reading order.
     per_page: list[tuple] = []
     layouts: list[tuple] = []
+    page_hints: list[layout_model.PageHints] = []
     for src_page in source_pages:
-        lines, used_ocr, layout = _lines_for(source, src_page, engine, dpi, profile)
+        lines, used_ocr, layout, hints = _lines_for(source, src_page, engine, dpi, profile)
         layouts.append((src_page, layout))
+        page_hints.append(hints)
         if used_ocr and lines:
             ocr_pages.append(src_page.number)
             added_layer = True
         elif used_ocr:
             empty_pages.append(src_page.number)
         per_page.append((src_page, lines, used_ocr))
-    roles = _structure_roles(per_page, profile)
+    roles = _structure_roles(per_page, profile, [hints.not_headings for hints in page_hints])
     document_captions = _document_captions(per_page)
 
     # Pass two: build the tagged, appearance-preserving output.
@@ -2424,8 +2500,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     figure_boxes: dict[int, tuple] = {}
     heading_entries: list[tuple[int, pikepdf.Object, str]] = []   # (level, struct_elem, title)
 
-    for struct_parent, (page, (src_page, lines, used_ocr), page_roles) in enumerate(
-        zip(pdf.pages, per_page, roles)
+    for struct_parent, (page, (src_page, lines, used_ocr), page_roles, hints) in enumerate(
+        zip(pdf.pages, per_page, roles, page_hints)
     ):
         figures = _page_figures(src_page)
         vector = _vector_figures(src_page, list(lines), figures)
@@ -2570,7 +2646,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         is_artifact = [
             index not in promoted
             and id(ln) not in owner_figure
-            and (id(ln) in inside_undescribed
+            and (id(ln) in inside_undescribed or id(ln) in hints.furniture
                  or profile.role_of(ln, page_height=src_page.height) == "artifact")
             for index, ln in enumerate(lines)
         ]
@@ -2580,6 +2656,15 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # already had to be recognised to become the /Alt; not carrying that through to the tag
         # threw the knowledge away at the last step, and a screen reader met the document's own
         # captions as unremarkable prose sitting between the paragraphs.
+        # A table's title, as the layout model boxed it ("Table 2 The descriptives of ..."), is a
+        # caption too. Without it the title's first line was read as the table's first row and
+        # the rest of it as two stray paragraphs beside the table.
+        already = {id(line) for block in caption_blocks for line in block}
+        for region in sorted(set(hints.captions.values())):
+            block = [line for line in lines if hints.captions.get(id(line)) == region
+                     and id(line) not in already and id(line) not in owner_figure]
+            if block:
+                caption_blocks.append(block)
         caption_of = {id(line): group
                       for group, block in enumerate(caption_blocks) for line in block}
 
@@ -2594,12 +2679,13 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                 "Caption" if id(line) in caption_of and role == "P" else role)
             content_source.append(index)
 
-        caption_groups = _caption_groups(content_lines, content_roles, caption_of, caption_blocks)
+        caption_groups = _caption_groups(content_lines, content_roles, caption_of, caption_blocks,
+                                         set(hints.blocks))
 
         # The page's structural judgement as data, then the user's corrections on top of it. Ids
         # are keyed to the *source* line index, not to a position in the element list, so they
         # survive a re-run in which earlier elements were retagged, merged or removed.
-        plan = plan_page(content_lines, content_roles, caption_groups)
+        plan = plan_page(content_lines, content_roles, caption_groups, hints)
         for entry in plan:
             entry["id"] = f"p{src_page.number}n{content_source[entry['first']]}"
             entry["kind"] = edits.tags.get(entry["id"], entry["kind"])

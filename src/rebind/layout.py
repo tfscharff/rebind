@@ -325,7 +325,8 @@ def _splice_figure_text(placed: list[PlacedLine], in_figure: list[TextLine]) -> 
     return out
 
 
-def _splice_tables(placed: list[PlacedLine], table_line_ids: set[int]) -> list[PlacedLine]:
+def _splice_tables(placed: list[PlacedLine], table_line_ids: set[int],
+                   table_of: dict[int, int] | None = None) -> list[PlacedLine]:
     """Keep each detected table's cells together in the reading order, read row by row.
 
     `detect_table_lines` deliberately runs on the whole page rather than per column, because a
@@ -350,6 +351,11 @@ def _splice_tables(placed: list[PlacedLine], table_line_ids: set[int]) -> list[P
     The run is anchored at its earliest member's place in the cut, so a table still reads where the
     cut decided it belongs relative to everything around it -- including its own title, which is
     not flagged and so never moves.
+
+    `table_of` maps a line to the layout model's table region, when there is one. Each region is
+    then its own table, banded on its own: on a two-page spread with a table on each page, banding
+    them together interleaved their rows, and every switch from one side to the other started a
+    new table -- 92 of them on one real spread.
     """
     if not table_line_ids:
         return placed
@@ -357,21 +363,29 @@ def _splice_tables(placed: list[PlacedLine], table_line_ids: set[int]) -> list[P
     if len(members) < 2:
         return placed
 
-    lines = [p.line for p in members]
-    heights = sorted(ln.bbox[3] - ln.bbox[1] for ln in lines)
-    median_h = heights[len(heights) // 2] or 1.0
+    if table_of is None:
+        sets = [[p.line for p in members]]
+    else:
+        by_region: dict[int, list[TextLine]] = {}
+        for p in members:
+            by_region.setdefault(table_of[id(p.line)], []).append(p.line)
+        sets = list(by_region.values())
     groups: list[list[TextLine]] = []
-    current: list[TextLine] = []
-    previous_bottom: float | None = None
-    for row in _rows_by_band(lines):
-        top = max(ln.bbox[3] for ln in row)
-        if previous_bottom is not None and previous_bottom - top > median_h * TABLE_SPLIT_GAP_RATIO:
+    for lines in sets:
+        heights = sorted(ln.bbox[3] - ln.bbox[1] for ln in lines)
+        median_h = heights[len(heights) // 2] or 1.0
+        current: list[TextLine] = []
+        previous_bottom: float | None = None
+        for row in _rows_by_band(lines):
+            top = max(ln.bbox[3] for ln in row)
+            if (previous_bottom is not None
+                    and previous_bottom - top > median_h * TABLE_SPLIT_GAP_RATIO):
+                groups.append(current)
+                current = []
+            current.extend(sorted(row, key=lambda ln: ln.bbox[0]))
+            previous_bottom = min(ln.bbox[1] for ln in row)
+        if current:
             groups.append(current)
-            current = []
-        current.extend(sorted(row, key=lambda ln: ln.bbox[0]))
-        previous_bottom = min(ln.bbox[1] for ln in row)
-    if current:
-        groups.append(current)
 
     at = {id(p.line): index for index, p in enumerate(placed)}
     anchored = {min(at[id(ln)] for ln in group): group for group in groups}
@@ -427,7 +441,7 @@ def _splice_artifacts(placed: list[PlacedLine], artifacts: list[TextLine]) -> li
 
 
 def order_page(page: Page, profile: TypographicProfile,
-               figure_boxes: tuple = ()) -> PageLayout:
+               figure_boxes: tuple = (), hints=None) -> PageLayout:
     """Reading order for one page: body lines XY-cut into columns and blocks, with artifact lines
     (running headers/footers/page numbers, identified by the profile) held out of the cut so they
     cannot manufacture spurious block breaks, then spliced back in at the height they sit at and
@@ -439,14 +453,21 @@ def order_page(page: Page, profile: TypographicProfile,
     structure. On the real sample one page of body text with a labelled schematic came out as
     "8 columns". Those labels are then spliced back in at the figure's own vertical position, so
     they stay where a reader meets them rather than being deferred to the end of the page.
+
+    `hints` (`layout_model.PageHints`) adds what a layout model saw on the page image: lines in a
+    running head or foot are held out as furniture too, and its table regions replace the
+    geometric grid detector, which on a two-column page cannot tell a table in one column from the
+    prose beside it that happens to line up with the table's columns.
     """
+    furniture = hints.furniture if hints is not None else set()
     body: list[TextLine] = []
     artifacts: list[TextLine] = []
     in_figure: list[TextLine] = []
     for line in page.lines:
         if _center_inside(line.bbox, figure_boxes):
             in_figure.append(line)
-        elif profile.role_of(line, page_height=page.height) == "artifact":
+        elif (id(line) in furniture
+              or profile.role_of(line, page_height=page.height) == "artifact"):
             artifacts.append(line)
         else:
             body.append(line)
@@ -462,8 +483,13 @@ def order_page(page: Page, profile: TypographicProfile,
     # table. What it flags is then put back together as one run (`_splice_tables`) -- the cut had
     # already scattered the grid, and a fragmented table becomes several `/Table` elements, each
     # inventing a header row.
-    table_line_ids = detect_table_lines(body)
-    placed = _splice_tables(placed, table_line_ids)
+    table_of = None
+    if hints is not None and hints.tables is not None:
+        table_line_ids = {id(line) for line in body if id(line) in hints.tables}
+        table_of = hints.tables
+    else:
+        table_line_ids = detect_table_lines(body)
+    placed = _splice_tables(placed, table_line_ids, table_of)
 
     placed = _splice_artifacts(placed, artifacts)
 

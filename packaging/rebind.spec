@@ -10,6 +10,10 @@ a stray import can never pull the 40 MB GTK stack back into the bundle.)
 
 `collect_all` pulls each package's native binaries AND data -- the ONNX models and YAML config
 live inside rapidocr_onnxruntime and must be collected as data or the frozen exe finds no models.
+
+The page-layout model (PP-DocLayoutV3, `rebind.layout_model`) is not inside any package: it is
+fetched into the clone's `models/` by `scripts/fetch_models.py` and bundled from there. The build
+fails without it rather than quietly shipping an app that falls back to geometry alone.
 The real bundle is guarded by `pytest -m packaging` (it OCRs through the shipping exe).
 """
 import os
@@ -23,7 +27,7 @@ from PyInstaller.utils.hooks import collect_all
 datas, binaries, hiddenimports = [], [], []
 for package in (
     "pikepdf", "starlette", "uvicorn",
-    "rapidocr_onnxruntime", "onnxruntime", "cv2", "pypdfium2",
+    "rapidocr_onnxruntime", "onnxruntime", "cv2", "pypdfium2", "rapid_layout",
 ):
     pkg_datas, pkg_binaries, pkg_hidden = collect_all(package)
     datas += pkg_datas
@@ -36,6 +40,12 @@ for package in (
 # Only modules unique to the WeasyPrint HTML renderer. NOT lxml (pikepdf needs it for XMP
 # metadata) and NOT fontTools -- both are used by runtime deps; excluding them crashes the
 # frozen exe at convert time even though the dev suite, which has them, stays green.
+_LAYOUT_MODEL = os.path.join(os.path.dirname(os.path.abspath(SPEC)), "..", "models",
+                             "pp_doc_layoutv3.onnx")
+if not os.path.isfile(_LAYOUT_MODEL):
+    raise SystemExit("models/pp_doc_layoutv3.onnx is missing: run scripts/fetch_models.py")
+datas.append((_LAYOUT_MODEL, "models"))
+
 _EXCLUDES = [
     "weasyprint", "pydyf", "cssselect2", "tinycss2", "cairocffi", "cairosvg", "pyphen",
 ]
@@ -58,6 +68,9 @@ a = Analysis(
 # (opencv_videoio_ffmpeg<ver>_64.dll).
 a.binaries = [b for b in a.binaries if "opencv_videoio_ffmpeg" not in b[0].lower()]
 a.datas = [d for d in a.datas if "opencv_videoio_ffmpeg" not in d[0].lower()]
+# rapid-layout ships a small default model of its own (layout_cdla, 7 MB) that Rebind never loads.
+a.datas = [d for d in a.datas if not (d[0].replace("\\", "/").startswith("rapid_layout/models/")
+                                      and d[0].endswith(".onnx"))]
 
 pyz = PYZ(a.pure)
 # console=False: a librarian double-clicking rebind.exe should not see a console window pop

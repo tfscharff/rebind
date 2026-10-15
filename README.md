@@ -22,8 +22,12 @@ quits it.
 git clone https://github.com/tfscharff/rebind
 cd rebind
 uv sync                # https://docs.astral.sh/uv/
+uv run python scripts/fetch_models.py   # the page-layout model, 130 MB, once
 uv run rebind serve
 ```
+
+Without the layout model Rebind still runs, on its geometric rules alone (see *Layout model*).
+`REBIND_LAYOUT_MODEL=off` switches it off on purpose.
 
 On Windows, `rebind.cmd` in the clone does the same.
 
@@ -67,6 +71,24 @@ Born-digital pages name their own structure through markup. Scanned pages do not
 inferred from geometry: line height against the body median, whitespace above and below, and
 alignment into recurring column positions.
 
+### Layout model
+
+Each page is also looked at as a picture by a document-layout model — PP-DocLayoutV3 (PaddleOCR,
+Apache-2.0) on onnxruntime, on the CPU, about two seconds a page, remembered between rebuilds of an
+unchanged file. It boxes the page's regions: running heads and folios, paragraphs, section titles,
+tables and their titles, footnotes. Where it boxed a line, its boxes decide:
+
+- **Paragraphs** — the lines in one text block are one paragraph, and lines in different blocks are
+  not, whatever the margins suggest.
+- **Tables** — a table is exactly the lines inside its table region, so prose in the next column
+  that lines up with the table's columns stays prose.
+- **Table titles** — a title next to a table becomes the table's `/Caption`, inside it, first.
+- **Page furniture** — running heads, feet and folios the model is confident of become artifacts.
+- **Headings** — a large line run in with other lines in one text block is not a heading.
+
+Where it boxed nothing, or is unsure, the geometric rules decide as before. The model groups lines;
+it never supplies text, so a wrong box can only group wrongly, which the editor corrects.
+
 ## Structure tree
 
 - **Headings** `/H1`–`/H6`, level-normalized so the sequence starts at H1 and skips no level.
@@ -85,7 +107,8 @@ alignment into recurring column positions.
   running head alternates between verso and recto.
 - **Captions** `/Caption` — one element per caption. Grouped by which caption a line belongs to
   rather than by adjacency, so stray marks between a caption's lines do not split it. Each caption
-  is moved inside the figure nearest it, measured between boxes. PDF/UA-2 permits at most one
+  is moved inside the figure or table nearest it, measured between boxes; a table's title set above
+  it becomes its first child. PDF/UA-2 permits at most one
   caption per figure and requires it to be the first or last child; a caption with no figure left
   to attach to stays a paragraph.
 - **Lists** `/L` → `/LI` → `/LBody`.
@@ -245,7 +268,7 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.0.11.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.1.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:

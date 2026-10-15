@@ -1,3 +1,8 @@
+; The bundle folder to package; a release build that cannot use packaging\dist passes /DDistDir=...
+#ifndef DistDir
+  #define DistDir "dist"
+#endif
+
 [Setup]
 ; Fixed, stable GUID identifying "Rebind" across all versions -- Inno Setup uses AppId (not
 ; AppName) to recognize an existing install for upgrade/uninstall purposes. Without an
@@ -6,7 +11,7 @@
 ; and must never change between releases.
 AppId={{11732952-84C2-467D-9E8D-5263D9A81C11}
 AppName=Rebind
-AppVersion=1.0.11
+AppVersion=1.1.0
 AppPublisher=Thomas Scharff
 DefaultDirName={autopf}\Rebind
 DefaultGroupName=Rebind
@@ -33,7 +38,7 @@ LicenseFile=..\LICENSE
 AppMutex=RebindSingleInstanceMutex
 
 [Files]
-Source: "dist\rebind\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#DistDir}\rebind\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\LICENSE"; DestDir: "{app}\licenses"; DestName: "LICENSE-Rebind.txt"; Flags: ignoreversion
 

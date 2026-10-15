@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata as _md
 import sys
+import tomllib
 from pathlib import Path
 
 from packaging.requirements import Requirement
@@ -31,22 +32,28 @@ PYTHON_INVENTORY = LICENSES_DIR / "PYTHON-INVENTORY.md"
 PYTHON_LICENSES_DIR = LICENSES_DIR / "python"
 THIRD_PARTY = LICENSES_DIR / "LICENSE-THIRD-PARTY.txt"
 
-# The runtime dependency closure the frozen bundle vendors is resolved from these top-level deps
-# (they mirror pyproject's runtime `dependencies`; PIL/Pillow arrives transitively via pikepdf and
-# rapidocr, cv2/onnxruntime via rapidocr).
+# The runtime dependency closure the frozen bundle vendors is resolved from pyproject's runtime
+# `dependencies` (PIL/Pillow arrives transitively via pikepdf and rapidocr, cv2/onnxruntime via
+# rapidocr). Read from the file rather than copied here: a hand-kept copy still named fastapi long
+# after the app moved to bare starlette, and starlette's whole subtree dropped out of the notice
+# the moment fastapi left the environment.
 RUNTIME_ROOTS = [
-    "pikepdf", "fastapi", "uvicorn", "pdfminer.six",
-    "rapidocr-onnxruntime", "pypdfium2",
+    Requirement(spec).name
+    for spec in tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    ["project"]["dependencies"]
 ]
 # Distributions whose wheel ships no license file of its own -> a canonical fallback text.
 PY_FALLBACK: dict[str, tuple[str, str]] = {
     "flatbuffers": ("Apache-2.0", "LICENSE-Apache-2.0.txt"),
     "rapidocr-onnxruntime": ("Apache-2.0", "LICENSE-Apache-2.0.txt"),
 }
-# Redistributed data that is not a Python distribution: the OCR models bundled inside RapidOCR.
+# Redistributed data that is not a Python distribution: the OCR models bundled inside RapidOCR, and
+# the page-layout model fetched by scripts/fetch_models.py.
 BUNDLED_MODELS: list[tuple[str, str, str]] = [
     ("PP-OCRv4 detection / recognition / classification models (PaddleOCR)", "Apache-2.0",
      "shipped inside rapidocr_onnxruntime/models/*.onnx"),
+    ("PP-DocLayoutV3 page-layout model (PaddleOCR, ONNX export by RapidAI/RapidLayout)",
+     "Apache-2.0", "models/pp_doc_layoutv3.onnx"),
 ]
 
 

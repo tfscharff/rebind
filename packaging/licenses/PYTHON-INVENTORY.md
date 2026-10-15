@@ -6,20 +6,20 @@ Covers the 35 runtime Python distributions frozen into the bundle, plus the bund
 
 | Distribution | Version | License | Text |
 |---|---|---|---|
-| annotated-doc | 0.0.4 | MIT | `python/annotated-doc.txt` |
-| annotated-types | 0.7.0 | MIT License | `python/annotated-types.txt` |
 | anyio | 4.14.2 | MIT | `python/anyio.txt` |
+| certifi | 2026.7.22 | Mozilla Public License 2.0 (MPL 2.0) | `python/certifi.txt` |
 | cffi | 2.1.0 | MIT-0 | `python/cffi.txt` |
 | charset-normalizer | 3.4.9 | MIT | `python/charset-normalizer.txt` |
 | click | 8.4.2 | BSD-3-Clause | `python/click.txt` |
 | colorama | 0.4.6 | BSD License | `python/colorama.txt` |
+| colorlog | 6.12.0 | MIT License | `python/colorlog.txt` |
 | cryptography | 49.0.0 | Apache-2.0 OR BSD-3-Clause | `python/cryptography.txt` |
-| fastapi | 0.139.2 | MIT | `python/fastapi.txt` |
 | flatbuffers | 25.12.19 | Apache-2.0 | `python/flatbuffers.txt` |
 | h11 | 0.16.0 | MIT License | `python/h11.txt` |
 | idna | 3.18 | BSD-3-Clause | `python/idna.txt` |
 | lxml | 6.1.1 | BSD-3-Clause | `python/lxml.txt` |
 | numpy | 2.5.1 | BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0 | `python/numpy.txt` |
+| omegaconf | 2.4.0 | BSD License | `python/omegaconf.txt` |
 | onnxruntime | 1.28.0 | MIT License | `python/onnxruntime.txt` |
 | opencv-python | 5.0.0.93 | Apache Software License | `python/opencv-python.txt` |
 | packaging | 26.2 | Apache-2.0 OR BSD-2-Clause | `python/packaging.txt` |
@@ -29,17 +29,17 @@ Covers the 35 runtime Python distributions frozen into the bundle, plus the bund
 | protobuf | 7.35.1 | 3-Clause BSD License | `python/protobuf.txt` |
 | pyclipper | 1.4.0 | MIT License | `python/pyclipper.txt` |
 | pycparser | 3.0 | BSD-3-Clause | `python/pycparser.txt` |
-| pydantic | 2.13.4 | MIT | `python/pydantic.txt` |
-| pydantic-core | 2.46.4 | MIT | `python/pydantic-core.txt` |
 | pypdfium2 | 5.12.1 | BSD-3-Clause, Apache-2.0, dependency licenses | `python/pypdfium2.txt` |
 | pyyaml | 6.0.3 | MIT License | `python/pyyaml.txt` |
+| rapid-layout | 1.2.1 | Apache-2.0 | `python/rapid-layout.txt` |
 | rapidocr-onnxruntime | 1.4.4 | Apache-2.0 | `python/rapidocr-onnxruntime.txt` |
+| requests | 2.34.2 | Apache Software License | `python/requests.txt` |
 | shapely | 2.1.2 | BSD License | `python/shapely.txt` |
 | six | 1.17.0 | MIT License | `python/six.txt` |
 | starlette | 1.3.1 | BSD-3-Clause | `python/starlette.txt` |
 | tqdm | 4.70.0 | MPL-2.0 AND MIT | `python/tqdm.txt` |
 | typing-extensions | 4.16.0 | PSF-2.0 | `python/typing-extensions.txt` |
-| typing-inspection | 0.4.2 | MIT | `python/typing-inspection.txt` |
+| urllib3 | 2.8.0 | MIT | `python/urllib3.txt` |
 | uvicorn | 0.51.0 | BSD-3-Clause | `python/uvicorn.txt` |
 
 ## Bundled models
@@ -47,4 +47,5 @@ Covers the 35 runtime Python distributions frozen into the bundle, plus the bund
 | Component | License | Location |
 |---|---|---|
 | PP-OCRv4 detection / recognition / classification models (PaddleOCR) | Apache-2.0 | shipped inside rapidocr_onnxruntime/models/*.onnx |
+| PP-DocLayoutV3 page-layout model (PaddleOCR, ONNX export by RapidAI/RapidLayout) | Apache-2.0 | models/pp_doc_layoutv3.onnx |
 

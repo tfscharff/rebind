@@ -40,13 +40,17 @@ def frozen_exe() -> Path:
     if sys.platform != "win32":
         pytest.skip("Frozen build is Windows-only (PyInstaller spec vendors GTK3-Runtime Win64).")
 
-    dist_dir = PACKAGING_DIR / "dist" / "rebind"
-    build_dir = PACKAGING_DIR / "build"
+    # Its own folders, not the release build's: Windows (search indexing, Defender) can hold a
+    # handle on a freshly built bundle folder for minutes, and a release was once stuck behind a
+    # test that could not clear packaging/dist.
+    dist_dir = PACKAGING_DIR / "dist_test" / "rebind"
+    build_dir = PACKAGING_DIR / "build_test"
     shutil.rmtree(dist_dir, ignore_errors=True)
     shutil.rmtree(build_dir, ignore_errors=True)
 
     result = subprocess.run(
-        [sys.executable, "-m", "PyInstaller", "rebind.spec", "--noconfirm"],
+        [sys.executable, "-m", "PyInstaller", "rebind.spec", "--noconfirm",
+         "--distpath", "dist_test", "--workpath", "build_test"],
         cwd=PACKAGING_DIR,
         capture_output=True,
         text=True,
@@ -141,6 +145,8 @@ def test_frozen_exe_serves_and_ocrs(frozen_exe: Path, tmp_path: Path):
         ocr_body = ocr.json()
         assert ocr_body["success"] is True, ocr_body.get("error")
         assert "REBIND" in (ocr_body["recovered"] or "").upper()
+        # ...and the page-layout model loads from inside the bundle too.
+        assert ocr_body["layout_model"] is True, "the layout model did not load from the bundle"
 
         # Convert a real PDF end to end through the frozen exe. This is the load-bearing check that
         # ocr-smoke alone does not give: it drives the full remediate -> pikepdf/XMP path, which
