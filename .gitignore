@@ -50,3 +50,6 @@ docs/NEXT-SESSION.md
 
 # Runtime log written next to the app when it runs from the repo
 rebind.log
+build_alt/
+build_test/
+dist_test/
