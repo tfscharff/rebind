@@ -137,6 +137,10 @@ FIGURE_SAME_ROW_FRACTION = 0.5
 # The longest a callout label runs to ("Ventral", "2-10 ml glass syringe", "3 mm"). Longer than
 # this, inside a guessed figure box, is a sentence -- prose the picture sits around, not part of it.
 FIGURE_LABEL_MAX_WORDS = 6
+# A speck on a scan (`_is_speck`): a line of up to this many marks with no letter or digit in it...
+SPECK_MAX_MARKS = 3
+# ...or a line this short that the layout model found outside any region of words.
+SPECK_MAX_CHARS = 2
 
 # OCR heading recovery. A single OCR line's box height is noisy (a body line can crop tall), so no
 # one signal is trusted: a heading must be markedly taller than the page's body text AND set apart
@@ -1247,6 +1251,24 @@ def _scanned_figures(source: Path, src_page, lines: list[TextLine], dpi: int,
             continue
         out.append((f"p{src_page.number}r{index}", region.bbox))
     return out
+
+
+def _is_speck(line: TextLine, hints: layout_model.PageHints) -> bool:
+    """Whether a line on a scanned page is a speck: a mark the recogniser read as text.
+
+    Two shapes, both seen on real scans: a line of nothing but marks ("|", "~", "." -- dirt on the
+    platen, a rule's end, a gutter shadow), and a one- or two-character line the layout model found
+    in no region where words are expected, set alone in a margin or a gap. A real word is never one
+    of these: born-digital text is not passed here, and anything inside a block of text, a title, a
+    table or an equation is kept whatever its length.
+    """
+    text = line.text.strip()
+    if not text:
+        return False
+    if len(text) <= SPECK_MAX_MARKS and not any(ch.isalnum() for ch in text):
+        return True
+    return (hints.tables is not None and len(text) <= SPECK_MAX_CHARS
+            and id(line) not in hints.in_text)
 
 
 def _boxes_overlap(a: tuple, b: tuple) -> bool:
@@ -2461,6 +2483,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             empty_pages.append(src_page.number)
         per_page.append((src_page, lines, used_ocr))
     roles = _structure_roles(per_page, profile, [hints.not_headings for hints in page_hints])
+    layout_model.drop_ornaments(page_hints)
     document_captions = _document_captions(per_page)
 
     # Pass two: build the tagged, appearance-preserving output.
@@ -2541,8 +2564,21 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # text layer, so nothing is recognized here and that test is false on exactly the documents
         # this is for. A page is a scan when its words are an invisible layer over a picture, or
         # when one image covers the whole sheet -- both of which are known by now.
+        #
+        # The layout model's picture boxes come first. It looks at the whole page and boxes a
+        # picture as a picture, where the pixel search can only guess from ink that is not text --
+        # which is why a pixel guess nobody captions is dropped below, and a picture the model found
+        # is not: an illustration the book never captions still needs describing, and used to
+        # vanish. Its box also claims the scraps the recogniser made of the picture's own labels.
         scan_regions: set[str] = set()
-        if used_ocr or src_page.number in invisible_pages or _is_full_page_scan(src_page):
+        modelled: set[str] = set()
+        scanned = used_ocr or src_page.number in invisible_pages or _is_full_page_scan(src_page)
+        if scanned:
+            pictures = [(f"p{src_page.number}m{index}", bbox)
+                        for index, bbox in enumerate(hints.pictures)
+                        if not any(_boxes_overlap(bbox, known) for _fid, known in figures)]
+            modelled = {fid for fid, _bbox in pictures}
+            figures += pictures
             found = _scanned_figures(render_source, src_page, list(lines), dpi, figures)
             scan_regions = {fid for fid, _bbox in found}
             figures += found
@@ -2633,7 +2669,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         #     loose labels ("A", "B", "3 mm") a screen reader would read out as if it were prose;
         #   * everything else -> ordinary content, tagged with its own MCID.
         def figure_text(fid: str, fbox: tuple) -> list[TextLine]:
-            return (_figure_text_strict(lines, fbox) if fid in scan_regions
+            return (_figure_text_strict(lines, fbox) if fid in scan_regions or fid in modelled
                     else _figure_text(lines, fbox))
 
         owner_figure: dict[int, int] = {}   # id(line) -> index into `described`
@@ -2668,10 +2704,14 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             cx, cy = (ln.bbox[0] + ln.bbox[2]) / 2, (ln.bbox[1] + ln.bbox[3]) / 2
             if any(x0 <= cx <= x1 and y0 <= cy <= y1 for x0, y0, x1, y1 in frames.values()):
                 promoted.add(index)
+        # Specks: what a recogniser makes of dirt on the scan. Not read, and not listed in the
+        # editor either -- a page of them was a page of Tab stops. A frame drawn over one still
+        # brings it back, like any line Rebind set aside.
+        specks = {id(ln) for ln in lines if scanned and _is_speck(ln, hints)}
         is_artifact = [
             index not in promoted
             and id(ln) not in owner_figure
-            and (id(ln) in inside_undescribed or id(ln) in hints.furniture
+            and (id(ln) in inside_undescribed or id(ln) in hints.furniture or id(ln) in specks
                  or profile.role_of(ln, page_height=src_page.height) == "artifact")
             for index, ln in enumerate(lines)
         ]
@@ -2793,7 +2833,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                          if mcid_of[e] is not None}:
                 continue
             if (id(line) in owner_figure or id(line) in inside_undescribed
-                    or index in in_dropped_row):
+                    or index in in_dropped_row or id(line) in specks):
                 continue
             records.append(_untagged_record(src_page, line_ids[index], line, index))
         # A formula with no description yet gets a draft of one, read from its picture

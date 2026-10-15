@@ -244,3 +244,65 @@ def test_a_boxed_equation_is_tagged_as_a_formula_and_takes_a_description(
     for target in (tmp_path / "plain.pdf", out):
         report = validate_pdf_ua(target, verapdf_exe=verapdf_exe)
         assert report.compliant, report.summary()
+
+
+def test_confident_pictures_are_kept_for_figures_and_text_regions_are_noted():
+    caption = line("Fig. 1 A coin", (72, 300, 200, 310))
+    label = line("a", (150, 400, 156, 408))
+    regions = (Region("image", (70, 320, 300, 500), 0.9),
+               Region("image", (320, 320, 500, 500), 0.55),
+               Region("figure_title", (70, 295, 205, 315), 0.9))
+    hints = hints_for([caption, label], regions)
+    assert hints.pictures == [(70, 320, 300, 500)]
+    assert id(caption) in hints.in_text and id(label) not in hints.in_text
+
+
+@pytest.mark.parametrize("text, in_text, modelled, speck", [
+    ("|", False, True, True),
+    ("~", True, True, True),            # marks alone are never words, wherever they are
+    ("—", False, False, True),
+    ("e", False, True, True),           # a lone letter where no words were found
+    ("e", True, True, False),           # ...but kept inside a block of text
+    ("e", False, False, False),         # ...and kept when there is no model to say where words are
+    ("Q:", False, True, True),
+    ("Fig", False, True, False),
+    ("3.", True, True, False),
+])
+def test_what_counts_as_a_speck(text, in_text, modelled, speck):
+    from rebind.remediate import _is_speck
+
+    mark = line(text, (100, 100, 110, 110))
+    hints = PageHints(tables={} if modelled else None, in_text={id(mark)} if in_text else set())
+    assert _is_speck(mark, hints) is speck
+
+
+def test_an_uncaptioned_picture_the_model_found_on_a_scan_is_kept_to_be_described(
+        tmp_path: Path, monkeypatch):
+    """A pixel guess nobody captions is dropped -- on a page of plans it was mostly hatching. A
+    picture the layout model boxed is kept, undescribed, so the editor asks for a description."""
+    from rebind import layout_model
+    from tests.fixtures import pdf_image_only_scan
+
+    source = pdf_image_only_scan(
+        "<p style='font-size:16pt'>The temple stood on the hill above the forum.</p>"
+        "<div style='margin-top:120pt;width:220pt;height:160pt;background:#444'></div>",
+        tmp_path / "scan.pdf")
+    with pikepdf.open(source) as pdf:
+        width, height = (float(v) for v in pdf.pages[0].mediabox[2:])
+    monkeypatch.setattr(layout_model, "page_regions", lambda *args, **kwargs: (
+        Region("image", (0.0, 0.0, width, height * 0.6), 0.9),))
+
+    result = remediate(source, tmp_path / "out.pdf", title="T")
+    assert [f["id"] for f in result.figures] == ["p1m0"]
+    assert any("temple" in e["text"] for e in result.elements if e["kind"] == "P")
+
+
+def test_a_picture_repeated_in_the_same_place_on_many_pages_is_an_ornament():
+    from rebind.layout_model import drop_ornaments
+
+    icon = (605.0, 692.0, 638.0, 724.0)
+    photo = (627.0, 481.0, 698.0, 586.0)
+    pages = [PageHints(pictures=[icon]), PageHints(pictures=[(606.0, 694.0, 640.0, 727.0), photo]),
+             PageHints(pictures=[(603.0, 692.0, 637.0, 726.0)]), PageHints(pictures=[photo])]
+    drop_ornaments(pages)
+    assert [hints.pictures for hints in pages] == [[], [photo], [], [photo]]

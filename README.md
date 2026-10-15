@@ -136,19 +136,23 @@ it never supplies text, so a wrong box can only group wrongly, which the editor 
 
 ### Figures
 
-Found three ways:
+Found four ways:
 
 1. **Placed images**, read from the file.
 2. **Drawn figures** — line art leaves no image object, so it is found by anchoring on its caption:
    everything drawn in the band above a `Fig. N …` caption.
-3. **Regions of a scan.** A scanned sheet is one raster and an illustration on it is a patch of
-   that raster, not an object. OCR says where the words are, those are masked out, and the
-   remaining ink is closed into blobs. A blob qualifies if it covers ≥1.5% of the page, is solid
-   enough to be a picture, is not mostly text, and does not reach three page edges (what does is
-   the scanner's dark strip at the spine or platen edge).
+3. **Pictures on a scan, boxed by the layout model.** A scanned sheet is one raster and an
+   illustration on it is a patch of that raster, not an object. The layout model looks at the whole
+   page and boxes pictures and charts as such (score ≥ 0.6).
+4. **Regions of a scan, from its pixels**, for whatever the model did not box. OCR says where the
+   words are, those are masked out, and the remaining ink is closed into blobs. A blob qualifies if
+   it covers ≥1.5% of the page, is solid enough to be a picture, is not mostly text, and does not
+   reach three page edges (what does is the scanner's dark strip at the spine or platen edge).
 
-A scan region is kept only if the document captions it somewhere. Uncaptioned, it is treated as
-part of the page and can be marked by hand with `f`. Declared images are always kept.
+A picture the model boxed is kept whether or not anything captions it: an uncaptioned one goes to
+the editor to be described. A pixel region is a guess — on a page of plans it is mostly hatching —
+so it is kept only if the document captions it somewhere; uncaptioned, it is treated as part of the
+page and can be marked by hand with `f`. Declared images are always kept.
 
 Alt text comes from the document's own caption, including when the caption is split across a page
 break. Captions are recognised by a wide label set (`Fig.`, `Figure`, `Plate`, `Chart`, `Diagram`,
@@ -162,7 +166,13 @@ satisfy a checker while telling a reader nothing. A bare label is offered in the
 starting point.
 
 A figure's callout labels ("A", "B", "3 mm") belong to the figure, described or not, and are drawn
-inside it rather than left loose in the reading order.
+inside it rather than left loose in the reading order — so do the scraps a recogniser makes of
+the picture's own lettering.
+
+**Specks.** On a scanned page, a line the recogniser read out of dirt is not read and not listed in
+the editor: a line of nothing but marks ("|", "~", "."), or one or two characters the layout model
+found outside every region where words are expected. Born-digital text is never treated this way,
+and a frame drawn over a speck still brings it back.
 
 ## The accessibility report
 
@@ -279,18 +289,15 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.3.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.4.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:
 
 - Page dewarp for spine-curved scans.
-- Detection of an uncaptioned figure on a scan.
-- Recognizing mathematics into MathML, chemistry and music. Equations are found and tagged, but
-  their content is the text layer's or the recognizer's, and a description in words is the
-  person's to give.
+- Mathematics as MathML, chemistry and music. Equations are found, tagged and given a drafted
+  description in words for the person to check, but not converted to MathML.
 - A source document's own internal navigation, which is dropped rather than rebuilt (ADR 0006).
-- Single-character OCR specks in body text still become elements of their own.
 - Byte-reproducible output (ADR 0003).
 
 ## Runtime

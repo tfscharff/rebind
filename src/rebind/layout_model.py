@@ -39,6 +39,11 @@ REGION_DPI = 150
 MIN_REGION_SCORE = 0.5
 # Calling a line page furniture takes it out of what a screen reader reads, so that needs more.
 MIN_FURNITURE_SCORE = 0.7
+# A picture found this way is kept even with no caption, and asks the person to describe it.
+MIN_PICTURE_SCORE = 0.6
+# ...unless the same picture recurs: the same size, in the same place, on this many pages.
+ORNAMENT_MIN_PAGES = 3
+ORNAMENT_TOLERANCE_PT = 12.0
 
 # Running heads, running feet, folios and the logos printed in them.
 FURNITURE = frozenset({"header", "footer", "number", "header_image", "footer_image"})
@@ -77,6 +82,10 @@ class PageHints:
     captions: dict[int, int] = field(default_factory=dict)      # a table's caption region
     formulas: dict[int, int] = field(default_factory=dict)      # a displayed equation's region
     not_headings: set[int] = field(default_factory=set)
+    pictures: list[tuple[float, float, float, float]] = field(default_factory=list)
+    # Whether each line sits in some region of running text, a title, a table or an equation --
+    # anywhere words are expected. Empty without a model.
+    in_text: set[int] = field(default_factory=set)
 
 
 def model_path() -> Path | None:
@@ -200,6 +209,28 @@ def _gap(a: tuple[float, float, float, float], b: tuple[float, float, float, flo
     return dx + dy
 
 
+def drop_ornaments(pages: list[PageHints]) -> None:
+    """Take recurring pictures out of every page's `pictures`, in place.
+
+    A book's ornaments -- the icon set beside every chapter's exercises, a publisher's device --
+    are printed the same size in the same place page after page. Like a running head they are
+    furniture, and asking for a description of each copy was a stream of the same question. A
+    picture counts as recurring when one the same size sits in the same place on at least
+    ORNAMENT_MIN_PAGES pages.
+    """
+    def shape(bbox):
+        return (bbox[0], bbox[1], bbox[2] - bbox[0], bbox[3] - bbox[1])
+
+    def same(a, b) -> bool:
+        return all(abs(x - y) <= ORNAMENT_TOLERANCE_PT for x, y in zip(shape(a), shape(b)))
+
+    every = [(index, bbox) for index, hints in enumerate(pages) for bbox in hints.pictures]
+    recurring = {(index, bbox) for index, bbox in every
+                 if len({other for other, box in every if same(bbox, box)}) >= ORNAMENT_MIN_PAGES}
+    for index, hints in enumerate(pages):
+        hints.pictures = [bbox for bbox in hints.pictures if (index, bbox) not in recurring]
+
+
 def _equation_beside(number: Region, usable: list[tuple[int, Region]]) -> int | None:
     """The displayed equation level with an equation number: the nearest one it shares a row with."""
     level = [(index, region) for index, region in usable if region.label == FORMULA
@@ -229,6 +260,8 @@ def hints_for(lines, regions: tuple[Region, ...] | None) -> PageHints:
     usable = [(index, region) for index, region in enumerate(regions)
               if region.score >= MIN_REGION_SCORE]
     hints = PageHints(tables={})
+    hints.pictures = [region.bbox for _index, region in usable
+                      if region.label in PICTURES and region.score >= MIN_PICTURE_SCORE]
     prose: set[int] = set()
     hosts = [region for _index, region in usable
              if region.label == TABLE or region.label in PICTURES]
@@ -247,6 +280,9 @@ def hints_for(lines, regions: tuple[Region, ...] | None) -> PageHints:
             continue
         index, region = min(containing, key=lambda item: _area(item[1].bbox))
         key = id(line)
+        if any(r.label in PROSE | TITLES | {TABLE, CAPTION, FORMULA, FORMULA_NUMBER}
+               for _i, r in containing):
+            hints.in_text.add(key)
         if region.label in FURNITURE:
             if region.score >= MIN_FURNITURE_SCORE:
                 hints.furniture.add(key)
