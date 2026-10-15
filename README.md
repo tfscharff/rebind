@@ -295,7 +295,7 @@ Not implemented:
 
 ## Runtime
 
-Local only — no API key, no GPU, no network. The Windows installer (~360 MB, most of it the page-layout model and the equation reader) is unsigned, so
+Local only — no API key, no GPU, no network. The Windows installer (~350 MB, most of it the page-layout model and the equation reader) is unsigned, so
 SmartScreen warns on first run.
 
 ## License
