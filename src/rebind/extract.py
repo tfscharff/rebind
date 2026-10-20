@@ -315,8 +315,12 @@ def _join_split_lines(raws: list[_Raw]) -> list[_Raw]:
                 height = min(left.bbox[3] - left.bbox[1], right.bbox[3] - right.bbox[1])
                 baseline = _baseline(left.chars)
                 size = _dominant_font([c for _s, _e, c in left.chars])[1]
+                # The character at the join must be a real script -- set small as well as off the
+                # line. A full-size one a little off it is two lines side by side, not one.
                 if (shared >= 0.3 * height and baseline is not None
-                        and (_is_script(last, baseline, size) or _is_script(first, baseline, size))):
+                        and any(_is_script(char, baseline, size)
+                                and char.size <= SCRIPT_SIZE_RATIO * size
+                                for char in (last, first))):
                     joined = (a, b)
                     break
             if joined:
