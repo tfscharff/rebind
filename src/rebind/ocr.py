@@ -8,6 +8,8 @@ needs no API key, GPU or network at runtime -- see docs/decisions/0005-ocr-engin
 
 from __future__ import annotations
 
+import threading
+
 from collections.abc import Iterable, Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -18,23 +20,25 @@ from .extract import Page, TextLine
 
 
 class OcrEngine:
-    """Holds the RapidOCR handle so its (expensive) model load happens once per run.
+    """The RapidOCR handle, loaded once per process and shared.
 
     The handle is created on first use, not at construction, so a born-digital document -- which
     never OCRs a page -- pays neither the onnxruntime import nor the model-load cost. Constructing
     an `OcrEngine` is therefore cheap; the pipeline can always make one and only pages that need it
-    trigger the load.
+    trigger the load. It is shared because the app rebuilds the document on every saved
+    correction, and loading the models each time was a second or two of every save.
     """
 
-    def __init__(self) -> None:
-        self._engine = None
+    _shared = None
+    _lock = threading.Lock()
 
     def __call__(self, image: np.ndarray):
-        if self._engine is None:
-            from rapidocr_onnxruntime import RapidOCR
+        with OcrEngine._lock:
+            if OcrEngine._shared is None:
+                from rapidocr_onnxruntime import RapidOCR
 
-            self._engine = RapidOCR()
-        result, _elapsed = self._engine(image)
+                OcrEngine._shared = RapidOCR()
+            result, _elapsed = OcrEngine._shared(image)
         return result or []
 
 

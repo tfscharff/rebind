@@ -25,12 +25,12 @@ import logging
 import os
 import re
 import threading
-from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
 
 from . import weights
+from .pagecache import PageCache, file_key
 
 log = logging.getLogger(__name__)
 
@@ -51,8 +51,7 @@ _MEAN, _STD = 0.7931 * 255, 0.1738 * 255
 _reader = None
 _reader_failed = False
 _lock = threading.Lock()
-_drafts: OrderedDict[tuple, str] = OrderedDict()
-_CACHE = 5000
+_drafts = PageCache()
 
 
 def enabled() -> bool:
@@ -231,19 +230,15 @@ def drafts_for_page(source: Path, page_number: int, page_width: float, page_heig
     if not boxes or not enabled() or _get_reader() is None:
         return {}
     source = Path(source)
-    try:
-        stat = source.stat()
-        stamp = (str(source.resolve()), stat.st_size, stat.st_mtime_ns, page_number)
-    except OSError:
-        stamp = None
+    stamp = file_key(source)
+    stamp = stamp and stamp + (page_number,)
     out: dict[str, str] = {}
     image = None
     scale = FORMULA_DPI / 72.0
     for element_id, (x0, y0, x1, y1) in boxes.items():
         key = stamp and (stamp + tuple(round(v, 1) for v in (x0, y0, x1, y1)))
-        if key and key in _drafts:
-            _drafts.move_to_end(key)
-            out[element_id] = _drafts[key]
+        if key in _drafts:
+            out[element_id] = _drafts.get(key)
             continue
         if image is None:
             from .ocr import render_page_to_image
@@ -262,10 +257,7 @@ def drafts_for_page(source: Path, page_number: int, page_width: float, page_heig
             latex = ""
         words = speak(latex)
         out[element_id] = words
-        if key:
-            _drafts[key] = words
-            while len(_drafts) > _CACHE:
-                _drafts.popitem(last=False)
+        _drafts.put(key, words)
     return {element_id: words for element_id, words in out.items() if words}
 
 

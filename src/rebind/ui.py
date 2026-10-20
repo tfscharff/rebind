@@ -460,9 +460,15 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   }
 
   // ---- Left column: Adobe's checklist, ticked off as it goes ----------------------------------
+  function reportSignature(){
+    return JSON.stringify([ed.checks, ed.status&&ed.status.structure_ok,
+                           ed.status&&ed.status.structure_issues]);
+  }
+
   function drawReport(){
     var host=document.getElementById('report');
     if(!host) return;
+    ed.reportSig=reportSignature();
     var passed=0, total=0;
     ed.checks.forEach(function(c){ if(c.status!=='n/a'){ total++; if(c.status==='pass') passed++; } });
     var groups=[], byGroup={};
@@ -520,7 +526,12 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         if(field) field.focus();
       });
     });
-    revealChecks(host);
+    // The tick-through plays once, when the report first appears; replayed after every save it was
+    // the column flickering in the corner of your eye while you worked.
+    if(ed.revealed){
+      Array.prototype.slice.call(host.querySelectorAll('li.check')).forEach(function(r){
+        r.classList.add('shown'); });
+    } else { ed.revealed=true; revealChecks(host); }
   }
 
   function checkRow(c){
@@ -612,7 +623,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var done=allPagesWalked();
     // Reading order and the element you are standing on are the same act -- you learn the order by
     // walking it, and the walk is what the element list is for -- so they share one panel.
-    var h='<section class="panel typebar" id="typebar" role="status" aria-live="polite">'+
+    var h='<section class="panel typebar" id="typebar" aria-labelledby="todo-h">'+
       '<div class="walkhead"><h2 id="todo-h">Reading order</h2>'+
       '<span class="walknum'+(done?' done':'')+'" id="roprogress">'+
       esc(readingOrderProgress())+'</span></div>'+
@@ -756,9 +767,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       }
       // Redrawing the boxes mid-drag would pull the frame out from under the pointer; the page
       // is redrawn when the drag lets go instead.
-      drawReport();
+      // Only what changed is redrawn: the report when a check did, the boxes in place, and the
+      // panel beside them only if the element you are on was itself changed by the rebuild.
+      if(reportSignature()!==ed.reportSig) drawReport();
       if(ed.dragging) ed.redrawAfterDrag=true; else drawStage();
-      drawTodo();
+      refreshFocused();
+      var progress=document.getElementById('roprogress');
+      if(progress) progress.textContent=readingOrderProgress();
       setSaveState('All changes saved', false);
       if(pending) sendEdits();
     }).catch(function(){ setSaveState('All changes saved', false); });
@@ -822,37 +837,115 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     return k? k.label : (t==='Artifact'? 'Not read' : t);
   }
 
+  // The page and its pager are built once; after that only what changed is touched. A rebuild
+  // lands after every edit, and redrawing the whole column for it -- the page picture decoded again,
+  // every box thrown away and focus put back -- is what made the walk stutter: the box you were on
+  // flickered, the panel beside it reset, and a description being typed lost its cursor.
   function drawStage(){
     var host=document.getElementById('stage');
     if(!host) return;
-    var items=elementsOnPage();
-    var pos=ed.pageList.indexOf(ed.page);
-    // The middle column is the document and nothing else: the page, as large as the window will
-    // allow, with the pager under it. Everything that talks *about* the page moved right.
-    // A rebuild redraws this, and the page picture is a data: URI of a whole scanned sheet -- so
-    // rewriting the <img> means decoding it again, which is the flicker felt after every save.
-    // When the page has not changed, only the boxes over it are replaced.
     var sheet=document.getElementById('sheet');
-    if(sheet && sheet.getAttribute('data-page')===String(ed.page)){
-      Array.prototype.slice.call(sheet.querySelectorAll('.ob')).forEach(function(node){
-        node.parentNode.removeChild(node);
-      });
-      sheet.insertAdjacentHTML('beforeend',
-        items.map(function(e,i){ return boxHtml(e,i); }).join(''));
-      wireStage();
+    if(!sheet){
+      host.innerHTML='<div class="sheetwrap"><div class="sheet" id="sheet"></div></div>'+
+        '<div class="pager">'+
+        '<button type="button" class="btn ghost small" id="edprev">‹ Previous</button>'+
+        '<span class="pageno" id="pageno"></span>'+
+        '<button type="button" class="btn ghost small" id="ednext">Next ›</button></div>';
+      sheet=document.getElementById('sheet');
+      if(!host.getAttribute('data-wired')){ host.setAttribute('data-wired','1'); wireStage(host); }
+      else wirePager();
+    }
+    if(sheet.getAttribute('data-page')!==String(ed.page)){
+      sheet.setAttribute('data-page', String(ed.page));
+      var img=sheet.querySelector('img');
+      if(!img){ img=document.createElement('img'); sheet.insertBefore(img, sheet.firstChild); }
+      img.alt='Page '+ed.page;
+      img.src=ed.pages[ed.page]||'';
+      img.hidden=!ed.pages[ed.page];
+      preloadAround();
+    }
+    var pos=ed.pageList.indexOf(ed.page);
+    document.getElementById('edprev').disabled=pos<=0;
+    document.getElementById('ednext').disabled=pos>=ed.pageList.length-1;
+    var pageno=document.getElementById('pageno');
+    var label='Page '+ed.page+' of '+(ed.pageList.length||1);
+    if(pageno.textContent!==label) pageno.textContent=label;
+    patchBoxes(sheet, elementsOnPage());
+  }
+
+  // The boxes over the page, changed in place when the page holds the same elements as before (the
+  // usual case after a save: a type or a description changed), and replaced only when elements were
+  // added, removed or reordered. Focus goes back only to a box it was lost with -- never pulled out
+  // of a description box or the report.
+  function patchBoxes(sheet, items){
+    var boxes=Array.prototype.slice.call(sheet.querySelectorAll('.ob'));
+    var same=boxes.length===items.length && boxes.every(function(b,i){
+      return b.getAttribute('data-box')===items[i].id; });
+    if(same){
+      boxes.forEach(function(b,i){ updateBox(b, items[i], i); });
       return;
     }
-    var h='<div class="sheetwrap"><div class="sheet" id="sheet" data-page="'+ed.page+'">'+
-      (ed.pages[ed.page]? '<img src="'+ed.pages[ed.page]+'" alt="Page '+ed.page+'">':'')+
-      items.map(function(e,i){ return boxHtml(e,i); }).join('')+'</div></div>'+
-      '<div class="pager">'+
-      '<button type="button" class="btn ghost small" id="edprev"'+(pos<=0?' disabled':'')+
-      '>‹ Previous</button>'+
-      '<span class="pageno">Page '+ed.page+' of '+(ed.pageList.length||1)+'</span>'+
-      '<button type="button" class="btn ghost small" id="ednext"'+
-      (pos>=ed.pageList.length-1?' disabled':'')+'>Next ›</button></div>';
-    host.innerHTML=h;
-    wireStage();
+    // Matched up by id: boxes still on the page are kept and updated, the rest added or dropped.
+    // The box you are standing on is never moved -- moving a focused node blurs it, and that blur
+    // and re-focus is a flicker of the panel beside it -- so the others are placed around it.
+    var active=document.activeElement;
+    var byId={};
+    boxes.forEach(function(b){ byId[b.getAttribute('data-box')]=b; });
+    var wanted=items.map(function(e,i){
+      var b=byId[e.id];
+      delete byId[e.id];
+      if(b){ updateBox(b, e, i); return b; }
+      var t=document.createElement('div');
+      t.innerHTML=boxHtml(e,i);
+      return t.firstChild;
+    });
+    Object.keys(byId).forEach(function(id){ sheet.removeChild(byId[id]); });
+    var pivot=wanted.indexOf(active);
+    wanted.forEach(function(b,i){
+      if(i===pivot) return;
+      if(pivot<0 || i>pivot) sheet.appendChild(b); else sheet.insertBefore(b, active);
+    });
+    if(ed.focused && (pivot<0) && (!document.activeElement || document.activeElement===document.body)){
+      var again=sheet.querySelector('[data-box="'+ed.focused+'"]');
+      if(again) again.focus({preventScroll:true});
+    }
+  }
+
+  function updateBox(box, e, i){
+    var t=document.createElement('div');
+    t.innerHTML=boxHtml(e,i);
+    var n=t.firstChild;
+    if(box.className!==n.className) box.className=n.className;
+    ['aria-label','style'].forEach(function(a){
+      if(box.getAttribute(a)!==n.getAttribute(a)) box.setAttribute(a, n.getAttribute(a));
+    });
+    if(box.innerHTML!==n.innerHTML) box.innerHTML=n.innerHTML;
+  }
+
+  // The pages either side, decoded ahead of time so turning to them is immediate. Only a few are
+  // held: a scanned page decoded is megabytes, and a 300-page book is walked one page at a time.
+  var preloaded=[];
+  function preloadAround(){
+    var at=ed.pageList.indexOf(ed.page);
+    [at+1, at-1].forEach(function(i){
+      var page=ed.pageList[i];
+      if(page===undefined || !ed.pages[page]) return;
+      if(preloaded.some(function(p){ return p.page===page; })) return;
+      var img=new Image();
+      img.src=ed.pages[page];
+      if(img.decode) img.decode().catch(function(){});
+      preloaded.push({page:page, img:img});
+      if(preloaded.length>4) preloaded.shift();
+    });
+  }
+
+  function elementById(id){
+    for(var i=0;i<ed.elements.length;i++){ if(ed.elements[i].id===id) return ed.elements[i]; }
+    return null;
+  }
+
+  function boxOf(node){
+    return node && node.closest? node.closest('.ob') : null;
   }
 
   // The legend lists the keys that answer on the element you are standing on, because those are
@@ -989,50 +1082,45 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     commitFrame(e, f, box);
   }
 
-  function wireFrameDrag(box, e){
-    box.addEventListener('pointermove', function(ev){
-      if(!ed.dragging) box.style.cursor=zoneCursor(frameZone(box, ev.clientX, ev.clientY));
-    });
-    box.addEventListener('pointerdown', function(ev){
-      if(ev.button!==0) return;
-      var sheet=document.getElementById('sheet');
-      if(!sheet) return;
-      ev.preventDefault();
-      box.focus();
-      var r=sheet.getBoundingClientRect();
-      var z=frameZone(box, ev.clientX, ev.clientY);
-      var whole=!(z.l||z.r||z.t||z.b);
-      var start=frameOf(e), sx=ev.clientX, sy=ev.clientY, moved=false, now=null;
-      box.setPointerCapture(ev.pointerId);
-      ed.dragging=true;
-      function move(m){
-        // A few pixels of slack, so a click that wobbles is still a click and not a reshape.
-        if(!moved && Math.abs(m.clientX-sx)+Math.abs(m.clientY-sy)<4) return;
-        moved=true;
-        var dx=(m.clientX-sx)/r.width*100, dy=(m.clientY-sy)/r.height*100;
-        var f={left:start.left,top:start.top,width:start.width,height:start.height};
-        if(whole){ f.left+=dx; f.top+=dy; }
-        else {
-          if(z.l){ f.left+=dx; f.width-=dx; }
-          if(z.r){ f.width+=dx; }
-          if(z.t){ f.top+=dy; f.height-=dy; }
-          if(z.b){ f.height+=dy; }
-        }
-        now=tidyFrame(f);
-        placeBox(box, now);
+  function startFrameDrag(box, e, ev){
+    if(ev.button!==0) return;
+    var sheet=document.getElementById('sheet');
+    if(!sheet) return;
+    ev.preventDefault();
+    box.focus();
+    var r=sheet.getBoundingClientRect();
+    var z=frameZone(box, ev.clientX, ev.clientY);
+    var whole=!(z.l||z.r||z.t||z.b);
+    var start=frameOf(e), sx=ev.clientX, sy=ev.clientY, moved=false, now=null;
+    box.setPointerCapture(ev.pointerId);
+    ed.dragging=true;
+    function move(m){
+      // A few pixels of slack, so a click that wobbles is still a click and not a reshape.
+      if(!moved && Math.abs(m.clientX-sx)+Math.abs(m.clientY-sy)<4) return;
+      moved=true;
+      var dx=(m.clientX-sx)/r.width*100, dy=(m.clientY-sy)/r.height*100;
+      var f={left:start.left,top:start.top,width:start.width,height:start.height};
+      if(whole){ f.left+=dx; f.top+=dy; }
+      else {
+        if(z.l){ f.left+=dx; f.width-=dx; }
+        if(z.r){ f.width+=dx; }
+        if(z.t){ f.top+=dy; f.height-=dy; }
+        if(z.b){ f.height+=dy; }
       }
-      function up(){
-        box.removeEventListener('pointermove', move);
-        box.removeEventListener('pointerup', up);
-        box.removeEventListener('pointercancel', up);
-        ed.dragging=false;
-        if(moved && now){ commitFrame(e, now, box); say('Frame changed. Saving…'); }
-        if(ed.redrawAfterDrag){ ed.redrawAfterDrag=false; drawStage(); }
-      }
-      box.addEventListener('pointermove', move);
-      box.addEventListener('pointerup', up);
-      box.addEventListener('pointercancel', up);
-    });
+      now=tidyFrame(f);
+      placeBox(box, now);
+    }
+    function up(){
+      box.removeEventListener('pointermove', move);
+      box.removeEventListener('pointerup', up);
+      box.removeEventListener('pointercancel', up);
+      ed.dragging=false;
+      if(moved && now){ commitFrame(e, now, box); say('Frame changed. Saving…'); }
+      if(ed.redrawAfterDrag){ ed.redrawAfterDrag=false; drawStage(); }
+    }
+    box.addEventListener('pointermove', move);
+    box.addEventListener('pointerup', up);
+    box.addEventListener('pointercancel', up);
   }
 
   // What the banner says while an element has focus: the type in big letters, what that type
@@ -1042,6 +1130,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     // must survive every element change.
     var bar=document.getElementById('typebody');
     if(!bar) return;
+    ed.shownSig=signature(e);
     var k=kindOf(e), key=keyFor(k);
     var alt=ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'');
     // The key beside the name, so the way to change it is learned by meeting it rather than by
@@ -1218,104 +1307,132 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     return true;
   }
 
-  function wireStage(){
-    // Assigned, not added: this runs again after every save without the pager being redrawn, and
-    // each added listener was one more page turned per click.
-    var prev=document.getElementById('edprev'), next=document.getElementById('ednext');
-    if(prev) prev.onclick=function(){ turnPage(-1); };
-    if(next) next.onclick=function(){ turnPage(1); };
+  // Wired once, on the column, rather than on every box after every redraw: the boxes come and
+  // go with each save, and each one carrying its own listeners is what had to be rebuilt every time.
+  function wirePager(){
+    document.getElementById('edprev').onclick=function(){ turnPage(-1); };
+    document.getElementById('ednext').onclick=function(){ turnPage(1); };
+  }
 
-    var items=elementsOnPage();
-    var boxes=Array.prototype.slice.call(document.querySelectorAll('.ob'));
-    boxes.forEach(function(box,index){
-      var e=items[index];
-      box.addEventListener('focus',function(){
-        ed.focused=e.id; showType(e); noteWalked(ed.page);
-        // Landing on a picture shows the description beside it, with the guess ready -- but does
-        // not take focus. Tab still means "next element"; Enter is what goes in and edits.
-        if(describable(e)) openAltPrompt(e.id, false);
-      });
-      box.addEventListener('click',function(){ box.focus(); });
-      if(frameable(e)) wireFrameDrag(box, e);
-      box.addEventListener('keydown',function(ev){
-        var key=(ev.key||'');
-        if(ev.shiftKey && !ev.altKey && !ev.metaKey && key.indexOf('Arrow')===0){
-          ev.preventDefault();
-          if(frameable(e)) nudgeFrame(e, box, key, !ev.ctrlKey);
-          else say('This one has no frame to move.');
-          return;
-        }
-        if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
-        // Taking out what should not be read, on the keys that mean "delete": Delete carries on
-        // forward like every other edit, Backspace steps back -- for clearing a run of junk
-        // walking up the page as naturally as walking down it.
-        if(key==='Delete'||key==='Backspace'){
-          ev.preventDefault();
-          deleteElement(e, key==='Backspace');
-          return;
-        }
-        if(key==='Insert'){ ev.preventDefault(); addElement(e.id); return; }
-        // Tabbing off the end of a page carries on to the next one, so checking a whole document
-        // is one unbroken run of Tab rather than a page turn every dozen presses.
-        if(key==='Tab' && !ev.shiftKey && index===boxes.length-1){
-          if(turnPage(1)){ ev.preventDefault(); }
-          return;
-        }
-        if(key==='Tab' && ev.shiftKey && index===0){
-          if(turnPage(-1, true)){ ev.preventDefault(); }
-          return;
-        }
-        // On a picture, Enter goes into the description -- that is the work on a picture, and the
-        // list of types is not. Everywhere else Enter still opens the list.
-        if(key==='Enter'){
-          ev.preventDefault();
-          if(describable(e)) openAltPrompt(e.id, true); else openPalette(e.id);
-          return;
-        }
-        if(key===' '&&describable(e)){
-          ev.preventDefault();
-          openAltPrompt(e.id, true);
-          return;
-        }
-        if(key==='['||key===']'){ ev.preventDefault(); turnPage(key===']'?1:-1); return; }
-        // The two edits that are not "what is this?", on the obvious pair of keys. On a table row,
-        // removing is the table's (setKind).
-        if(key==='+'||key==='='){ ev.preventDefault(); addElement(e.id); return; }
-        if(key==='-'||key==='_'){ ev.preventDefault(); deleteElement(e, false); return; }
-        if(key==='ArrowDown'||key==='ArrowUp'){
-          var to=boxes[index+(key==='ArrowDown'?1:-1)];
-          if(to){ ev.preventDefault(); to.focus(); }
-          return;
-        }
-        // "This is not a picture" has to stay one keystroke, and it is the same keystroke
-        // everywhere else in the app. Checked before typing, so x means x on a figure too.
-        if(kindOf(e)==='Figure' && key.toLowerCase()===(ed.artifact&&ed.artifact.key||'x')){
-          ev.preventDefault(); setKind(e.id, 'Artifact'); return;
-        }
-        // Otherwise, on a picture, typing writes the description -- you should not have to press
-        // Enter first to start saying what the picture is. This does mean the other type keys do
-        // not retag a figure; "x" takes it out, and "+" then adds it back as a paragraph.
-        if(kindOf(e)==='Figure' && key.length===1){
-          ev.preventDefault();
-          openAltPrompt(e.id, true);
-          var typing=document.getElementById('altinput');
-          if(typing){
-            typing.value=key;
-            typing.setSelectionRange(1, 1);
-          }
-          return;
-        }
-        // The key sets the type straight away. Enter is only for when you cannot remember which
-        // key you want; knowing it should never cost you a menu.
-        var hit=null;
-        keysFor(e).forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });
-        if(hit){ ev.preventDefault(); setKind(e.id, hit); }
-      });
+  function wireStage(host){
+    wirePager();
+    host.addEventListener('focusin', function(ev){
+      var box=boxOf(ev.target), e=box && elementById(box.getAttribute('data-box'));
+      if(e) landOn(e);
     });
-    if(ed.focused){
-      var again=document.querySelector('[data-box="'+ed.focused+'"]');
-      if(again) again.focus();
-    }
+    host.addEventListener('click', function(ev){
+      var box=boxOf(ev.target);
+      if(box) box.focus();
+    });
+    host.addEventListener('pointermove', function(ev){
+      var box=boxOf(ev.target);
+      if(box && !ed.dragging && box.classList.contains('frame'))
+        box.style.cursor=zoneCursor(frameZone(box, ev.clientX, ev.clientY));
+    });
+    host.addEventListener('pointerdown', function(ev){
+      var box=boxOf(ev.target), e=box && elementById(box.getAttribute('data-box'));
+      if(e && frameable(e)) startFrameDrag(box, e, ev);
+    });
+    host.addEventListener('keydown', function(ev){
+      var box=boxOf(ev.target), e=box && elementById(box.getAttribute('data-box'));
+      if(!e) return;
+      var boxes=Array.prototype.slice.call(document.querySelectorAll('.ob'));
+      var index=boxes.indexOf(box);
+      var key=(ev.key||'');
+      if(ev.shiftKey && !ev.altKey && !ev.metaKey && key.indexOf('Arrow')===0){
+        ev.preventDefault();
+        if(frameable(e)) nudgeFrame(e, box, key, !ev.ctrlKey);
+        else say('This one has no frame to move.');
+        return;
+      }
+      if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
+      // Taking out what should not be read, on the keys that mean "delete": Delete carries on
+      // forward like every other edit, Backspace steps back -- for clearing a run of junk
+      // walking up the page as naturally as walking down it.
+      if(key==='Delete'||key==='Backspace'){
+        ev.preventDefault();
+        deleteElement(e, key==='Backspace');
+        return;
+      }
+      if(key==='Insert'){ ev.preventDefault(); addElement(e.id); return; }
+      // Tabbing off the end of a page carries on to the next one, so checking a whole document
+      // is one unbroken run of Tab rather than a page turn every dozen presses.
+      if(key==='Tab' && !ev.shiftKey && index===boxes.length-1){
+        if(turnPage(1)){ ev.preventDefault(); }
+        return;
+      }
+      if(key==='Tab' && ev.shiftKey && index===0){
+        if(turnPage(-1, true)){ ev.preventDefault(); }
+        return;
+      }
+      // On a picture, Enter goes into the description -- that is the work on a picture, and the
+      // list of types is not. Everywhere else Enter still opens the list.
+      if(key==='Enter'){
+        ev.preventDefault();
+        if(describable(e)) openAltPrompt(e.id, true); else openPalette(e.id);
+        return;
+      }
+      if(key===' '&&describable(e)){
+        ev.preventDefault();
+        openAltPrompt(e.id, true);
+        return;
+      }
+      if(key==='['||key===']'){ ev.preventDefault(); turnPage(key===']'?1:-1); return; }
+      // The two edits that are not "what is this?", on the obvious pair of keys. On a table row,
+      // removing is the table's (setKind).
+      if(key==='+'||key==='='){ ev.preventDefault(); addElement(e.id); return; }
+      if(key==='-'||key==='_'){ ev.preventDefault(); deleteElement(e, false); return; }
+      if(key==='ArrowDown'||key==='ArrowUp'){
+        var to=boxes[index+(key==='ArrowDown'?1:-1)];
+        if(to){ ev.preventDefault(); to.focus(); }
+        return;
+      }
+      // "This is not a picture" has to stay one keystroke, and it is the same keystroke
+      // everywhere else in the app. Checked before typing, so x means x on a figure too.
+      if(kindOf(e)==='Figure' && key.toLowerCase()===(ed.artifact&&ed.artifact.key||'x')){
+        ev.preventDefault(); setKind(e.id, 'Artifact'); return;
+      }
+      // Otherwise, on a picture, typing writes the description -- you should not have to press
+      // Enter first to start saying what the picture is. This does mean the other type keys do
+      // not retag a figure; "x" takes it out, and "+" then adds it back as a paragraph.
+      if(kindOf(e)==='Figure' && key.length===1){
+        ev.preventDefault();
+        openAltPrompt(e.id, true);
+        var typing=document.getElementById('altinput');
+        if(typing){
+          typing.value=key;
+          typing.setSelectionRange(1, 1);
+        }
+        return;
+      }
+      // The key sets the type straight away. Enter is only for when you cannot remember which
+      // key you want; knowing it should never cost you a menu.
+      var hit=null;
+      keysFor(e).forEach(function(k){ if(k.key===key.toLowerCase()) hit=k.tag; });
+      if(hit){ ev.preventDefault(); setKind(e.id, hit); }
+    });
+  }
+
+  // Landing on an element shows what it is beside the page. On a picture the description is shown
+  // too, with the guess ready -- but focus stays on the page: Tab still means "next element", and
+  // Enter is what goes in and edits.
+  function landOn(e){
+    ed.focused=e.id; showType(e); noteWalked(ed.page);
+    if(describable(e)) openAltPrompt(e.id, false);
+  }
+
+  // After a rebuild, the element you are standing on may have been changed by it (merged, retyped).
+  // The panel is redrawn only then, and never while you are typing in it.
+  function refreshFocused(){
+    var box=boxOf(document.activeElement);
+    if(!box) return;
+    var e=elementById(box.getAttribute('data-box'));
+    if(e && signature(e)!==ed.shownSig) landOn(e);
+  }
+
+  function signature(e){
+    return [e.id, kindOf(e), ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||''),
+            e.text||'', e.alt_guess||''].join('|');
   }
 
   // ---- The floating hotkey palette ------------------------------------------------------------

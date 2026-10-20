@@ -40,6 +40,10 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
   the page; deskews, tolerates warped/faded scans), groups staves into examples, and drafts a
   description of their layout and clefs (`alt_guess` only). Pure OpenCV geometry, no model. Key,
   time and bar counts were tried and dropped as unreliable on real scans.
+- `pagecache.py` — `PageCache`/`file_key`: per-page results (OCR lines, layout regions, music,
+  formula drafts, editor page pictures) remembered while the source file is unchanged, so the
+  rebuild that follows every saved edit only pays for what the edit changed. New per-page work
+  should cache through it.
 - `weights.py` — registry of the model files not in git (layout + equation reader), with pinned
   SHA-256s; `ensure_weights` fetches missing ones into `models/` from a clone (never when frozen).
 - `remediate.py` — builds the tagged output: keeps each page's pixels/vector untouched, lays an

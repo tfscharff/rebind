@@ -21,13 +21,13 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from . import weights
+from .pagecache import PageCache, file_key
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +59,6 @@ FORMULA = "display_formula"
 FORMULA_NUMBER = "formula_number"
 PICTURES = frozenset({"image", "chart"})
 
-_CACHE_PAGES = 5000
 
 
 @dataclass(frozen=True)
@@ -101,7 +100,7 @@ def ensure_model(report=print) -> Path | None:
 _engine = None
 _engine_lock = threading.Lock()
 _engine_failed = False
-_cache: OrderedDict[tuple, tuple[Region, ...]] = OrderedDict()
+_cache = PageCache()
 
 
 def _get_engine():
@@ -166,15 +165,10 @@ def page_regions(source: Path, page_number: int, page_width: float, page_height:
     """
     if not enabled() or _get_engine() is None:
         return None
-    source = Path(source)
-    try:
-        stat = source.stat()
-        key = (str(source.resolve()), stat.st_size, stat.st_mtime_ns, page_number)
-    except OSError:
-        key = None
-    if key is not None and key in _cache:
-        _cache.move_to_end(key)
-        return _cache[key]
+    stamp = file_key(source)
+    key = stamp and stamp + (page_number,)
+    if key in _cache:
+        return _cache.get(key)
     if image is None:
         from .ocr import render_page_to_image
         image = render_page_to_image(source, page_number, dpi=REGION_DPI)
@@ -183,10 +177,8 @@ def page_regions(source: Path, page_number: int, page_width: float, page_height:
     except Exception:      # a model failure must never cost the person their document
         log.exception("layout model failed on page %d; using geometric rules", page_number)
         return None
-    if key is not None and regions is not None:
-        _cache[key] = regions
-        while len(_cache) > _CACHE_PAGES:
-            _cache.popitem(last=False)
+    if regions is not None:
+        _cache.put(key, regions)
     return regions
 
 

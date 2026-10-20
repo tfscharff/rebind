@@ -50,7 +50,9 @@ def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
     body = client.get(f"/jobs/{job_id}/elements").json()
     kinds = [(e["id"], e["kind"], e["text"]) for e in body["elements"]]
     assert [k for _i, k, _t in kinds] == ["H1", "P", "P", "P"], kinds
-    assert body["pages"]["1"].startswith("data:image/png;base64,"), "the page picture is missing"
+    picture = client.get(body["pages"]["1"])
+    assert picture.status_code == 200, "the page picture is missing"
+    assert picture.content[1:4] == b"PNG"
     for expected in ("H2", "P", "BlockQuote", "Caption", "Figure", "Table", "L"):
         assert expected in body["tags"], body["tags"]
     keys = {entry["key"] for entry in body["keys"]}

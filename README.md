@@ -168,7 +168,17 @@ starting point.
 
 A figure's callout labels ("A", "B", "3 mm") belong to the figure, described or not, and are drawn
 inside it rather than left loose in the reading order — so do the scraps a recogniser makes of
-the picture's own lettering.
+the picture's own lettering. Only labels: a line of a paragraph is never claimed, so a picture set
+beside a title block or under a run of paragraphs cannot pull them out of the reading order.
+
+A sentence that names a figure ("Figure 3A. is FTIR spectra of…", "Fig. 2 shows…") is prose, not a
+caption: a label followed by a verb is never taken as one.
+
+**Tables are tables, not figures.** A figure found from drawings or pixels whose lines are mostly a
+table's (as the layout model boxes it, or the geometric detector finds it) gives way to the table.
+A table described in a sentence would pass a checker, but it fails WCAG 1.3.1: a screen reader can
+move through a tagged table cell by cell, hearing each cell's column header, and no description
+gives that back. Every table already carries a drafted `/Summary` (columns, rows and headers).
 
 A figure is read where it sits in its own column: after the text above it that shares any of its
 width. On a two-column page, a figure in the left column is no longer read in the middle of the
@@ -195,6 +205,10 @@ left out, and so is the layout with it. Key signatures, time signatures and bar 
 and left out: on two real scanned books they came out wrong too often to offer, and a wrong key is
 worse than none. The draft is only a start; what the music is — the piece, the passage, what it
 shows — is the person's to add.
+
+**Not read.** Text turned sideways in a margin (a download stamp, an archive identifier — rejoined
+first, since it arrives one character per line), lines made only of icon glyphs, and text set off
+the page entirely are page furniture.
 
 **Specks.** On a scanned page, a line the recogniser read out of dirt is not read and not listed in
 the editor: a line of nothing but marks ("|", "~", "."), or one or two characters the layout model
@@ -237,6 +251,11 @@ the right.
 
 Nothing has to be saved. An edit goes to the server on its own and the document is rebuilt behind
 you; the header says where that has got to. Saving is triggered by a change, not by a keystroke.
+A rebuild reuses everything an edit cannot change — each scanned page's OCR, its layout regions,
+music and formula readings, and the page pictures — and when it lands only what changed is redrawn:
+the boxes are updated in place, the one you are on is never moved or re-focused, and the panel
+beside it is left alone unless that element itself changed. Page pictures are fetched as images
+when you turn to a page (the pages either side are decoded ahead), not re-sent with every save.
 
 **Tab order:** each failing check in the report, then element 1 of the document, with nothing in
 between. Other controls are out of the natural order and reached from what they belong to — a fix
@@ -316,7 +335,7 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.5.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.6.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:

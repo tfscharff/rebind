@@ -147,3 +147,27 @@ def test_text_lines_treats_a_bare_top_level_line_as_a_line_not_a_box():
     box_with_stray = LTTextBoxHorizontal()
     box_with_stray._objs.append(LTAnno(" "))
     assert list(_text_lines(box_with_stray)) == []
+
+
+def test_text_printed_sideways_is_put_back_together():
+    # pdfminer reads every character of a sideways line as its own line: a journal's download
+    # stamp running down the margin came out as eighteen one-letter paragraphs.
+    from rebind.extract import TextLine, _join_rotated
+
+    def char(text: str, top: float) -> TextLine:
+        return TextLine(text=text, page=1, bbox=(579.0, top - 3.5, 585.0, top), font="F",
+                        size=6, bold=False, italic=False)
+
+    tops, text, y = [], "01 June", 457.0
+    for ch in text:
+        if ch == " ":
+            y -= 3.5
+            continue
+        tops.append((ch, y))
+        y -= 3.5
+    chars = [char(ch, top) for ch, top in tops]
+    body = TextLine(text="Body", page=1, bbox=(72.0, 400.0, 300.0, 410.0), font="F", size=10,
+                    bold=False, italic=False)
+    joined = _join_rotated([body, *chars], {id(c): 1 for c in chars})
+    assert [ln.text for ln in joined] == ["Body", "01 June"]
+    assert joined[1].rotated and joined[1].bbox[1] < joined[1].bbox[3] - 20

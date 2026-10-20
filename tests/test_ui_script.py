@@ -285,7 +285,7 @@ def test_typing_on_a_picture_writes_its_description():
     # out of the reading order and "+" puts it back as a paragraph, and both are handled before
     # this. A description starting with "-" is not a thing; a mis-detected figure is.
     script = _script()
-    handler = script[script.index("box.addEventListener('keydown'"):script.index("var hit=null;")]
+    handler = script[script.index("host.addEventListener('keydown'"):script.index("var hit=null;")]
     assert handler.index("key==='-'||key==='_'") < handler.index("kindOf(e)==='Figure' && key.length===1")
     assert "typing.value=key;" in script
 
@@ -297,7 +297,7 @@ def test_a_description_is_saved_when_it_changes_not_on_every_keystroke():
     assert "box.addEventListener('change'" in script, "the inline box saves on leaving it"
     assert "if(text!==before){" in script, "accepting the guess unchanged must not rebuild"
     # And redrawing a page that has not changed must not re-decode its picture.
-    assert "sheet.getAttribute('data-page')===String(ed.page)" in script
+    assert "sheet.getAttribute('data-page')!==String(ed.page)" in script
 
 
 def test_a_picture_is_named_as_a_figure_with_its_key():
@@ -315,7 +315,7 @@ def test_x_takes_a_picture_out_of_the_reading_order_like_anywhere_else():
     # Typing on a picture writes its description, which swallowed the one key that means "this is
     # not a picture". It is checked first, so x means x on a figure too.
     script = _script()
-    handler = script[script.index("box.addEventListener('keydown'"):script.index("var hit=null;")]
+    handler = script[script.index("host.addEventListener('keydown'"):script.index("var hit=null;")]
     assert handler.index("ed.artifact&&ed.artifact.key") < handler.index("key.length===1")
     assert "setKind(e.id, 'Artifact'); return;" in handler
 
@@ -327,7 +327,7 @@ def test_a_formula_is_described_like_a_picture_but_still_retags_on_its_keys():
     # an equation, and its own text pre-filled and accepted unchanged is not a description.
     script = _script()
     assert "return k==='Figure' || k==='Formula';" in script
-    handler = script[script.index("box.addEventListener('keydown'"):script.index("var hit=null;")]
+    handler = script[script.index("host.addEventListener('keydown'"):script.index("var hit=null;")]
     assert "if(kindOf(e)==='Figure' && key.length===1){" in handler
     prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
     assert "if(formula && !before && text===(e.text||'').trim()) text='';" in prompt

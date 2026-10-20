@@ -2144,3 +2144,65 @@ def test_a_figure_is_read_in_its_own_column():
     assert _figure_anchor(lines, mcids, 0, {}, right_figure) == 9      # in the right column
     bottom_left = (80.0, 100.0, 280.0, 260.0)
     assert _figure_anchor(lines, mcids, 0, {}, bottom_left) == 5       # before the right column
+
+
+def _text_line(text: str, box: tuple, **kw):
+    from rebind.extract import TextLine
+    return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False, **kw)
+
+
+def test_a_picture_never_swallows_the_paragraphs_stacked_beside_it():
+    # A real journal: the cover's sidebar image swallowed the whole title block beside it, and a
+    # chart swallowed the five paragraphs above it, one line's leading at a time -- all of it
+    # hidden from a screen reader as decoration.
+    from rebind.remediate import _figure_text
+
+    picture = (86.0, 92.0, 500.0, 268.0)
+    label = _text_line("2915.74", (180.0, 150.0, 200.0, 156.0))
+    last = _text_line("and clothing laundering waste.", (72.0, 270.0, 197.0, 278.0))
+    above = [_text_line("chains chemically bonded to the rayon fiber [15]. It is predicted, this",
+                        (72.0, 280.0 + 11.5 * k, 543.0, 290.0 + 11.5 * k)) for k in range(6)]
+    owned = _figure_text([label, last, *above], picture)
+    assert owned == [label]
+
+
+def test_a_sentence_that_names_a_figure_is_not_its_caption():
+    from rebind.remediate import _is_caption_marker
+
+    assert _is_caption_marker("FIGURE 3. FTIR results of polypropylene (a), wool (b).")
+    assert _is_caption_marker("Fig. 2. Head of the statue in figure 1.")
+    assert not _is_caption_marker("Figure 3A. is FTIR spectra of microplastic which has")
+    assert not _is_caption_marker("Figure 3C is the FTIR spectra of microplastic")
+    assert not _is_caption_marker("Fig. 2 (b) shows the same section after firing.")
+
+
+def test_sideways_margin_text_icons_and_text_off_the_page_are_not_read():
+    from rebind.remediate import _margin_furniture
+
+    body = _text_line("Ordinary body text across the column.", (72.0, 500.0, 540.0, 510.0))
+    stamp = _text_line("01 June 2026 14:25:30", (579.0, 381.0, 585.0, 457.0), rotated=True)
+    icon = _text_line("", (445.0, 607.0, 474.0, 636.0))
+    off = _text_line("C", (-124.0, 360.0, -114.0, 370.0))
+    turned_in_text = _text_line("Axis label", (300.0, 300.0, 306.0, 360.0), rotated=True)
+    lines = [body, stamp, icon, off, turned_in_text]
+    assert _margin_furniture(lines, 595.0, 842.0) == [stamp, icon, off]
+
+
+def test_a_drawn_table_is_a_table_not_a_figure():
+    from rebind.layout_model import PageHints
+    from rebind.remediate import _holds_table
+
+    cells = [_text_line(text, (x, 600.0 - 12 * row, x + 60, 610.0 - 12 * row))
+             for row in range(5) for x, text in ((120.0, "Wool"), (270.0, "Type"), (440.0, "5"))]
+    region = (100.0, 540.0, 520.0, 620.0)
+    hints = PageHints(tables={id(c): 0 for c in cells})
+    assert _holds_table(cells, hints, region)
+    assert not _holds_table(cells, PageHints(tables={}), region)
+
+
+def test_a_long_callout_standing_alone_still_belongs_to_its_drawing():
+    from rebind.remediate import _figure_text
+
+    drawing = (100.0, 400.0, 400.0, 600.0)
+    callout = _text_line("D  Bond this part with super glue", (300.0, 604.0, 420.0, 612.0))
+    assert _figure_text([callout], drawing) == [callout]

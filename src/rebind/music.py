@@ -21,12 +21,13 @@ from __future__ import annotations
 
 import logging
 import re
-from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
 
 import numpy as np
+
+from .pagecache import PageCache, file_key
 
 log = logging.getLogger(__name__)
 
@@ -568,8 +569,7 @@ def _ruled_text(staff: Staff, placed) -> bool:
 PREFILTER_DPI = 100
 PREFILTER_INCHES = 0.6
 PREFILTER_STROKES = 5
-_CACHE = 5000
-_examples: OrderedDict[tuple, list[Example]] = OrderedDict()
+_examples = PageCache()
 
 
 def _worth_a_look(gray: np.ndarray, dpi: float) -> bool:
@@ -591,15 +591,11 @@ def examples_for_page(source: Path, page_number: int, page_width: float, page_he
     from .ocr import render_page_to_image
 
     source = Path(source)
-    try:
-        stat = source.stat()
-        key = (str(source.resolve()), stat.st_size, stat.st_mtime_ns, page_number,
-               tuple((line.text, tuple(round(v, 1) for v in line.bbox)) for line in lines))
-    except OSError:
-        key = None
-    if key is not None and key in _examples:
-        _examples.move_to_end(key)
-        return _examples[key]
+    stamp = file_key(source)
+    key = stamp and stamp + (page_number, tuple(
+        (line.text, tuple(round(v, 1) for v in line.bbox)) for line in lines))
+    if key in _examples:
+        return _examples.get(key)
     import cv2
 
     try:
@@ -622,11 +618,7 @@ def examples_for_page(source: Path, page_number: int, page_width: float, page_he
     except Exception:   # finding music must never cost the person their document
         log.exception("music search failed on page %d", page_number)
         found = []
-    if key is not None:
-        _examples[key] = found
-        while len(_examples) > _CACHE:
-            _examples.popitem(last=False)
-    return found
+    return _examples.put(key, found)
 
 
 # How a book labels a music example: "Ex. 24.", "Example 3", "Mus. ex. 2", "Musical Example 4.1".

@@ -11,7 +11,7 @@ Pages are yielded lazily. Nothing here retains more than one page at a time, whi
 from __future__ import annotations
 
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import pikepdf
@@ -52,6 +52,9 @@ class TextLine:
     # not declare a plain device colour (a pattern or an unusual colour space), and always None for
     # OCR'd lines, which have no declared colour to read -- `contrast` samples the render instead.
     color: tuple[int, int, int] | None = None
+    # Set on a line `_join_rotated` rebuilt from text printed sideways (a download stamp or an
+    # identifier running up the margin), which pdfminer hands over one character per line.
+    rotated: bool = False
 
 
 @dataclass(frozen=True)
@@ -183,9 +186,74 @@ def _line_from_container(container, page_number: int) -> TextLine | None:
     )
 
 
+def _turn(container) -> int:
+    """+1 for a one-character line printed turned clockwise (read downwards), -1 turned
+    anticlockwise (read upwards), 0 for anything else."""
+    chars = [obj for obj in container if isinstance(obj, LTChar)]
+    if len(chars) != 1 or len(container.get_text().strip()) != 1:
+        return 0
+    a, b = chars[0].matrix[:2]
+    if abs(b) <= abs(a):
+        return 0
+    return 1 if b < 0 else -1
+
+
+# Sideways text comes out one character per line; this many in a column are a line turned on its
+# side rather than a column of separate marks.
+MIN_ROTATED_CHARS = 4
+
+
+def _join_rotated(lines: list[TextLine], turns: dict[int, int]) -> list[TextLine]:
+    """Put back together a line of text printed sideways.
+
+    pdfminer reads every character of it as its own line, so "01 June 2026 14:25:30" running down
+    a journal page's margin reached the page as eighteen one-letter paragraphs, interleaved with the
+    body text beside them. Characters stacked in one column, each turned the same way and touching
+    the next, are joined in reading order; a gap wider than a character's own advance is a space.
+    """
+    stacked = [ln for ln in lines if turns.get(id(ln))]
+    if len(stacked) < MIN_ROTATED_CHARS:
+        return lines
+    runs: list[list[TextLine]] = []
+    for line in sorted(stacked, key=lambda ln: -ln.bbox[3]):
+        for run in runs:
+            last = run[-1]
+            advance = last.bbox[3] - last.bbox[1]
+            if (abs(last.bbox[0] - line.bbox[0]) <= 1 and turns[id(last)] == turns[id(line)]
+                    and -1 <= last.bbox[1] - line.bbox[3] <= 3 * advance):
+                run.append(line)
+                break
+        else:
+            runs.append([line])
+    joined: dict[int, TextLine | None] = {}
+    for run in runs:
+        if len(run) < MIN_ROTATED_CHARS:
+            continue
+        if turns[id(run[0])] < 0:
+            run = run[::-1]
+        text = run[0].text
+        for prev, line in zip(run, run[1:]):
+            gap = abs(prev.bbox[1] - line.bbox[3]) if turns[id(line)] > 0 else abs(
+                line.bbox[1] - prev.bbox[3])
+            text += (" " if gap > 0.5 * (prev.bbox[3] - prev.bbox[1]) else "") + line.text
+        box = (min(ln.bbox[0] for ln in run), min(ln.bbox[1] for ln in run),
+               max(ln.bbox[2] for ln in run), max(ln.bbox[3] for ln in run))
+        joined[id(run[0])] = replace(run[0], text=text, bbox=box, rotated=True)
+        for line in run[1:]:
+            joined[id(line)] = None
+    out = []
+    for line in lines:
+        if id(line) in joined:
+            if joined[id(line)] is not None:
+                out.append(joined[id(line)])
+        else:
+            out.append(line)
+    return out
+
+
 def _collect_figure(
     figure: LTFigure, page_number: int, lines: list[TextLine], images: list[ImageRegion],
-    drawings: list[ImageRegion],
+    drawings: list[ImageRegion], turns: dict[int, int],
 ) -> tuple[bool, bool]:
     """Recurse into a Form XObject, contributing its text lines and embedded images separately.
 
@@ -215,6 +283,7 @@ def _collect_figure(
                 line = _line_from_container(container, page_number)
                 if line is not None:
                     lines.append(line)
+                    turns[id(line)] = _turn(container)
                     found_text = True
         elif isinstance(child, LTImage):
             images.append(
@@ -223,7 +292,7 @@ def _collect_figure(
             found_image = True
         elif isinstance(child, LTFigure):
             nested_text, nested_image = _collect_figure(
-                child, page_number, lines, images, drawings)
+                child, page_number, lines, images, drawings, turns)
             found_text = found_text or nested_text
             found_image = found_image or nested_image
         elif isinstance(child, LTCurve):
@@ -254,14 +323,16 @@ def extract_pages(source: Path) -> Iterator[Page]:
             lines: list[TextLine] = []
             images: list[ImageRegion] = []
             drawings: list[ImageRegion] = []
+            turns: dict[int, int] = {}
             for element in layout:
                 if isinstance(element, LTTextContainer):
                     for container in _text_lines(element):
                         line = _line_from_container(container, index)
                         if line is not None:
                             lines.append(line)
+                            turns[id(line)] = _turn(container)
                 elif isinstance(element, LTFigure):
-                    _collect_figure(element, index, lines, images, drawings)
+                    _collect_figure(element, index, lines, images, drawings, turns)
                 elif isinstance(element, LTImage):
                     images.append(
                         ImageRegion(
@@ -283,7 +354,7 @@ def extract_pages(source: Path) -> Iterator[Page]:
                 number=index,
                 width=layout.width,
                 height=layout.height,
-                lines=tuple(lines),
+                lines=tuple(_join_rotated(lines, turns)),
                 images=tuple(images),
                 drawings=tuple(drawings),
             )

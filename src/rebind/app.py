@@ -24,7 +24,7 @@ import rebind  # noqa: F401
 
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 HOST = "127.0.0.1"
@@ -57,7 +57,7 @@ class _Job:
     # Adobe's own rule list, judged against the produced PDF (see rebind.checklist)
     checklist: list = field(default_factory=list)
     elements: list = field(default_factory=list)     # every tagged element, for the page editor
-    page_images: dict = field(default_factory=dict)  # page number -> data URI of the page
+    page_images: dict = field(default_factory=dict)  # page number -> PNG of the page
     edits: dict = field(default_factory=dict)        # the user's corrections, kept across re-runs
     structure_ok: bool = True
     structure_issues: tuple = ()
@@ -231,8 +231,12 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
             TAG_KEYS,
         )
 
+        # The pages are addresses, not pictures: a whole scanned book of page pictures inlined
+        # here was tens of megabytes to send and parse again after every saved correction. As
+        # their own responses they are fetched once, as the person turns to them, and cached.
+        pages = {str(number): f"/jobs/{job.id}/pages/{number}" for number in job.page_images}
         return JSONResponse({
-            "elements": job.elements, "pages": job.page_images,
+            "elements": job.elements, "pages": pages,
             "tags": list(EDITABLE_TAGS), "edits": job.edits,
             "keys": [{"key": key, "tag": tag, "label": label, "what": what}
                      for key, tag, label, what in TAG_KEYS],
@@ -301,6 +305,15 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         job.started = time.monotonic()
         threading.Thread(target=_run_conversion, args=(job, job.source_path), daemon=True).start()
         return JSONResponse({"job_id": job.id})
+
+    async def job_page(request: Request) -> Response:
+        job = jobs.get(request.path_params["job_id"])
+        picture = job and job.page_images.get(int(request.path_params["page"]))
+        if not picture:
+            return JSONResponse({"error": "No such page."}, status_code=404)
+        # A page looks the same however it is tagged, so its picture never changes for a job.
+        return Response(picture, media_type="image/png",
+                        headers={"Cache-Control": "private, max-age=86400"})
 
     async def job_pdf(request: Request):
         job = jobs.get(request.path_params["job_id"])
@@ -399,6 +412,7 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         Route("/jobs/{job_id}/fix", job_fix, methods=["POST"]),
         Route("/jobs/{job_id}/elements", job_elements),
         Route("/jobs/{job_id}/edits", job_edits, methods=["POST"]),
+        Route("/jobs/{job_id}/pages/{page:int}", job_page),
         Route("/jobs/{job_id}/pdf", job_pdf),
         Route("/health", health),
         Route("/heartbeat", heartbeat, methods=["GET", "POST"]),

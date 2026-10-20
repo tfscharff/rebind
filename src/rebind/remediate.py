@@ -27,6 +27,7 @@ from . import contrast, formula_reader, layout_model, music, recolor, review
 from .extract import Page, TextLine, extract_pages
 from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines, order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
+from .pagecache import PageCache, file_key
 from .profile import build_profile, style_of
 from .validate import self_check_pdf_ua2
 
@@ -96,6 +97,11 @@ CAPTION_MARKER_RE = re.compile(
     r"^(?:fig(?:ure)?s?|plate|chart|graph|diagram|scheme|illus(?:tration)?|image|photo(?:graph)?"
     r"|exhibit|map|panel)\b\.?\s*(\d+)?",
     re.IGNORECASE)
+# "Figure 3 shows..." is prose that names a figure; a caption never goes on with a verb.
+CAPTION_PROSE_VERBS = frozenset(
+    "is are was were shows show showed shown illustrates illustrate depicts depict presents present "
+    "displays display gives give summarizes summarises compares demonstrates reveals indicates "
+    "represents contains has have can could may will".split())
 CAPTION_MAX_GAP_PT = 20.0
 # How far into the margin beside a figure its caption may sit. Much wider than the gap allowed
 # above or below, for two reasons: a caption set in the outer margin is separated by the margin
@@ -137,6 +143,15 @@ FIGURE_SAME_ROW_FRACTION = 0.5
 # The longest a callout label runs to ("Ventral", "2-10 ml glass syringe", "3 mm"). Longer than
 # this, inside a guessed figure box, is a sentence -- prose the picture sits around, not part of it.
 FIGURE_LABEL_MAX_WORDS = 6
+# A figure found from drawings or pixels is a table instead when at least this many lines sit in
+# it and this share of them are a table's.
+MIN_TABLE_LINES_IN_FIGURE = 4
+TABLE_SHARE_OF_FIGURE = 0.6
+# Sideways text is in the margin when no more than this share of the page's upright lines share
+# any of its width.
+MARGIN_SHARE = 0.1
+# A short line this close (in line heights) above or below running text is part of it.
+PARAGRAPH_LEADING_GAP = 1.0
 # A picture found some other way over the same music gives way to the music's own box, unless it is
 # this many times bigger -- then it is a picture with music in it, and keeps its box.
 MUSIC_REPLACES_AREA = 2.0
@@ -222,6 +237,11 @@ REVIEW_THUMB_PX = 420
 EDITOR_PAGE_DPI = 110
 EDITOR_PAGE_PX = 900
 
+# Worked out once per page of a file and reused by every rebuild (`pagecache`): the recognised text
+# of a scanned page, and the picture of each page the editor lays its boxes over.
+_recognised = PageCache()
+_editor_pictures = PageCache()
+
 
 @dataclass
 class RemediationResult:
@@ -247,7 +267,7 @@ class RemediationResult:
     # Every tagged element, in reading order, for the app's page editor: {id, page, kind, text,
     # left/top/width/height as percentages of the page}. A figure additionally carries "alt".
     elements: tuple[dict, ...] = ()
-    # A rendered thumbnail per page (data URI), so the editor can lay elements over the page.
+    # A rendered picture per page (PNG bytes), so the editor can lay elements over the page.
     page_images: dict = field(default_factory=dict)
 
 
@@ -354,8 +374,18 @@ def _horizontally_overlaps(a: tuple[float, float, float, float],
 
 
 def _is_caption_marker(text: str) -> bool:
-    """Whether a line opens with a caption label of any kind, numbered or not."""
-    return CAPTION_MARKER_RE.match(text.strip()) is not None
+    """Whether a line opens with a caption label of any kind, numbered or not.
+
+    Not a sentence *about* a figure: "Figure 3A. is FTIR spectra of..." opened a paragraph of a
+    real journal page, was taken for a caption, and made the table above it a figure.
+    """
+    match = CAPTION_MARKER_RE.match(text.strip())
+    if match is None:
+        return False
+    rest = text.strip()[match.end():].split()
+    if rest and re.fullmatch(r"\(?[A-Za-z]?\)?[.:]?", rest[0]):
+        rest = rest[1:]         # a panel letter: "Figure 3A." / "Fig. 2 (b)"
+    return not (rest and rest[0].lower() in CAPTION_PROSE_VERBS)
 
 
 def _caption_number(text: str) -> str | None:
@@ -367,7 +397,7 @@ def _caption_number(text: str) -> str | None:
     to this question, and `_is_caption_marker` is what asks whether a line is a caption at all.
     """
     match = CAPTION_MARKER_RE.match(text.strip())
-    return match.group(1) if match else None
+    return match.group(1) if match and _is_caption_marker(text) else None
 
 
 def _caption_block(ordered: list[TextLine], used: list | None = None) -> str | None:
@@ -611,6 +641,12 @@ def _crop_data_uri(page_image, bbox, page_width, page_height, max_side: int = 22
     """A small PNG preview (data URI) of the figure region, cropped from the rendered page."""
     import base64
 
+    png = _png(page_image, bbox, page_width, page_height, max_side)
+    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
+
+
+def _png(page_image, bbox, page_width, page_height, max_side: int) -> bytes:
+    """A region of the rendered page as PNG bytes, scaled down to fit `max_side`."""
     from PIL import Image
 
     height_px, width_px = page_image.shape[:2]
@@ -622,7 +658,7 @@ def _crop_data_uri(page_image, bbox, page_width, page_height, max_side: int = 22
     crop.thumbnail((max_side, max_side))
     buffer = io.BytesIO()
     crop.save(buffer, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    return buffer.getvalue()
 
 
 def _figure_xobject(pdf: pikepdf.Pdf, page_image, bbox, page_width, page_height) -> pikepdf.Object:
@@ -749,9 +785,16 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int,
         lines = list(src_page.lines)
         used_ocr = False
     else:
-        image = render_page_to_image(source, src_page.number, dpi=dpi)
-        lines = recognize(image, page_number=src_page.number, page_width=src_page.width,
-                          page_height=src_page.height, engine=engine)
+        # Recognised once per page: a rebuild for a saved correction reads the same scan again.
+        stamp = file_key(source)
+        key = stamp and stamp + (src_page.number, dpi)
+        lines = _recognised.get(key)
+        if lines is None:
+            image = render_page_to_image(source, src_page.number, dpi=dpi)
+            lines = _recognised.put(key, recognize(
+                image, page_number=src_page.number, page_width=src_page.width,
+                page_height=src_page.height, engine=engine))
+        lines = list(lines)
         used_ocr = True
     page = replace(src_page, lines=tuple(lines))
     # Figure regions are found before ordering, not after, so a diagram's callout labels can be
@@ -1274,6 +1317,38 @@ def _is_speck(line: TextLine, hints: layout_model.PageHints) -> bool:
             and id(line) not in hints.in_text)
 
 
+def _holds_table(lines: list[TextLine], hints: layout_model.PageHints, bbox: tuple) -> bool:
+    """Whether most of the text inside a region is a table's -- as the layout model boxed it, or,
+    without a model, as the geometric detector finds it."""
+    inside = [ln for ln in lines if _center_in_box(ln.bbox, bbox)]
+    if len(inside) < MIN_TABLE_LINES_IN_FIGURE:
+        return False
+    table = ({id(ln) for ln in inside if id(ln) in hints.tables} if hints.tables is not None
+             else detect_table_lines(inside))
+    return len(table) >= TABLE_SHARE_OF_FIGURE * len(inside)
+
+
+def _margin_furniture(lines: list[TextLine], width: float, height: float) -> list[TextLine]:
+    """Sideways text standing clear of the page's other text, lines made only of icon glyphs
+    (private-use characters: an envelope, a globe, a tick) that have nothing to read out, and text
+    set off the page entirely, which nobody sees."""
+    upright = [ln for ln in lines if not ln.rotated]
+    out = []
+    for line in lines:
+        text = line.text.strip()
+        x0, y0, x1, y1 = line.bbox
+        # In the margin: hardly any of the page's text shares its width. (Not "beyond the
+        # rightmost line": a heading's trailing spaces reached past a stamp on a real page.)
+        sharing = sum(1 for ln in upright if _horizontally_overlaps(ln.bbox, line.bbox))
+        if line.rotated and sharing <= MARGIN_SHARE * len(upright):
+            out.append(line)
+        elif x1 <= 0 or y1 <= 0 or x0 >= width or y0 >= height:
+            out.append(line)
+        elif text and all("" <= ch <= "" or ch.isspace() for ch in text):
+            out.append(line)
+    return out
+
+
 def _boxes_overlap(a: tuple, b: tuple) -> bool:
     return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
 
@@ -1291,9 +1366,10 @@ def _figure_text_strict(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
     line inside the box still held 238 of them back. Text hidden from a screen reader is the worst
     outcome available here, so a guessed box gets no benefit of the doubt.
     """
+    # Text turned sideways inside a picture is lettering on it (a plan's room labels), not prose.
     return [line for line in lines
             if _center_in_box(line.bbox, bbox)
-            and len(line.text.split()) <= FIGURE_LABEL_MAX_WORDS]
+            and (line.rotated or len(line.text.split()) <= FIGURE_LABEL_MAX_WORDS)]
 
 
 def _area(bbox: tuple) -> float:
@@ -1327,13 +1403,20 @@ def _figure_text(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
     Growth is floored at the caption. The caption is real text that belongs in the reading order in
     its own right -- it is also what the figure's alt text was taken from -- so neither it nor the
     body text beneath it may be swallowed, however close the artwork comes to it.
+
+    Only labels are ever claimed, never a line of a paragraph (`_paragraph_lines`). Growing
+    through prose cascaded on a real journal: a cover's sidebar image swallowed the whole title
+    block beside it, and a page's chart swallowed the five paragraphs stacked above it, leading
+    for leading -- all of it hidden from a screen reader as decoration.
     """
     floor = max(
         (ln.bbox[3] for ln in lines
          if _is_caption_marker(ln.text) and ln.bbox[3] <= bbox[1] + FIGURE_TEXT_TOLERANCE_PT),
         default=None,
     )
-    candidates = [ln for ln in lines if floor is None or ln.bbox[3] > floor]
+    prose = _paragraph_lines(lines)
+    candidates = [ln for ln in lines if (floor is None or ln.bbox[3] > floor)
+                  and id(ln) not in prose]
     owned: list[TextLine] = []
     box = bbox
     changed = True
@@ -1350,6 +1433,32 @@ def _figure_text(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
                        max(box[2], line.bbox[2]), max(box[3], line.bbox[3]))
                 changed = True
     return owned
+
+
+def _paragraph_lines(lines: list[TextLine]) -> set[int]:
+    """The lines (by `id`) that are running text: a line longer than a label set in a run with
+    other lines, and every line set at a paragraph's leading next to one -- the last line of a
+    paragraph ("rivers."), a title's short last line, a byline's DOI under its journal reference.
+
+    A long line standing alone is not a paragraph: on a drawing it is a callout ("D  Bond this part
+    with super glue"), and it stays the drawing's."""
+    def near(line: TextLine, other: TextLine) -> bool:
+        if other is line or not _horizontally_overlaps(line.bbox, other.bbox):
+            return False
+        gap = max(other.bbox[1] - line.bbox[3], line.bbox[1] - other.bbox[3])
+        return gap <= PARAGRAPH_LEADING_GAP * max(line.bbox[3] - line.bbox[1],
+                                                  other.bbox[3] - other.bbox[1])
+
+    prose = {id(ln) for ln in lines if len(ln.text.split()) > FIGURE_LABEL_MAX_WORDS
+             and any(near(ln, other) for other in lines)}
+    grew = True
+    while grew:
+        grew = False
+        for line in lines:
+            if id(line) not in prose and any(id(o) in prose and near(line, o) for o in lines):
+                prose.add(id(line))
+                grew = True
+    return prose
 
 
 def _figure_anchor(lines: list[TextLine], mcids: list[int | None], figure_index: int,
@@ -2581,7 +2690,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
     undescribed_figures: list[dict] = []
     page_elements: list[dict] = []
-    page_images: dict[int, str] = {}
+    page_images: dict[int, bytes] = {}
     figure_boxes: dict[int, tuple] = {}
     heading_entries: list[tuple[int, pikepdf.Object, str]] = []   # (level, struct_elem, title)
 
@@ -2646,6 +2755,13 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             found = _scanned_figures(render_source, src_page, list(lines), dpi, figures)
             scan_regions = {fid for fid, _bbox in found}
             figures += found
+        # A table is not a picture. A drawn table's rules look like line art and a scanned one's
+        # ink like an illustration, so a figure found from drawings or pixels that holds a table's
+        # lines gives way to the table: tagged as one, a screen reader can move through it cell by
+        # cell with each header announced, which no description of it can do (WCAG 1.3.1).
+        figures = [(fid, bbox) for fid, bbox in figures
+                   if fid in music_of or re.fullmatch(r"p\d+f\d+", fid)
+                   or not _holds_table(lines, hints, bbox)]
         # A figure sitting directly under (or, less commonly, above) a "Fig. N ..." caption needs
         # no manual description at all: the author's own words are more accurate than anything
         # Rebind could invent, and this skips the app's describe step entirely. A thin local match
@@ -2778,6 +2894,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # editor either -- a page of them was a page of Tab stops. A frame drawn over one still
         # brings it back, like any line Rebind set aside.
         specks = {id(ln) for ln in lines if scanned and _is_speck(ln, hints)}
+        # Text turned sideways in a margin (a download stamp, an archive identifier) and icon
+        # glyphs with no characters a reader could say are furniture too.
+        specks |= {id(ln) for ln in _margin_furniture(lines, src_page.width, src_page.height)}
         is_artifact = [
             index not in promoted
             and id(ln) not in owner_figure
@@ -3091,12 +3210,19 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                 "editable": True,
             })
         # The editor lays elements over a picture of the page, so every page needs one -- reusing
-        # the render already made for a figure crop or a rebuild where there is one.
-        editor_image = page_image if page_image is not None else render_page_to_image(
-            render_source, src_page.number, dpi=EDITOR_PAGE_DPI)
-        page_images[src_page.number] = _crop_data_uri(
-            editor_image, (0.0, 0.0, src_page.width, src_page.height),
-            src_page.width, src_page.height, max_side=EDITOR_PAGE_PX)
+        # the render already made for a figure crop or a rebuild where there is one, and the
+        # picture from the last rebuild where the page has not changed (an edit never changes
+        # how a page looks).
+        stamp = file_key(source)
+        picture_key = stamp and stamp + (src_page.number, darken_contrast)
+        picture = _editor_pictures.get(picture_key)
+        if picture is None:
+            editor_image = page_image if page_image is not None else render_page_to_image(
+                render_source, src_page.number, dpi=EDITOR_PAGE_DPI)
+            picture = _editor_pictures.put(picture_key, _png(
+                editor_image, (0.0, 0.0, src_page.width, src_page.height),
+                src_page.width, src_page.height, max_side=EDITOR_PAGE_PX))
+        page_images[src_page.number] = picture
         for fid, bbox in undescribed:
             # A caption too thin to be used as alt text on its own ("Fig. 8", or a "(Continued)"
             # page-break artifact) is still the best opening line anyone has: it is offered to the
@@ -3125,9 +3251,6 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     # the reading order is the one just built above.
     orders = [review.page_order(src_page, layout, figure_boxes.get(src_page.number, ()))
               for src_page, layout in layouts]
-    # The review reuses the editor's page pictures rather than rendering the same pages again.
-    thumbs = {order.page: page_images.get(order.page, "")
-              for order in orders if order.needs_review}
     # After recolouring, the pages extracted at the top of this function still carry the *old*
     # declared ink colours, and the ink is what `contrast` trusts the declaration for. Re-read them
     # from the corrected document so the report describes what was actually produced.
@@ -3142,7 +3265,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         ocr_pages=tuple(ocr_pages), empty_pages=tuple(empty_pages), added_text_layer=added_layer,
         figures=tuple(undescribed_figures),
         structure_ok=self_check.ok, structure_issues=self_check.issues,
-        reading_order=review.summarize(orders, thumbs),
+        reading_order=review.summarize(orders),
         contrast=contrast.summarize(measured, darkened=recoloured),
         elements=tuple(page_elements), page_images=page_images,
     )
