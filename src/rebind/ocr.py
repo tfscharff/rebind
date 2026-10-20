@@ -8,6 +8,7 @@ needs no API key, GPU or network at runtime -- see docs/decisions/0005-ocr-engin
 
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field, replace
@@ -204,7 +205,8 @@ SCRIPT_SIGNS = frozenset("+-−–")
 # the line's own measure of where its baseline and top are.
 ON_BASELINE = frozenset("acemnorsuvwxzhkbdlftABCDEFGHIKLMNOPRSTUVWXYZ")
 AT_CAP_HEIGHT = frozenset("bdfhkltABCDEFGHIKLMNOPRSTUVWXYZ")
-# A figure at least this share of the line's cap height is full size.
+# A figure or sign at least this share of the line's cap height is full size, and on a scan a
+# full-size one is never taken for a script.
 SCRIPT_MAX_HEIGHT = 0.8
 # A smaller figure is a subscript when its foot is below the baseline by this share of the cap
 # height, and a superscript when its foot is above it by this share.
@@ -212,10 +214,10 @@ SUBSCRIPT_DROP = 0.12
 SUPERSCRIPT_RISE = 0.3
 
 
-def _extent(ink: _Ink, cell) -> tuple[float, float] | None:
-    """The top and bottom of a character's shape: the one mark whose middle is nearest the middle
-    of the character's column. A whole mark, so a figure is measured as the figure it is and not as
-    a strip of it; the nearest, because the recognizer's columns drift a little off the glyphs."""
+def _extent(ink: _Ink, cell) -> tuple[float, float, float] | None:
+    """The top, bottom and width of a character's shape: the one mark whose middle is nearest the
+    middle of the character's column. A whole mark, so a figure is measured as the figure it is and
+    not as a strip of it; the nearest, because the recognizer's columns drift off the glyphs."""
     labels, stats = ink.marks()
     xs = [x for x, _y in cell]
     ys = [y for _x, y in cell]
@@ -234,15 +236,16 @@ def _extent(ink: _Ink, cell) -> tuple[float, float] | None:
         if not left <= centre <= right or mh > 2 * (y1 - y0):
             continue
         if best is None or abs(centre - middle) < best[0]:
-            best = (abs(centre - middle), my, my + mh)
-    return None if best is None else (best[1], best[2])
+            best = (abs(centre - middle), my, my + mh, mw)
+    return None if best is None else best[1:]
 
 
 def _fit(points: list[tuple[float, float]]):
     """A straight line through (x, y) points -- a tilted scan's baseline is not level -- or a level
     one through their median when there are too few to fit."""
     ys = sorted(y for _x, y in points)
-    if len(points) >= 4:
+    xs = [x for x, _y in points]
+    if len(points) >= 4 and max(xs) - min(xs) > 1:
         slope, intercept = np.polyfit([x for x, _y in points], [y for _x, y in points], 1)
         if abs(slope) < 0.1:
             return lambda x: slope * x + intercept
@@ -286,20 +289,26 @@ def _inline_scripts(ink: _Ink, chars: list[str], cells: list) -> list[tuple[int,
         foot, height = baseline(x), baseline(x) - cap(x)
         if height <= 0:
             continue
-        top, bottom = span
+        top, bottom, width = span
+        if bottom - top >= SCRIPT_MAX_HEIGHT * height:
+            continue        # set full size: on a scan, position alone is too easily noise
         if char in SCRIPT_DIGITS:
-            # A figure set small needs to sit only a little off the line; one at full size -- some
-            # typesetters only move it -- has to be moved well off it.
-            full = bottom - top >= SCRIPT_MAX_HEIGHT * height
-            raised = bottom < foot - (SUPERSCRIPT_RISE + 0.05 * full) * height
-            if not raised and bottom <= foot + (0.3 if full else SUBSCRIPT_DROP) * height:
+            raised = bottom < foot - SUPERSCRIPT_RISE * height
+            if not raised and bottom <= foot + SUBSCRIPT_DROP * height:
                 continue
         else:
             # A sign has no foot of its own; where its middle sits says it. On the line, a plus or
-            # a dash is drawn about a third of the way up.
+            # a dash is drawn about a third of the way up. And it must be the shape of the sign it
+            # was read as -- a dash wide and thin, a plus about square -- or the mark measured is
+            # some neighbour's.
+            tall = max(bottom - top, 1)
+            if char == "+" and not 0.6 <= width / tall <= 1.6:
+                continue
+            if char != "+" and (width < 1.5 * tall or tall > 0.25 * height):
+                continue
             centre = (top + bottom) / 2
             raised = centre < foot - 0.65 * height
-            if not raised and centre <= foot + 0.05 * height:
+            if not raised:
                 continue
         shift = (foot - height / 2) - (top + bottom) / 2     # how far above the line's middle
         run = runs[-1] if runs else None
@@ -308,7 +317,35 @@ def _inline_scripts(ink: _Ink, chars: list[str], cells: list) -> list[tuple[int,
             run[2].append(shift)
         else:
             runs.append([start, end, [shift], raised])
-    return [(start, end, sorted(shifts)[len(shifts) // 2]) for start, end, shifts, _r in runs]
+    text = "".join(chars)
+    return [(start, end, sorted(shifts)[len(shifts) // 2]) for start, end, shifts, raised in runs
+            if _belongs(text, start, end, raised)]
+
+
+def _belongs(text: str, start: int, end: int, raised: bool) -> bool:
+    """Whether a run measured as a script sits where a script can: a scan's measurements are
+    rough, and what is written around a run rules out most of the mistakes.
+
+    A script hangs on what it qualifies, with no space between -- "H2", "Ca2+", "al.12" -- or,
+    raised, leads into a symbol ("14C"). A subscript follows a letter or a closing bracket, never a
+    figure, and a superscript follows a figure only as a power of ten. And nothing inside a number
+    is a script: "5760" is one number, however its figures wander.
+    """
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    closes = before != "" and before in ")]"
+    if before.isdigit() and after.isdigit():
+        return False
+    if not raised:
+        return before.isalpha() or closes
+    if all(ch in SCRIPT_SIGNS for ch in text[start:end]):
+        return before.isalnum() or closes
+    if before.isdigit():
+        # A figure raised after a number is a power, and powers are of ten: "10-5", "10 3".
+        return text[:start].split()[-1].endswith("10") if text[:start].split() else False
+    if before == "" or before.isspace():
+        return after.isalpha()          # leading into a symbol: "14C"
+    return before not in ",;:"
 
 
 # A band of ink the recognizer left unread is read again when it is about a line high (between
@@ -322,6 +359,7 @@ RESCUE_MIN_CONFIDENCE = 0.6
 # unsteady on a line crowded with scripts -- each way finds pieces the others miss -- so all four
 # are tried and the one that accounts for the most of the band's ink, read once, is kept.
 RESCUE_WAYS = ((0.5, 0.0), (0.3, 0.0), (0.5, 0.6), (0.3, 0.6))     # (box threshold, margin)
+_IDEOGRAPHS = re.compile("[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]")
 
 
 def _read_missed(engine: OcrEngine, image: np.ndarray, ink: _Ink,
@@ -350,6 +388,11 @@ def _read_missed(engine: OcrEngine, image: np.ndarray, ink: _Ink,
     big[0] = False
     left_over = big[labels]
 
+    # The recognizer knows Chinese as well as Latin script, and a band of something that is not
+    # text at all (notation, ornament) can come back as a few ideographs. On a page whose own text
+    # is hardly written in them, they are that.
+    written = "".join(read.text for read in reads)
+    ideographic = len(_IDEOGRAPHS.findall(written)) >= 0.2 * max(len(written), 1)
     found: list[_Read] = []
     rows = np.flatnonzero(left_over.any(axis=1))
     if rows.size == 0:
@@ -382,7 +425,8 @@ def _read_missed(engine: OcrEngine, image: np.ndarray, ink: _Ink,
                                         value=(255, 255, 255))
             way = [read for read in _read(engine, framed, ink, dx=x0 - border, dy=y0 - border,
                                           box_thresh=threshold)
-                   if read.confidence >= RESCUE_MIN_CONFIDENCE]
+                   if read.confidence >= RESCUE_MIN_CONFIDENCE
+                   and (ideographic or not _IDEOGRAPHS.search(read.text))]
             score = _accounted_for(band, way, x0, y0)
             if score > best_score:
                 best, best_score = way, score
@@ -443,15 +487,18 @@ def _join_rows(reads: list[_Read]) -> list[_Read]:
                 out.append(joined)
                 joined = None
             if joined is None:
+                # A small piece opening a row is a note number or the like, not a script.
                 joined = _Read(read.box, read.text, read.confidence, list(read.scripts),
                                main.body, read.tight)
-                if is_script(read):
-                    joined.scripts = [(0, len(read.text), middle - read.middle)]
                 continue
             space = " " if _gap(joined, read) > WORD_GAP * body else ""
             at = len(joined.text) + len(space)
-            scripts = ([(at, at + len(read.text), middle - read.middle)] if is_script(read)
-                       else [(at + start, at + end, shift) for start, end, shift in read.scripts])
+            text = joined.text + space + read.text
+            shift = middle - read.middle
+            if is_script(read) and _belongs(text, at, len(text), shift > 0):
+                scripts = [(at, len(text), shift)]
+            else:
+                scripts = [(at + start, at + end, shift) for start, end, shift in read.scripts]
             weight = len(joined.text), len(read.text)
             joined = _Read(
                 _union(joined.box, read.box), joined.text + space + read.text,

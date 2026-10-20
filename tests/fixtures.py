@@ -366,7 +366,9 @@ def born_digital_pdf_with_captioned_image(target: Path, *, caption: str | None =
 
 # A paragraph of chemistry: subscripts (atom counts), superscripts (charges, powers, a note mark,
 # an isotope), and the hardest case -- a subscript followed straight by a superscript, "SO4 2-".
+# Set at 70%, as a typesetter sets them.
 CHEMISTRY_HTML = (
+    "<style>sub, sup { font-size: 70% }</style>"
     "<h1>Aqueous equilibria</h1>"
     "<p>Water (H<sub>2</sub>O) dissolves CO<sub>2</sub> to form H<sub>2</sub>CO<sub>3</sub>, "
     "which releases H<sup>+</sup> and HCO<sub>3</sub><sup>&#8722;</sup>. Sulfate, "
