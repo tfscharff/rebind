@@ -103,6 +103,16 @@ it never supplies text, so a wrong box can only group wrongly, which the editor 
   otherwise: the previous line stopping short of the measure, a first-line indent, a gap wider than
   the run's leading, or a change of size, weight, slope or face. Where signals disagree the split
   is kept.
+- **Superscripts and subscripts** — each a `/Span` inside its paragraph, heading, caption, list
+  item or cell, carrying the standard Layout attribute `/BaselineShift` (positive raised, negative
+  lowered, in points). The words around them stay one element, so "Ca²⁺" and "10⁻⁵" are not lost
+  as a charge and a power. Born-digital: read from where the PDF places each character's baseline.
+  A line pdfminer breaks at a subscript followed by a superscript ("SO₄²⁻") is rejoined. Scanned:
+  each figure and sign is measured against its line's own baseline and cap height. A line the text
+  finder drops because its scripts crowd the lines around it is found from the ink left unread and
+  read again on its own, and pieces read separately are joined back with their scripts. Letters are
+  not judged on a scan (`K_sp` is caught only when it comes back as its own piece). The text stays
+  as printed ("H2O"), and most screen readers do not yet announce a baseline shift.
 - **Page furniture** `/Artifact` — running heads, footers, folios. Born-digital: the same style
   recurring at a page edge. Scanned: the same *words* recurring at a page edge, digits stripped so
   a changing folio still matches. The threshold is a quarter of the document's pages, because a

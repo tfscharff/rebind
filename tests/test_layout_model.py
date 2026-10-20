@@ -11,7 +11,9 @@ import pytest
 
 from rebind.extract import TextLine
 from rebind.layout_model import PageHints, Region, hints_for
-from rebind.remediate import _caption_groups, plan_page, remediate
+from rebind.captions import _caption_groups
+from rebind.plan import plan_page
+from rebind.remediate import remediate
 from tests.fixtures import born_digital_pdf
 
 
@@ -218,7 +220,7 @@ def test_a_boxed_equation_is_tagged_as_a_formula_and_takes_a_description(
     text; described, it reads the words the person gave -- and either way the document conforms."""
     from rebind import layout_model
     from rebind.extract import extract_pages
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from rebind.validate import validate_pdf_ua
 
     source = born_digital_pdf(
@@ -269,7 +271,7 @@ def test_confident_pictures_are_kept_for_figures_and_text_regions_are_noted():
     ("3.", True, True, False),
 ])
 def test_what_counts_as_a_speck(text, in_text, modelled, speck):
-    from rebind.remediate import _is_speck
+    from rebind.figures import _is_speck
 
     mark = line(text, (100, 100, 110, 110))
     hints = PageHints(tables={} if modelled else None, in_text={id(mark)} if in_text else set())

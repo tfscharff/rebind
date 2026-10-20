@@ -171,3 +171,41 @@ def test_text_printed_sideways_is_put_back_together():
     joined = _join_rotated([body, *chars], {id(c): 1 for c in chars})
     assert [ln.text for ln in joined] == ["Body", "01 June"]
     assert joined[1].rotated and joined[1].bbox[1] < joined[1].bbox[3] - 20
+
+
+def _scripts(line):
+    return [(line.text[s.start:s.end], s.raised) for s in line.scripts]
+
+
+def test_superscripts_and_subscripts_are_found_from_where_the_page_puts_them(tmp_path: Path):
+    from tests.fixtures import CHEMISTRY_HTML
+
+    source = born_digital_pdf(CHEMISTRY_HTML, tmp_path / "chem.pdf")
+    lines = list(extract_pages(source))[0].lines
+    water = next(ln for ln in lines if ln.text.startswith("Water"))
+    assert water.text.startswith("Water (H2O) dissolves CO2")
+    assert _scripts(water)[:2] == [("2", False), ("2", False)]
+    assert ("+", True) in _scripts(water)
+    rate = next(ln for ln in lines if ln.text.startswith("The rate"))
+    assert ("3", True) in _scripts(rate) and ("12", True) in _scripts(rate)
+    assert ("−1", True) in _scripts(rate)
+    for script in water.scripts + rate.scripts:
+        assert abs(script.shift) > 2
+
+
+def test_a_line_broken_at_a_charge_is_put_back_together(tmp_path: Path):
+    # pdfminer starts a new line where a subscript is followed straight by a superscript: "SO4"
+    # then "2-" split one line in two, and the charge on "HCO3-." became a line of its own.
+    from tests.fixtures import CHEMISTRY_HTML
+
+    source = born_digital_pdf(CHEMISTRY_HTML, tmp_path / "chem.pdf")
+    texts = [ln.text for ln in list(extract_pages(source))[0].lines]
+    assert any(text.endswith("HCO3−.") for text in texts)
+    sulfate = next(text for text in texts if text.startswith("Sulfate"))
+    assert sulfate.startswith("Sulfate, SO42−, binds Ca2+ strongly")
+    assert not any(text.startswith("−") or text.startswith("2−") for text in texts)
+
+
+def test_text_on_one_baseline_has_no_scripts(tmp_path: Path):
+    source = born_digital_pdf("<p>Plain words, 1996 and 42 and x-ray.</p>", tmp_path / "p.pdf")
+    assert all(not ln.scripts for ln in list(extract_pages(source))[0].lines)

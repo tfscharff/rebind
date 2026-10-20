@@ -8,7 +8,9 @@ import pikepdf
 import pypdfium2 as pdfium
 import pytest
 
-from rebind.remediate import EDITABLE_TAGS, _encode_winansi, remediate
+from rebind.edits import EDITABLE_TAGS
+from rebind.overlay import _encode_winansi
+from rebind.remediate import remediate
 from tests.fixtures import born_digital_pdf, pdf_image_only_scan
 
 
@@ -361,7 +363,7 @@ def test_edited_tags_and_removals_still_produce_a_conformant_document(tmp_path: 
     # A removed element's content must become an artifact, not merely lose its tag: content that
     # names a structure element the tree cannot resolve reads as untagged content and fails
     # clause 8.2.2. Caught exactly that way -- the self-check passed, veraPDF did not.
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from rebind.validate import validate_pdf_ua
     from tests.fixtures import born_digital_pdf
 
@@ -395,7 +397,7 @@ def test_every_offered_tag_produces_a_conformant_document(tag: str, tmp_path: Pa
     # got this wrong repeatedly: /Caption and /Quote are illegal there, /Aside is not a PDF 2.0 name
     # at all, a grouping element may not hold content directly, and /Figure needs an /Alt. One case
     # per tag, so a failure names the tag rather than "one of them".
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from rebind.validate import validate_pdf_ua
     from tests.fixtures import born_digital_pdf_with_captioned_drawing
 
@@ -413,9 +415,9 @@ def test_every_offered_tag_produces_a_conformant_document(tag: str, tmp_path: Pa
 
 
 def test_every_hotkey_names_a_tag_that_exists():
-    from rebind.remediate import TAG_KEYS
+    from rebind.edits import TAG_KEYS
 
-    from rebind.remediate import ARTIFACT_KEY
+    from rebind.edits import ARTIFACT_KEY
 
     keys = [key for key, _tag, _label, _what in TAG_KEYS]
     assert len(keys) == len(set(keys)), "hotkeys must be unique"
@@ -439,7 +441,7 @@ def test_row_hotkeys_are_the_same_keys_as_the_whole_element_cell_tags():
     # A table Rebind did not find has to be buildable by hand, so TH/TD are offered on every
     # element -- and the keys must be the same ones a detected table's rows answer to, or the
     # same act has two different keys depending on whether Rebind happened to spot the table.
-    from rebind.remediate import EDITABLE_TAGS, ROW_TAG_KEYS, TAG_KEYS
+    from rebind.edits import EDITABLE_TAGS, ROW_TAG_KEYS, TAG_KEYS
 
     keys = [key for key, _tag, _label, _what in ROW_TAG_KEYS]
     assert len(keys) == len(set(keys)), "row hotkeys must be unique"
@@ -454,7 +456,7 @@ def test_row_hotkeys_are_the_same_keys_as_the_whole_element_cell_tags():
 
 
 def test_edits_accepts_cell_tags_on_rows_and_on_elements():
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
 
     edits = Edits.from_payload({"tags": {"p1n0": "H2", "p1n0r0": "TH", "p1n0r1": "TD",
                                           "p1n3": "TH", "p1n0r2": "NotARealTag"}})
@@ -464,7 +466,7 @@ def test_edits_accepts_cell_tags_on_rows_and_on_elements():
 def test_elements_tagged_as_cells_are_built_into_one_table(tmp_path: Path, verapdf_exe: Path):
     # A bare /TH or /TD with no /TR and /Table around it is illegal structure, so a run of elements
     # a person marked as cells is gathered into one table, row by row, rather than tagged as-is.
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from rebind.validate import validate_pdf_ua
     from tests.fixtures import born_digital_pdf
 
@@ -490,7 +492,7 @@ def test_elements_tagged_as_cells_are_built_into_one_table(tmp_path: Path, verap
 
 
 def test_cells_side_by_side_share_a_row():
-    from rebind.remediate import _cell_rows
+    from rebind.tables import _cell_rows
 
     # Header row: two one-line cells. Data row: a three-line cell beside a one-line cell set at
     # its top -- still one row, which banding on centres alone would have split in two.
@@ -500,7 +502,7 @@ def test_cells_side_by_side_share_a_row():
 
 def test_a_frame_regroups_the_lines_it_encloses():
     from rebind.extract import TextLine
-    from rebind.remediate import _apply_frames
+    from rebind.plan import _apply_frames
 
     def line(y, text):
         return TextLine(text=text, page=1, bbox=(72, y, 300, y + 10), font="Times", size=10.0,
@@ -523,7 +525,8 @@ def test_a_frame_regroups_the_lines_it_encloses():
 
 def test_a_framed_table_row_regroups_the_cells_it_encloses():
     from rebind.extract import TextLine
-    from rebind.remediate import _apply_frames, _table_row_groups
+    from rebind.plan import _apply_frames
+    from rebind.tables import _table_row_groups
 
     def cell(x, y, text):
         return TextLine(text=text, page=1, bbox=(x, y, x + 60, y + 10), font="Times", size=10.0,
@@ -561,7 +564,7 @@ def test_a_framed_table_row_regroups_the_cells_it_encloses():
 
 def test_an_inserted_element_holds_what_its_frame_encloses():
     from rebind.extract import TextLine
-    from rebind.remediate import _apply_frames
+    from rebind.plan import _apply_frames
 
     def line(y, text):
         return TextLine(text=text, page=1, bbox=(72, y, 300, y + 10), font="Times", size=10.0,
@@ -586,7 +589,7 @@ def test_lines_a_row_gives_up_are_read_where_they_sit_not_inside_the_table():
     # after the paragraph above it there, not straight after the table in the left one. Lines given
     # up together are one paragraph, not one per line.
     from rebind.extract import TextLine
-    from rebind.remediate import _apply_frames
+    from rebind.plan import _apply_frames
 
     def at(x, y, text, w=60):
         return TextLine(text=text, page=1, bbox=(x, y, x + w, y + 10), font="Times", size=10.0,
@@ -623,7 +626,7 @@ def test_lines_a_row_gives_up_are_read_where_they_sit_not_inside_the_table():
 def test_an_element_made_of_released_lines_has_a_frame_of_its_own(tmp_path: Path):
     # Shrinking a frame releases lines as an element of their own. That element has to be
     # reshapeable like any other, or what a frame lets go of can never be gathered up again.
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from tests.fixtures import born_digital_pdf
 
     source = born_digital_pdf(
@@ -655,7 +658,7 @@ def test_an_element_made_of_released_lines_has_a_frame_of_its_own(tmp_path: Path
 
 def test_an_inserted_element_follows_the_element_it_was_inserted_after():
     from rebind.extract import TextLine
-    from rebind.remediate import _apply_frames
+    from rebind.plan import _apply_frames
 
     def line(y, text):
         return TextLine(text=text, page=1, bbox=(72, y, 300, y + 10), font="Times", size=10.0,
@@ -674,7 +677,8 @@ def test_an_inserted_element_follows_the_element_it_was_inserted_after():
 
 def test_an_inserted_row_follows_the_row_it_was_inserted_after():
     from rebind.extract import TextLine
-    from rebind.remediate import _apply_frames, _table_row_groups
+    from rebind.plan import _apply_frames
+    from rebind.tables import _table_row_groups
 
     def cell(x, y, text):
         return TextLine(text=text, page=1, bbox=(x, y, x + 60, y + 10), font="Times", size=10.0,
@@ -693,7 +697,7 @@ def test_an_inserted_row_follows_the_row_it_was_inserted_after():
 
 
 def test_an_inserted_element_is_listed_and_tagged_where_it_was_inserted(tmp_path: Path):
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from tests.fixtures import born_digital_pdf
 
     body = "".join(
@@ -722,7 +726,8 @@ def test_an_inserted_element_is_listed_and_tagged_where_it_was_inserted(tmp_path
 
 def test_table_rows_can_be_inserted_and_removed():
     from rebind.extract import TextLine
-    from rebind.remediate import _apply_frames, _table_row_groups
+    from rebind.plan import _apply_frames
+    from rebind.tables import _table_row_groups
 
     def cell(x, y, text):
         return TextLine(text=text, page=1, bbox=(x, y, x + 60, y + 10), font="Times", size=10.0,
@@ -756,7 +761,7 @@ def test_table_rows_can_be_inserted_and_removed():
 
 def test_a_removed_table_row_is_offered_back_and_still_validates(tmp_path: Path,
                                                                   verapdf_exe: Path):
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from rebind.validate import validate_pdf_ua
     from tests.fixtures import born_digital_pdf_with_table
 
@@ -776,7 +781,7 @@ def test_a_removed_table_row_is_offered_back_and_still_validates(tmp_path: Path,
 
 def test_an_inserted_element_can_take_in_a_line_rebind_set_aside(tmp_path: Path,
                                                                   verapdf_exe: Path):
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from rebind.validate import validate_pdf_ua
     from tests.fixtures import born_digital_pdf
 
@@ -800,7 +805,7 @@ def test_an_inserted_element_can_take_in_a_line_rebind_set_aside(tmp_path: Path,
 
 def test_a_framed_table_row_is_rebuilt_from_what_the_frame_encloses(tmp_path: Path,
                                                                     verapdf_exe: Path):
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from rebind.validate import validate_pdf_ua
     from tests.fixtures import born_digital_pdf
 
@@ -829,7 +834,7 @@ def test_a_framed_table_row_is_rebuilt_from_what_the_frame_encloses(tmp_path: Pa
 
 def test_a_framed_element_is_rebuilt_from_what_the_frame_encloses(tmp_path: Path,
                                                                      verapdf_exe: Path):
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from rebind.validate import validate_pdf_ua
     from tests.fixtures import born_digital_pdf
 
@@ -852,7 +857,7 @@ def test_a_framed_element_is_rebuilt_from_what_the_frame_encloses(tmp_path: Path
 
 
 def test_edits_accepts_only_well_formed_frames():
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
 
     edits = Edits.from_payload({"frames": {"p1n0": [10, 20, 30, 5], "p1n1": [1, 2, 3],
                                            "p1n2": [1, 2, -3, 4], "p1n3": ["x", 1, 1, 1]}})
@@ -1271,7 +1276,7 @@ def test_a_scans_own_invisible_ocr_layer_is_removed_and_visible_marks_are_kept()
     # checks of clause 8.4.5.8 on a real sample, for a font nothing needs once Rebind has laid
     # down its own tagged invisible layer over the same words. The layer and its font go; every
     # visible mark stays, so the page still looks exactly as it did.
-    from rebind.remediate import _strip_invisible_text
+    from rebind.overlay import _strip_invisible_text
 
     pdf = pikepdf.new()
     page = pdf.add_blank_page(page_size=(200, 200))
@@ -1300,7 +1305,7 @@ def test_invisible_mode_restored_by_Q_does_not_delete_visible_text():
     # The text rendering mode is part of the graphics state, so `Q` restores it. A stripper that
     # tracked `Tr` but not `q`/`Q` would still believe the mode was 3 after the restore and delete
     # text the page genuinely shows -- silently destroying content, the worst failure available.
-    from rebind.remediate import _strip_invisible_text
+    from rebind.overlay import _strip_invisible_text
 
     pdf = pikepdf.new()
     page = pdf.add_blank_page(page_size=(200, 200))
@@ -1325,7 +1330,7 @@ def test_a_picture_guessed_from_a_scan_never_swallows_prose():
     # real scanned book out of the reading order into decorative artifacts -- text hidden from a
     # screen reader, which is the worst outcome available here.
     from rebind.extract import TextLine
-    from rebind.remediate import _figure_text, _figure_text_strict
+    from rebind.figures import _figure_text, _figure_text_strict
 
     def line(text: str, box: tuple) -> TextLine:
         return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False)
@@ -1360,7 +1365,7 @@ def test_a_caption_beside_a_figure_is_found_and_an_ambiguous_one_is_not():
     # and lets the caller refuse when there is more than one -- the wrong caption is a fabrication,
     # which is worse than an empty box and a question.
     from rebind.extract import TextLine
-    from rebind.remediate import _side_captions
+    from rebind.captions import _side_captions
 
     def line(text: str, box: tuple) -> TextLine:
         return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False)
@@ -1454,7 +1459,7 @@ def test_a_wide_caption_sharing_a_paragraphs_margin_does_not_widen_its_measure()
     # reached, so every one of them read as falling short of it -- "ragged" -- and eleven lines of
     # one paragraph became eleven one-line elements instead of one.
     from rebind.extract import TextLine
-    from rebind.remediate import _column_measures, _same_paragraph
+    from rebind.plan import _column_measures, _same_paragraph
 
     def line(text, x0, x1, y1, size=10.0):
         return TextLine(text=text, page=1, bbox=(x0, y1 - size - 2, x1, y1), font="F",
@@ -1543,7 +1548,7 @@ def test_a_scans_invisible_ocr_layer_is_not_measured_for_contrast():
     # lines and 49 "contrast failures" on a real scan, every one of them text drawn in rendering
     # mode 3 that nobody can see -- and that Rebind strips out before writing the document. A page
     # whose text is entirely invisible has nothing to measure; what a reader sees is the picture.
-    from rebind.remediate import _text_visibility
+    from rebind.overlay import _text_visibility
 
     pdf = pikepdf.new()
     sandwich = pdf.add_blank_page(page_size=(200, 200))
@@ -1568,7 +1573,7 @@ def test_scripts_are_removed_only_when_asked_for():
     # A script is behaviour the author put there. The report offers removing it as a fix, so it
     # happens because someone chose it -- never silently, which is the same rule that governs
     # every other change Rebind makes to what a document does.
-    from rebind.remediate import _strip_scripts
+    from rebind.document import _strip_scripts
 
     def with_scripts():
         pdf = pikepdf.new()
@@ -1597,7 +1602,7 @@ def test_table_cells_sharing_a_column_are_all_owned():
     # ("unowned marked content"). Real, not hypothetical: a noisy OCR'd page of a scanned grid
     # produces colliding cells constantly. Both cells must end up owned, in the same /TD.
     from rebind.extract import TextLine
-    from rebind.remediate import _page_structure
+    from rebind.structure import _page_structure
 
     def cell(text: str, x: float, y: float) -> TextLine:
         return TextLine(text=text, page=1, bbox=(x, y, x + 4, y + 9), font="F", size=9,
@@ -1633,7 +1638,7 @@ def test_a_row_can_be_promoted_to_header_by_id(tmp_path: Path, verapdf_exe: Path
     # table with no header row at all, or one whose header is really its second row). The row
     # sub-elements from Task 3 exist so a person can correct exactly one row without retagging the
     # whole table.
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from rebind.validate import validate_pdf_ua
     from tests.fixtures import born_digital_pdf_with_table
 
@@ -1747,7 +1752,7 @@ def test_footnote_tag_builds_as_note(tmp_path: Path, verapdf_exe: Path):
     # P, H1-H6 and BlockQuote (it takes its element's marked content directly), but unlike them it
     # needs a RoleMap entry to /P or PDF/UA-2 clause 8.2.5.14 rejects it -- see the RoleMap comment
     # in remediate.py.
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from rebind.validate import validate_pdf_ua
     from tests.fixtures import born_digital_pdf
 
@@ -1852,7 +1857,7 @@ def test_a_caption_broken_across_lines_is_healed_not_hyphenated():
     # A typesetter's line-break hyphen is not part of the word. Joined naively the caption reads
     # "iconograph- ical elements", which is what a screen reader then says -- and that string goes
     # into the document as the picture's /Alt, so it is the reader's only description of it.
-    from rebind.remediate import _join_caption_lines
+    from rebind.captions import _join_caption_lines
 
     assert _join_caption_lines(
         ["Fig. 2.  Head of the statue. Hairstyle and facial features show the same iconograph-",
@@ -1872,7 +1877,8 @@ def test_a_caption_is_one_element_even_when_the_scan_drops_marks_between_its_lin
     # role" and splits one caption into three elements. Which lines are one caption was settled
     # when the caption was found; this carries that decision through.
     from rebind.extract import TextLine
-    from rebind.remediate import _caption_groups, plan_page
+    from rebind.captions import _caption_groups
+    from rebind.plan import plan_page
 
     def line(text: str, box: tuple) -> TextLine:
         return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False)
@@ -1902,7 +1908,7 @@ def test_a_line_level_with_a_caption_across_the_page_does_not_join_it():
     # sitting on the other side of the page is a different column, and reaching across for it is
     # the same mistake as reading across a gutter.
     from rebind.extract import TextLine
-    from rebind.remediate import _caption_groups
+    from rebind.captions import _caption_groups
 
     def line(text: str, box: tuple) -> TextLine:
         return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False)
@@ -1922,7 +1928,7 @@ def test_a_guessed_picture_with_no_caption_anywhere_is_not_a_picture():
     # that are not there. A picture the document never captions is one Rebind has nothing to say
     # about and no way to check, so it goes back to being part of the page.
     from rebind.extract import TextLine
-    from rebind.remediate import _side_captions
+    from rebind.captions import _side_captions
 
     # The rule itself is one line in the page loop; what it depends on is that nothing anywhere
     # offered a caption. This pins the "nothing offered" half, which is what makes it safe.
@@ -1944,7 +1950,7 @@ def test_a_figure_can_be_taken_out_by_an_edit(tmp_path: Path):
 
     from PIL import Image
 
-    from rebind.remediate import Edits
+    from rebind.edits import Edits
     from tests.fixtures import born_digital_pdf
 
     buffer = io.BytesIO()
@@ -2023,7 +2029,7 @@ def test_editor_elements_keep_layout_order_when_geometry_disagrees():
     # Reading order is not a property of the boxes; it was already decided by the XY-cut, and
     # `_order` carries that decision. Records must come back in that order whatever their
     # coordinates say.
-    from rebind.remediate import _records_in_reading_order
+    from rebind.edits import _records_in_reading_order
 
     def rec(order: int, left: float, top: float) -> dict:
         # Tall enough that consecutive records overlap vertically -- a multi-line paragraph. That
@@ -2063,7 +2069,7 @@ def test_ocr_heading_is_found_by_declared_size_not_tilt_inflated_box_height():
     # The declared size says what the box cannot: 16.1 against a body of 10.0. That size is real
     # data -- a third-party OCR layer writes it -- and for Rebind's own OCR it is defined as the
     # box height (ocr.py), so trusting it changes nothing there.
-    from rebind.remediate import _ocr_heading_sizes
+    from rebind.headings import _ocr_heading_sizes
 
     title = _ocr_line("Rival Images: Octavian, Antony,", size=16.1, box_height=19.68, top=636.0,
                       width=230.0)
@@ -2085,7 +2091,7 @@ def test_ocr_scanner_noise_at_a_large_declared_size_is_not_a_heading():
     # Two guards, both about the size being consistent with what is actually on the page: a
     # heading has to have some text in it (MIN_HEADING_CHARS, which the born-digital path already
     # required), and its characters cannot sit further apart than the type is tall.
-    from rebind.remediate import _ocr_heading_sizes
+    from rebind.headings import _ocr_heading_sizes
 
     bar = _ocr_line("|", size=26.0, box_height=26.0, top=636.0, width=1.4)
     strewn = _ocr_line("at  1", size=17.1, box_height=20.0, top=560.0, width=191.2)
@@ -2104,7 +2110,7 @@ def test_ocr_headings_are_isolated_against_their_neighbours_in_reading_order():
     # the same height, so a genuinely isolated title looked crowded and was rejected. The lines
     # arrive in reading order (layout.order_page put them there), so the neighbours that matter
     # are the ones before and after it in that order.
-    from rebind.remediate import _ocr_heading_sizes
+    from rebind.headings import _ocr_heading_sizes
 
     # Reading order: the whole left page, then the whole right page.
     left = [_ocr_line("Chapter 2: Rival Images", size=16.1, box_height=19.68, top=700.0,
@@ -2127,7 +2133,7 @@ def test_a_figure_is_read_in_its_own_column():
     first line anywhere below it put a left-column music example in the middle of the right-hand
     column of a real book, whose lower half is "below" it too."""
     from rebind.extract import TextLine
-    from rebind.remediate import _figure_anchor
+    from rebind.figures import _figure_anchor
 
     def line(x: float, y: float) -> TextLine:
         return TextLine(text="words", page=1, bbox=(x, y, x + 220, y + 10), font="Times",
@@ -2155,7 +2161,7 @@ def test_a_picture_never_swallows_the_paragraphs_stacked_beside_it():
     # A real journal: the cover's sidebar image swallowed the whole title block beside it, and a
     # chart swallowed the five paragraphs above it, one line's leading at a time -- all of it
     # hidden from a screen reader as decoration.
-    from rebind.remediate import _figure_text
+    from rebind.figures import _figure_text
 
     picture = (86.0, 92.0, 500.0, 268.0)
     label = _text_line("2915.74", (180.0, 150.0, 200.0, 156.0))
@@ -2167,7 +2173,7 @@ def test_a_picture_never_swallows_the_paragraphs_stacked_beside_it():
 
 
 def test_a_sentence_that_names_a_figure_is_not_its_caption():
-    from rebind.remediate import _is_caption_marker
+    from rebind.captions import _is_caption_marker
 
     assert _is_caption_marker("FIGURE 3. FTIR results of polypropylene (a), wool (b).")
     assert _is_caption_marker("Fig. 2. Head of the statue in figure 1.")
@@ -2177,7 +2183,7 @@ def test_a_sentence_that_names_a_figure_is_not_its_caption():
 
 
 def test_sideways_margin_text_icons_and_text_off_the_page_are_not_read():
-    from rebind.remediate import _margin_furniture
+    from rebind.figures import _margin_furniture
 
     body = _text_line("Ordinary body text across the column.", (72.0, 500.0, 540.0, 510.0))
     stamp = _text_line("01 June 2026 14:25:30", (579.0, 381.0, 585.0, 457.0), rotated=True)
@@ -2190,7 +2196,7 @@ def test_sideways_margin_text_icons_and_text_off_the_page_are_not_read():
 
 def test_a_drawn_table_is_a_table_not_a_figure():
     from rebind.layout_model import PageHints
-    from rebind.remediate import _holds_table
+    from rebind.figures import _holds_table
 
     cells = [_text_line(text, (x, 600.0 - 12 * row, x + 60, 610.0 - 12 * row))
              for row in range(5) for x, text in ((120.0, "Wool"), (270.0, "Type"), (440.0, "5"))]
@@ -2201,8 +2207,67 @@ def test_a_drawn_table_is_a_table_not_a_figure():
 
 
 def test_a_long_callout_standing_alone_still_belongs_to_its_drawing():
-    from rebind.remediate import _figure_text
+    from rebind.figures import _figure_text
 
     drawing = (100.0, 400.0, 400.0, 600.0)
     callout = _text_line("D  Bond this part with super glue", (300.0, 604.0, 420.0, 612.0))
     assert _figure_text([callout], drawing) == [callout]
+
+
+def _spans(elem, found):
+    kids = elem.get("/K")
+    for kid in (list(kids) if isinstance(kids, pikepdf.Array) else [kids]):
+        if isinstance(kid, pikepdf.Dictionary) and kid.get("/S") is not None:
+            if kid.S == pikepdf.Name.Span:
+                found.append((str(elem.S), float(kid.A.BaselineShift)))
+            _spans(kid, found)
+    return found
+
+
+def test_superscripts_and_subscripts_are_tagged_as_shifted_spans(tmp_path: Path,
+                                                                 verapdf_exe: Path):
+    """A raised "-5" after "10" is a power, not a subtraction: each superscript and subscript is a
+    /Span of its paragraph carrying its /BaselineShift, and the paragraph's words stay whole."""
+    from rebind.validate import validate_pdf_ua
+    from tests.fixtures import CHEMISTRY_HTML
+
+    source = born_digital_pdf(CHEMISTRY_HTML, tmp_path / "chem.pdf")
+    out = tmp_path / "out.pdf"
+    result = remediate(source, out, title="T")
+    paragraphs = [e["text"] for e in result.elements if e["kind"] == "P"]
+    assert any("Sulfate, SO42−, binds Ca2+ strongly" in text for text in paragraphs)
+
+    with pikepdf.open(out) as pdf:
+        spans = _spans(pdf.Root.StructTreeRoot.K[0], [])
+    assert {parent for parent, _shift in spans} == {"/P"}
+    assert sum(shift > 0 for _p, shift in spans) >= 8      # charges, powers, note mark, isotope
+    assert sum(shift < 0 for _p, shift in spans) >= 8      # atom counts and K_sp
+    validation = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert validation.compliant, validation.summary()
+
+
+def test_a_line_is_cut_into_pieces_at_its_scripts():
+    from rebind.extract import Script, TextLine
+    from rebind.overlay import _pieces
+
+    line = TextLine(text="H2O and Ca2+", page=1, bbox=(0, 0, 100, 10), font="F", size=10,
+                    bold=False, italic=False,
+                    scripts=(Script(1, 2, -3.0), Script(10, 12, 3.0)))
+    assert [(line.text[s:e], shift) for s, e, shift in _pieces(line)] == [
+        ("H", 0.0), ("2", -3.0), ("O and Ca", 0.0), ("2+", 3.0)]
+    plain = TextLine(text="Plain", page=1, bbox=(0, 0, 50, 10), font="F", size=10, bold=False,
+                     italic=False)
+    assert _pieces(plain) == []
+
+
+def test_a_merged_bullet_keeps_its_items_scripts_in_place():
+    from rebind.extract import Script, TextLine
+    from rebind.plan import _merge_bare_markers
+
+    bullet = TextLine(text="•", page=1, bbox=(72, 700, 76, 710), font="F", size=10,
+                      bold=False, italic=False)
+    item = TextLine(text="CO2 gas", page=1, bbox=(80, 700, 200, 710), font="F", size=10,
+                    bold=False, italic=False, scripts=(Script(2, 3, -3.0),))
+    merged = _merge_bare_markers([bullet, item])[0]
+    script = merged.scripts[0]
+    assert merged.text[script.start:script.end] == "2"

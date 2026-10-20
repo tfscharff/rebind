@@ -362,3 +362,17 @@ def born_digital_pdf_with_captioned_image(target: Path, *, caption: str | None =
             f"<p style='font-size:8pt'>{caption}</p>"
             f"<p>Body text continues after the caption.</p>")
     return born_digital_pdf(html, target)
+
+
+# A paragraph of chemistry: subscripts (atom counts), superscripts (charges, powers, a note mark,
+# an isotope), and the hardest case -- a subscript followed straight by a superscript, "SO4 2-".
+CHEMISTRY_HTML = (
+    "<h1>Aqueous equilibria</h1>"
+    "<p>Water (H<sub>2</sub>O) dissolves CO<sub>2</sub> to form H<sub>2</sub>CO<sub>3</sub>, "
+    "which releases H<sup>+</sup> and HCO<sub>3</sub><sup>&#8722;</sup>. Sulfate, "
+    "SO<sub>4</sub><sup>2&#8722;</sup>, binds Ca<sup>2+</sup> strongly; K<sub>sp</sub> = "
+    "4.9 &#215; 10<sup>&#8722;5</sup> at 25 &#176;C.</p>"
+    "<p>The rate constant k = 2.3 &#215; 10<sup>3</sup> M<sup>&#8722;1</sup> "
+    "s<sup>&#8722;1</sup> was measured by Smith et al.<sup>12</sup> and confirmed for "
+    "<sup>14</sup>C-labelled C<sub>6</sub>H<sub>12</sub>O<sub>6</sub>.</p>"
+)

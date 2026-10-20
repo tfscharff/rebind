@@ -67,3 +67,47 @@ def test_deskew_tightens_line_boxes_on_a_crooked_scan(tmp_path):
 
 # OCR body text is not fabricated into headings: covered end-to-end (over the real structure tree)
 # by tests/test_remediate.py::test_ocr_body_only_scan_invents_no_headings.
+
+
+def test_a_scanned_line_crowded_with_scripts_is_read_not_dropped(tmp_path: Path):
+    # The recognizer's text finder ran "Sulfate, SO4 2-, binds Ca2+ ..." into the lines around it
+    # through their superscripts and subscripts, and dropped it: a whole line of the page unread.
+    from tests.fixtures import CHEMISTRY_HTML
+
+    source = pdf_image_only_scan(CHEMISTRY_HTML, tmp_path / "chem.pdf", dpi=300)
+    image = render_page_to_image(source, 1, dpi=300)
+    lines = recognize(image, page_number=1, page_width=612.0, page_height=792.0,
+                      engine=OcrEngine())
+    text = " ".join(line.text for line in lines)
+    assert "Sulfate" in text and "binds" in text and "confirmed" in text
+    water = next(line for line in lines if line.text.startswith("Water"))
+    marked = [(water.text[s.start:s.end], s.raised) for s in water.scripts]
+    assert marked[0] == ("2", False) and ("+", True) in marked
+    rate = next(line for line in lines if line.text.startswith("The rate"))
+    assert ("3", True) in [(rate.text[s.start:s.end], s.raised) for s in rate.scripts]
+
+
+def test_pieces_of_a_line_are_joined_with_their_scripts():
+    from rebind.ocr import _join_rows, _Read
+
+    def piece(text, left, top, right, bottom):
+        box = (left, top, right, bottom)
+        return _Read(box, text, 0.9, tight=box)
+
+    body = piece("binds Ca", 100, 100, 260, 130)
+    charge = piece("2+", 262, 92, 285, 110)
+    after = piece("strongly", 295, 100, 420, 130)
+    elsewhere = piece("Another line", 100, 200, 300, 230)
+    joined = _join_rows([body, charge, after, elsewhere])
+    assert [read.text for read in joined] == ["binds Ca2+ strongly", "Another line"]
+    start, end, shift = joined[0].scripts[0]
+    assert joined[0].text[start:end] == "2+" and shift > 0
+
+
+def test_pieces_of_a_row_with_nothing_small_are_left_apart():
+    # Two cells of a table, or two columns, side by side: nothing joins them.
+    from rebind.ocr import _join_rows, _Read
+
+    left = _Read((100, 100, 200, 130), "Cell one", 0.9, tight=(100, 100, 200, 130))
+    right = _Read((215, 100, 320, 130), "Cell two", 0.9, tight=(215, 100, 320, 130))
+    assert [read.text for read in _join_rows([left, right])] == ["Cell one", "Cell two"]

@@ -91,7 +91,8 @@ def _run_conversion(job: _Job, source: Path) -> None:
     # which uses the same absolute form for the same reason).
     from rebind.checklist import build_checklist
     from rebind.extract import ExtractionError
-    from rebind.remediate import Edits, remediate
+    from rebind.edits import Edits
+    from rebind.remediate import remediate
     from rebind.ui import build_review
 
     try:
@@ -222,7 +223,7 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         job = jobs.get(request.path_params["job_id"])
         if job is None:
             return JSONResponse({"error": "No such job."}, status_code=404)
-        from rebind.remediate import (
+        from rebind.edits import (
             ARTIFACT_KEY,
             ARTIFACT_LABEL,
             ARTIFACT_WHAT,
@@ -245,7 +246,7 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
             "artifact": {"key": ARTIFACT_KEY, "tag": "Artifact", "label": ARTIFACT_LABEL,
                          "what": ARTIFACT_WHAT},
             # A second, small keymap for a detected table's row sub-elements
-            # (remediate._element_records): a row is only ever a header row or a data row.
+            # (edits._element_records): a row is only ever a header row or a data row.
             "rowKeys": [{"key": key, "tag": tag, "label": label, "what": what}
                         for key, tag, label, what in ROW_TAG_KEYS],
         })

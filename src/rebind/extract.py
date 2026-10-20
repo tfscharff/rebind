@@ -10,6 +10,8 @@ Pages are yielded lazily. Nothing here retains more than one page at a time, whi
 
 from __future__ import annotations
 
+from bisect import bisect_left, bisect_right
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -55,6 +57,27 @@ class TextLine:
     # Set on a line `_join_rotated` rebuilt from text printed sideways (a download stamp or an
     # identifier running up the margin), which pdfminer hands over one character per line.
     rotated: bool = False
+    # The runs of the line's text set above or below its baseline -- superscripts and subscripts --
+    # in the order they occur. Tagged as their own spans so the shift is not lost (see `overlay`).
+    scripts: tuple[Script, ...] = ()
+
+
+@dataclass(frozen=True)
+class Script:
+    """A run of a line's characters raised or lowered off its baseline: a superscript (a charge,
+    an exponent, a note mark) or a subscript (an atom count, an index)."""
+
+    start: int      # the run's characters are text[start:end]
+    end: int
+    shift: float    # how far the run's baseline sits from the line's, in points; up is positive
+
+    @property
+    def raised(self) -> bool:
+        return self.shift > 0
+
+    def moved(self, by: int) -> Script:
+        """The same run in a line whose text gained `by` characters in front of it."""
+        return replace(self, start=self.start + by, end=self.end + by)
 
 
 @dataclass(frozen=True)
@@ -150,7 +173,7 @@ def _text_lines(element: LTTextContainer):
     A top-level text element is usually an `LTTextBox` whose children are `LTTextLine`s. But
     pdfminer also emits a bare `LTTextLine` at the top level on some OCR'd PDFs -- and because
     `LTTextLine` is itself an `LTTextContainer`, iterating it yields `LTChar`s, not lines. Passing
-    an `LTChar` to `_line_from_container` (which iterates its argument) crashes with
+    an `LTChar` to `_raw_line` (which iterates its argument) crashes with
     "'LTChar' object is not iterable". So a line is yielded whole; only a box is descended into,
     and any stray non-line child of a box (an ungrouped `LTChar`/`LTAnno`) is skipped.
     """
@@ -162,19 +185,94 @@ def _text_lines(element: LTTextContainer):
             yield child
 
 
-def _line_from_container(container, page_number: int) -> TextLine | None:
-    text = container.get_text().strip()
-    if not text:
+@dataclass
+class _Raw:
+    """A line as pdfminer grouped it, with each character's place in the text, before it is
+    finished into a `TextLine`."""
+
+    text: str
+    chars: list[tuple[int, int, LTChar]]     # (start, end) of each character within `text`
+    bbox: tuple[float, float, float, float]
+    turn: int = 0
+
+
+def _raw_line(container) -> _Raw | None:
+    text = ""
+    chars: list[tuple[int, int, LTChar]] = []
+    for obj in container:
+        piece = obj.get_text()
+        if isinstance(obj, LTChar):
+            chars.append((len(text), len(text) + len(piece), obj))
+        text += piece
+    lead = len(text) - len(text.lstrip())
+    text = text.strip()
+    if not text or not chars:
         return None
-    chars = [obj for obj in container if isinstance(obj, LTChar)]
-    if not chars:
-        return None
+    chars = [(start - lead, end - lead, char) for start, end, char in chars]
+    return _Raw(text, chars, (container.x0, container.y0, container.x1, container.y1),
+                _turn(container))
+
+
+def _upright(char: LTChar) -> bool:
+    a, b, c, d = char.matrix[:4]
+    return a > 0 and d > 0 and abs(b) < 1e-6 and abs(c) < 1e-6
+
+
+# A superscript or subscript has its baseline moved off the line's by a share of the type size: at
+# least SCRIPT_MIN_SHIFT when it is also set smaller (at most SCRIPT_SIZE_RATIO of the size), at
+# least SCRIPT_FULL_SIZE_SHIFT when it is not -- some typesetters raise full-size figures -- and
+# never more than SCRIPT_MAX_SHIFT, which is a different line run together with this one.
+SCRIPT_SIZE_RATIO = 0.85
+SCRIPT_MIN_SHIFT = 0.12
+SCRIPT_FULL_SIZE_SHIFT = 0.25
+SCRIPT_MAX_SHIFT = 0.7
+
+
+def _baseline(chars: list[tuple[int, int, LTChar]]) -> float | None:
+    """The baseline most of the line's upright characters sit on, read from each character's own
+    text matrix -- where the PDF put it, not guessed from boxes."""
+    counts = Counter(round(char.matrix[5], 1) for _s, _e, char in chars
+                     if _upright(char) and not char.get_text().isspace())
+    return counts.most_common(1)[0][0] if counts else None
+
+
+def _is_script(char: LTChar, baseline: float, size: float) -> bool:
+    shift = abs(char.matrix[5] - baseline)
+    if not _upright(char) or char.get_text().isspace() or shift > SCRIPT_MAX_SHIFT * size:
+        return False
+    return shift >= (SCRIPT_MIN_SHIFT if char.size <= SCRIPT_SIZE_RATIO * size
+                     else SCRIPT_FULL_SIZE_SHIFT) * size
+
+
+def _scripts(chars: list[tuple[int, int, LTChar]], size: float) -> tuple[Script, ...]:
+    """The runs of characters set above or below the line's baseline, so a subscript "2" and a
+    superscript "2" are told apart exactly."""
+    baseline = _baseline(chars)
+    if baseline is None:
+        return ()
+    runs: list[list] = []
+    for start, end, char in chars:
+        if not _is_script(char, baseline, size):
+            continue
+        shift = char.matrix[5] - baseline
+        run = runs[-1] if runs else None
+        if run and run[1] == start and (run[2][0] > 0) == (shift > 0):
+            run[1] = end
+            run[2].append(shift)
+        else:
+            runs.append([start, end, [shift]])
+    return tuple(Script(start, end, round(sorted(shifts)[len(shifts) // 2], 2))
+                 for start, end, shifts in runs)
+
+
+def _finish(raw: _Raw, page_number: int) -> TextLine:
+    chars = [char for _s, _e, char in raw.chars]
     font, size = _dominant_font(chars)
     lowered = font.lower()
     return TextLine(
-        text=text,
+        text=raw.text,
         page=page_number,
-        bbox=(container.x0, container.y0, container.x1, container.y1),
+        bbox=raw.bbox,
         font=font,
         size=size,
         color=_dominant_color(chars),
@@ -183,7 +281,58 @@ def _line_from_container(container, page_number: int) -> TextLine | None:
         # tool does and it is wrong for fonts that do not follow the convention.
         bold="bold" in lowered or "black" in lowered or "heavy" in lowered,
         italic="italic" in lowered or "oblique" in lowered,
+        scripts=_scripts(raw.chars, size),
     )
+
+
+def _join_split_lines(raws: list[_Raw]) -> list[_Raw]:
+    """Put back together a line pdfminer broke at a superscript or subscript.
+
+    pdfminer starts a new line wherever a character does not sit level with the one before it,
+    and a subscript followed straight by a superscript -- "SO4" then "2-", the shape of every ion
+    with a charge -- is exactly that. So "Sulfate, SO42-, binds Ca2+" came out as two lines, and the
+    charge on "HCO3-." as a third one of its own at the end of the row, read wherever the column
+    cut happened to put it. A line that starts where another ends, on the same row, joined to it by
+    a character set small, is the same line.
+    """
+    raws = list(raws)
+    while True:
+        ends = sorted(range(len(raws)), key=lambda i: raws[i].bbox[2])
+        rights = [raws[i].bbox[2] for i in ends]
+        joined = None
+        for b, right in enumerate(raws):
+            if right.turn:
+                continue
+            first = right.chars[0][2]
+            lo = bisect_left(rights, right.bbox[0] - 0.3 * first.size)
+            hi = bisect_right(rights, right.bbox[0] + 0.5)
+            for a in (ends[k] for k in range(lo, hi)):
+                left = raws[a]
+                if a == b or left.turn:
+                    continue
+                last = left.chars[-1][2]
+                shared = min(left.bbox[3], right.bbox[3]) - max(left.bbox[1], right.bbox[1])
+                height = min(left.bbox[3] - left.bbox[1], right.bbox[3] - right.bbox[1])
+                baseline = _baseline(left.chars)
+                size = _dominant_font([c for _s, _e, c in left.chars])[1]
+                if (shared >= 0.3 * height and baseline is not None
+                        and (_is_script(last, baseline, size) or _is_script(first, baseline, size))):
+                    joined = (a, b)
+                    break
+            if joined:
+                break
+        if joined is None:
+            return raws
+        a, b = joined
+        left, right = raws[a], raws[b]
+        gap = right.bbox[0] - left.bbox[2]
+        space = " " if gap > 0.15 * right.chars[0][2].size else ""
+        offset = len(left.text) + len(space)
+        raws[a] = _Raw(left.text + space + right.text,
+                       left.chars + [(s + offset, e + offset, c) for s, e, c in right.chars],
+                       (min(left.bbox[0], right.bbox[0]), min(left.bbox[1], right.bbox[1]),
+                        max(left.bbox[2], right.bbox[2]), max(left.bbox[3], right.bbox[3])))
+        del raws[b]
 
 
 def _turn(container) -> int:
@@ -238,7 +387,7 @@ def _join_rotated(lines: list[TextLine], turns: dict[int, int]) -> list[TextLine
             text += (" " if gap > 0.5 * (prev.bbox[3] - prev.bbox[1]) else "") + line.text
         box = (min(ln.bbox[0] for ln in run), min(ln.bbox[1] for ln in run),
                max(ln.bbox[2] for ln in run), max(ln.bbox[3] for ln in run))
-        joined[id(run[0])] = replace(run[0], text=text, bbox=box, rotated=True)
+        joined[id(run[0])] = replace(run[0], text=text, bbox=box, rotated=True, scripts=())
         for line in run[1:]:
             joined[id(line)] = None
     out = []
@@ -252,8 +401,8 @@ def _join_rotated(lines: list[TextLine], turns: dict[int, int]) -> list[TextLine
 
 
 def _collect_figure(
-    figure: LTFigure, page_number: int, lines: list[TextLine], images: list[ImageRegion],
-    drawings: list[ImageRegion], turns: dict[int, int],
+    figure: LTFigure, page_number: int, lines: list[_Raw], images: list[ImageRegion],
+    drawings: list[ImageRegion],
 ) -> tuple[bool, bool]:
     """Recurse into a Form XObject, contributing its text lines and embedded images separately.
 
@@ -280,10 +429,9 @@ def _collect_figure(
     for child in figure:
         if isinstance(child, LTTextContainer):
             for container in _text_lines(child):
-                line = _line_from_container(container, page_number)
+                line = _raw_line(container)
                 if line is not None:
                     lines.append(line)
-                    turns[id(line)] = _turn(container)
                     found_text = True
         elif isinstance(child, LTImage):
             images.append(
@@ -292,7 +440,7 @@ def _collect_figure(
             found_image = True
         elif isinstance(child, LTFigure):
             nested_text, nested_image = _collect_figure(
-                child, page_number, lines, images, drawings, turns)
+                child, page_number, lines, images, drawings)
             found_text = found_text or nested_text
             found_image = found_image or nested_image
         elif isinstance(child, LTCurve):
@@ -320,19 +468,17 @@ def extract_pages(source: Path) -> Iterator[Page]:
         # region -- a false provenance claim this project's invariants forbid.
         layouts = _pdfminer_pages(str(source), laparams=LAParams(all_texts=True))
         for index, layout in enumerate(layouts, start=1):
-            lines: list[TextLine] = []
+            raws: list[_Raw] = []
             images: list[ImageRegion] = []
             drawings: list[ImageRegion] = []
-            turns: dict[int, int] = {}
             for element in layout:
                 if isinstance(element, LTTextContainer):
                     for container in _text_lines(element):
-                        line = _line_from_container(container, index)
+                        line = _raw_line(container)
                         if line is not None:
-                            lines.append(line)
-                            turns[id(line)] = _turn(container)
+                            raws.append(line)
                 elif isinstance(element, LTFigure):
-                    _collect_figure(element, index, lines, images, drawings, turns)
+                    _collect_figure(element, index, raws, images, drawings)
                 elif isinstance(element, LTImage):
                     images.append(
                         ImageRegion(
@@ -350,6 +496,9 @@ def extract_pages(source: Path) -> Iterator[Page]:
                             bbox=(element.x0, element.y0, element.x1, element.y1),
                         )
                     )
+            raws = _join_split_lines(raws)
+            lines = [_finish(raw, index) for raw in raws]
+            turns = {id(line): raw.turn for line, raw in zip(lines, raws)}
             yield Page(
                 number=index,
                 width=layout.width,

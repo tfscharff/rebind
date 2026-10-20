@@ -46,8 +46,20 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
   should cache through it.
 - `weights.py` — registry of the model files not in git (layout + equation reader), with pinned
   SHA-256s; `ensure_weights` fetches missing ones into `models/` from a clone (never when frozen).
-- `remediate.py` — builds the tagged output: keeps each page's pixels/vector untouched, lays an
-  *invisible* (render mode 3) tagged text layer over it, and builds the PDF/UA structure tree.
+- `remediate.py` — runs the pipeline: keeps each page's pixels/vector untouched, lays an
+  *invisible* (render mode 3) tagged text layer over it, and builds the PDF/UA structure tree. Each
+  stage is its own module: `headings` (H1–H6), `figures` (pictures and the text that belongs to
+  them; `find_figures`/`describe_figures`), `captions`, `plan` (paragraphs, lists, tables, the
+  person's frames), `tables`, `edits` (the person's corrections, the editor's records), `overlay`
+  (the invisible text layer, page rebuilds), `structure` (`StructTree`, the outline), `document`
+  (scripts, legacy destinations, XMP), `geometry` (box helpers). The tests import helpers from the
+  module that defines them.
+- Superscripts/subscripts: `TextLine.scripts` (`extract.Script`, character range + baseline shift).
+  Born-digital from each character's text matrix (`extract._scripts`, `_join_split_lines`); scans
+  from glyph shapes (`ocr._inline_scripts`), plus `ocr._read_missed` (re-reads ink bands the text
+  finder dropped) and `ocr._join_rows`. Drawn piece by piece (`overlay._pieces`), one MCID each,
+  and tagged as `/Span` with `/A << /O /Layout /BaselineShift n >>` (`structure._page_structure`).
+  Any code that rebuilds a line's text must move its scripts (`Script.moved`).
 - `validate.py` — runs veraPDF and parses its report. `ui.py` — the inline browser app.
 
 Per page: a born-digital page is kept **verbatim** (crisp vector); a page that already carries

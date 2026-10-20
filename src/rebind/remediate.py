@@ -9,231 +9,77 @@ text comes from the page's own text layer where it has one, or from OCR where it
 The output looks like the input but is now readable by assistive technology, with document
 language, title, tags and reading order set. This is remediation, not reconstruction: the page is
 never reflowed or restyled.
+
+This module runs the pipeline; each stage lives in its own module:
+
+* `headings` -- which lines are headings, and at what level;
+* `figures` -- the pictures on a page and the text that belongs to each; `captions` -- the
+  document's own words for them;
+* `plan` -- a page's elements (paragraphs, lists, tables) and the person's frames applied on top;
+  `tables` -- a table tagged cell by cell;
+* `edits` -- the person's corrections, and the element records the editor shows;
+* `overlay` -- the invisible tagged text layer drawn over each page;
+* `structure` -- the structure tree; `document` -- document-wide fixes and metadata.
 """
 
 from __future__ import annotations
 
 import io
-import math
 import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from urllib.parse import urlsplit
 
 import pikepdf
-from pikepdf import Array, Dictionary, Name, String
+from pikepdf import Dictionary, Name
 
-from . import contrast, formula_reader, layout_model, music, recolor, review
-from .extract import Page, TextLine, extract_pages
-from .layout import COLUMN_ALIGN_TOLERANCE_PT, detect_table_lines, order_page
+from . import contrast, formula_reader, layout_model, recolor, review
+from .captions import _caption_groups, _document_captions
+from .document import _set_metadata, _strip_legacy_destinations, _strip_scripts
+from .edits import (
+    Edits,
+    _element_records,
+    _place_figures,
+    _record_box,
+    _records_in_reading_order,
+    _untagged_record,
+)
+from .extract import TextLine, extract_pages
+from .figures import (
+    PageFigures,
+    _figure_anchor,
+    _is_full_page_scan,
+    _is_speck,
+    _margin_furniture,
+    _page_figures,
+    _vector_figures,
+    describe_figures,
+    find_figures,
+)
+from .headings import _structure_roles
+from .layout import order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
+from .overlay import (
+    _add_font,
+    _add_xobject,
+    _crop_data_uri,
+    _draw_line,
+    _figure_xobject,
+    _has_marked_content,
+    _invisible_text_pages,
+    _pieces,
+    _png,
+    _rebuild_page,
+    _strip_invisible_text,
+    _tagged_text_stream,
+)
 from .pagecache import PageCache, file_key
-from .profile import build_profile, style_of
+from .plan import _apply_frames, _frame_in_points, _merge_bare_markers, plan_page
+from .profile import build_profile
+from .structure import StructTree
 from .validate import self_check_pdf_ua2
 
-# --- Line/page classification (relocated from the retired reconstruction pipeline) --------------
-# A page with a text layer AND a raster image covering at least this fraction of its area is an
-# OCR-over-scan page: the image is the scanned page, the text on top is recognizer output.
-OCR_SCAN_COVERAGE = 0.6
-BULLET_PREFIXES = ("•", "‣", "◦", "-", "*")
-# An ordered-list marker, with or without trailing content: "1. first", "1.", "2)". The digit run
-# is capped at 3 so a year like "1996. It was..." never matches (a longer run leaves a digit before
-# the required "[.)]"). A heuristic disambiguator, not a size limit (invariant 5).
-ORDERED_RE = re.compile(r"^(\d{1,3})[.)](?:\s+(.*))?$")
-
-
-def _image_covers_page(image, page: Page) -> bool:
-    """Whether an image covers enough of the page to be its background scan rather than a figure."""
-    page_area = page.width * page.height
-    if page_area <= 0:
-        return False
-    x0, y0, x1, y1 = image.bbox
-    return (x1 - x0) * (y1 - y0) >= page_area * OCR_SCAN_COVERAGE
-
-
-def _is_ocr_over_scan(page: Page) -> bool:
-    """A text layer sitting on top of a page-covering scan image (a hidden OCR layer)."""
-    return page.has_text_layer and any(_image_covers_page(im, page) for im in page.images)
-
-
-def _list_item_text(text: str) -> tuple[str, bool] | None:
-    """Return (item text, ordered) if the line looks like a list item, else None.
-
-    The item text is empty when the line is only the marker glyph (a bare bullet or bare "1.") --
-    a renderer that boxes the marker separately; the caller merges it with the next line.
-    """
-    for bullet in BULLET_PREFIXES:
-        if text.startswith(bullet):
-            return text[len(bullet):].strip(), False
-    match = ORDERED_RE.match(text)
-    if match:
-        content = match.group(2)
-        return (content.strip() if content is not None else ""), True
-    return None
-
-MIN_LIST_ITEMS = 2   # a run of at least this many marked lines becomes a list, not paragraphs
-# An image covering between these fractions of the page is a figure worth describing. Smaller is a
-# rule/icon/bullet; a page-covering image is the scan itself, not a figure.
-FIGURE_MIN_COVERAGE = 0.01
-FIGURE_MAX_COVERAGE = 0.6
-
-# Figure/caption association. A caption sits directly adjacent to its figure (below it, the
-# standard convention; above, as a fallback -- some journals set table-style captions above
-# figures too) with only a small gap -- confirmed against a real sample (1429254.pdf): observed
-# gaps of ~11-14pt between an image and its "Fig. N" caption. A genuinely long caption wraps
-# across several physical lines with a much smaller line-to-line gap than that (~2-10pt observed);
-# the cap on line count is just a safety backstop against ever running into unrelated body text.
-# That cap has to be generous: the real sample's Fig. 8 caption is 15 wrapped lines, and an
-# earlier cap of 8 silently truncated its alt text mid-sentence ("...connected via silicone tubing
-# through two"), which reads worse to a screen reader than no caption at all. The continuation-gap
-# rule, not the line count, is what actually bounds a caption block.
-#
-# The marker set is wider than "Fig." because publishers label figures a dozen ways and a caption
-# Rebind does not recognise costs the reader the whole description. The number is optional: an
-# unnumbered "Photograph of the reading room." below a picture is still that picture's caption.
-# What is NOT accepted is ordinary prose that merely happens to sit under an image -- alt text has
-# to be the document's own description of the figure, and a paragraph that follows one is not that.
-CAPTION_MARKER_RE = re.compile(
-    r"^(?:fig(?:ure)?s?|plate|chart|graph|diagram|scheme|illus(?:tration)?|image|photo(?:graph)?"
-    r"|exhibit|map|panel)\b\.?\s*(\d+)?",
-    re.IGNORECASE)
-# "Figure 3 shows..." is prose that names a figure; a caption never goes on with a verb.
-CAPTION_PROSE_VERBS = frozenset(
-    "is are was were shows show showed shown illustrates illustrate depicts depict presents present "
-    "displays display gives give summarizes summarises compares demonstrates reveals indicates "
-    "represents contains has have can could may will".split())
-CAPTION_MAX_GAP_PT = 20.0
-# How far into the margin beside a figure its caption may sit. Much wider than the gap allowed
-# above or below, for two reasons: a caption set in the outer margin is separated by the margin
-# itself, and a picture found from a scan's pixels is measured from its ink, so its box stops short
-# of where the photograph visually ends. Measured on the real sample the two together come to about
-# 52pt. What keeps this safe is not the distance but the caller's rule -- a side caption is used
-# only when exactly one unclaimed one is beside the figure.
-CAPTION_SIDE_MAX_GAP_PT = 60.0
-# How far a stray mark may sit from a caption's own text and still be read as part of it rather
-# than as something in its own right. Small: this is for the specks a recogniser drops between a
-# caption's lines, not for reaching out and claiming a neighbour.
-CAPTION_STRAY_MAX_GAP_PT = 30.0
-CAPTION_CONTINUATION_GAP_PT = 10.0
-CAPTION_MAX_LINES = 24
-# A caption that's just its own label ("Fig. 8", or "Fig. 8 (Continued)" -- a page-break artifact)
-# isn't usable as alt text on its own (WCAG 1.1.1: a figure's bare label never conveys its actual
-# content) and signals _document_captions should look for a fuller caption elsewhere instead.
-MIN_CAPTION_WORDS = 3
-
-# Vector (line-art) figure recovery -- see `_vector_figures`. A drawing sits a little further from
-# its caption than a raster image does (the caption marker's own top edge vs the drawing's lowest
-# ink): 11-23pt observed on the real sample, hence a wider tolerance than CAPTION_MAX_GAP_PT. The
-# path-count floor is what keeps a lone rule above a caption from being promoted to a figure --
-# observed exactly that, a 1-path horizontal rule directly above a "Fig. 8" continuation caption.
-VECTOR_CAPTION_MAX_GAP_PT = 30.0
-MIN_VECTOR_PATHS = 6
-RULE_MAX_THICKNESS_PT = 3.0
-RULE_MIN_LENGTH_RATIO = 0.5
-# How far outside a figure's ink a callout label may sit and still belong to it. Observed on the
-# real sample: "Bonding" and "2-10 ml glass syringe" print 3-11pt above the top of the apparatus
-# they label, at the end of their leader lines. Comfortably smaller than the gap to a caption.
-FIGURE_TEXT_TOLERANCE_PT = 12.0
-# Picture-hunting on a scan works from a render of its own; 150 dpi is ample for finding where the
-# ink is and costs a fraction of the 300 dpi the page itself is rebuilt at.
-REGION_SCAN_DPI = 150
-# How much of the shorter box a figure and an element must share vertically to be on one row, and
-# so be ordered by which is further left rather than by which starts a shade higher.
-FIGURE_SAME_ROW_FRACTION = 0.5
-# The longest a callout label runs to ("Ventral", "2-10 ml glass syringe", "3 mm"). Longer than
-# this, inside a guessed figure box, is a sentence -- prose the picture sits around, not part of it.
-FIGURE_LABEL_MAX_WORDS = 6
-# A figure found from drawings or pixels is a table instead when at least this many lines sit in
-# it and this share of them are a table's.
-MIN_TABLE_LINES_IN_FIGURE = 4
-TABLE_SHARE_OF_FIGURE = 0.6
-# Sideways text is in the margin when no more than this share of the page's upright lines share
-# any of its width.
-MARGIN_SHARE = 0.1
-# A short line this close (in line heights) above or below running text is part of it.
-PARAGRAPH_LEADING_GAP = 1.0
-# A picture found some other way over the same music gives way to the music's own box, unless it is
-# this many times bigger -- then it is a picture with music in it, and keeps its box.
-MUSIC_REPLACES_AREA = 2.0
-# A speck on a scan (`_is_speck`): a line of up to this many marks with no letter or digit in it...
-SPECK_MAX_MARKS = 3
-# ...or a line this short that the layout model found outside any region of words.
-SPECK_MAX_CHARS = 2
-
-# OCR heading recovery. A single OCR line's box height is noisy (a body line can crop tall), so no
-# one signal is trusted: a heading must be markedly taller than the page's body text AND set apart
-# by whitespace AND not fill the column -- the combination an inflated body line, which still sits
-# inside its paragraph spanning the full width, cannot fake. Tuned conservatively: a missed heading
-# stays an honest paragraph, which is safe; a fabricated one is not.
-OCR_HEADING_HEIGHT_RATIO = 1.35     # a heading is at least this much taller than the body median
-OCR_HEADING_MAX_WIDTH_RATIO = 0.75  # a line filling more than this of the widest line is body text
-OCR_HEADING_ISOLATION_RATIO = 0.8   # whitespace above/below is at least this * the body height
-OCR_HEADING_TIER_TOLERANCE = 0.15   # heading heights within this fraction are the same level
-
-# Born-digital heading candidacy (profile.py) is style-only -- larger or bolder than body text,
-# with no check on the line's actual content. A figure-panel callout label ("A", "B", "C", ...) is
-# routinely bold for emphasis, which alone satisfies that test (confirmed on a real sample: a
-# 28-page document's recovered outline surfaced bare single-letter "headings" from exactly this).
-# No real document heading is a bare 1-2 character label, so a minimum content length costs
-# nothing on genuine headings -- "Abstract" (8 characters) is the shortest real heading seen in
-# that same sample and must still be promoted; this only excludes what could never be one.
-MIN_HEADING_CHARS = 3
-
-# A run of more than this many CONSECUTIVE born-digital heading-candidate lines is demoted back to
-# paragraphs. A genuine document heading is essentially never immediately adjacent to another
-# heading-styled line except a real title+subtitle pair (exactly 2 in a row, e.g. a chapter title
-# followed directly by its own subtitle); a longer run is something else entirely -- an author
-# byline broken into fragments around superscript affiliation markers, or a diagram's callout
-# labels ("Ventral", "Baffles", "Air pump", ...) -- confirmed on the real 28-page sample, whose
-# recovered outline surfaced both a 4-fragment byline and a 20+-label diagram burst this way.
-MAX_HEADING_BURST_RUN = 2
-
-# How much of the shorter line's width two lines of one wrapped heading must share. A title's
-# second line sits under the first whether the block is centred, left-aligned or justified, so the
-# overlap is large; two headings that merely follow one another in a column also overlap, which is
-# why the vertical test below carries the weight and this one only excludes side-by-side fragments.
-HEADING_MIN_OVERLAP = 0.5
-# How far a heading's next line may reach back up into the previous one before it is read as part
-# of the same physical line rather than the line under it. Accents and ascenders routinely push a
-# box a little above the one it follows; a byline's fragments overlap almost entirely.
-HEADING_OVERLAP_SLACK = 0.25
-
-# A table spans from its first detected row to its last; lines in between that were not themselves
-# detected as table rows are sparse rows (a subtotal, or a row with an empty cell -- too few
-# side-by-side cells to detect alone) and are kept so no row is dropped. The gap is bounded so prose
-# between two separate tables cannot merge them: at most this many consecutive undetected lines.
-MAX_INTERNAL_TABLE_GAP = 2
-
-# --- Paragraphs -------------------------------------------------------------------------------
-# A paragraph is several lines, and tagging each line as its own /P is wrong in a way that matters:
-# a screen reader pauses at every element boundary, so a page of prose read as forty paragraphs is
-# read as forty fragments. Lines are joined into one /P unless something says they are not the same
-# paragraph. The signals below are the ones typesetting actually leaves behind, in rough order of
-# how much they can be trusted:
-#
-#   * The previous line stops short of the measure. In justified or ragged-right prose every line
-#     but the last runs to the right margin, so a short line is the end of its paragraph. This is
-#     the strongest signal there is, and it is what makes the rest mostly unnecessary.
-#   * The next line is indented past the paragraph's own left edge -- a first-line indent, the
-#     other half of the same convention.
-#   * The vertical gap is bigger than the run's own leading (space between paragraphs).
-#   * The typography changes: a different size, weight, slope or face is a different thing.
-#
-# Where the signals disagree, the split is kept: two paragraphs wrongly joined lose a boundary a
-# reader needs, and a boundary is not recoverable from the joined text.
-PARAGRAPH_ALIGN_TOLERANCE_PT = 3.0    # left edges this close count as the same margin
-PARAGRAPH_INDENT_MIN_PT = 4.0         # a first line indented at least this much starts a paragraph
-PARAGRAPH_RAGGED_FRACTION = 0.10      # a line ending this far short of the measure ends its own
-PARAGRAPH_GAP_SLACK = 0.55            # extra leading (in line heights) that still reads as one
-PARAGRAPH_COLUMN_TOLERANCE_PT = 36.0  # left edges within this belong to the same column
-PARAGRAPH_SIZE_TOLERANCE = 0.18       # fraction by which two lines' sizes may differ and still match
-
-# Reading-order review thumbnails: big enough to recognize the page's shape and read the block
-# numbers laid over it, small enough that a dozen of them stay a page the browser renders at once.
-REVIEW_THUMB_DPI = 80
-REVIEW_THUMB_PX = 420
-# The page editor shows a bigger picture -- elements are selected on it and their text read from
-# it -- so it renders larger than the review thumbnail, once per page.
+# The page editor shows each page as a picture -- elements are selected on it and their text read
+# from it -- rendered once per page at this resolution.
 EDITOR_PAGE_DPI = 110
 EDITOR_PAGE_PX = 900
 
@@ -269,503 +115,6 @@ class RemediationResult:
     elements: tuple[dict, ...] = ()
     # A rendered picture per page (PNG bytes), so the editor can lay elements over the page.
     page_images: dict = field(default_factory=dict)
-
-
-def _page_figures(src_page) -> list[tuple[str, tuple[float, float, float, float]]]:
-    """Embedded images on the page that are figures worth describing -- not the full-page scan,
-    not tiny rules/icons. Each is (stable id, bbox in PDF points)."""
-    page_area = src_page.width * src_page.height
-    if page_area <= 0:
-        return []
-    figures = []
-    for index, image in enumerate(src_page.images):
-        x0, y0, x1, y1 = image.bbox
-        coverage = (x1 - x0) * (y1 - y0) / page_area
-        if FIGURE_MIN_COVERAGE <= coverage <= FIGURE_MAX_COVERAGE:
-            figures.append((f"p{src_page.number}f{index}", image.bbox))
-    return figures
-
-
-def _is_rule(bbox: tuple[float, float, float, float], page_width: float) -> bool:
-    """A long, hairline-thin path: a horizontal rule, a table border, an underline. Page furniture,
-    never a figure, and it must not stretch a real figure's box to the full column width."""
-    width, height = bbox[2] - bbox[0], bbox[3] - bbox[1]
-    return (min(width, height) <= RULE_MAX_THICKNESS_PT
-            and max(width, height) >= page_width * RULE_MIN_LENGTH_RATIO)
-
-
-def _vector_figures(src_page, lines: list[TextLine],
-                    taken: list[tuple]) -> list[tuple[str, tuple, str]]:
-    """Line-art figures -- schematics, charts, labelled diagrams -- drawn with path operators
-    rather than placed as an image, found by anchoring on their captions.
-
-    A raster image is self-evidently a figure: something is there, and no text describes it. Vector
-    paths are not, because *everything* is vector paths -- a table's rules, a header underline, a
-    footer barcode and a hand-drawn apparatus diagram are indistinguishable as geometry. Clustering
-    them bottom-up does not resolve this either: on the real sample it splits a single captioned
-    figure into its lettered panels (Fig. 5 becomes eight separate blobs) while happily promoting a
-    page's decorative rules into a ninth.
-
-    So detection runs the other way round, from a signal the author left behind: a "Fig. N ..."
-    caption. Everything drawn in the band above a caption -- bounded above by the previous caption
-    on the page, so two figures stacked on one page stay separate -- is that caption's figure. This
-    cannot invent a figure where the author named none (invariant 1: when in doubt, nothing), and
-    it hands back the caption as the figure's alt text for free. The cost is the honest one: an
-    uncaptioned chart is still missed, and stays a decorative artifact rather than a wrong guess.
-
-    Each result is (stable id, bbox, the anchoring caption's text). The caption travels with the
-    figure rather than being rediscovered by proximity later: this function already knows exactly
-    which caption it matched, and a drawing sits further from its caption than a raster image does,
-    so re-deriving it downstream loses figures that were found perfectly well here.
-    """
-    page_area = src_page.width * src_page.height
-    if page_area <= 0 or not src_page.drawings:
-        return []
-    paths = [d.bbox for d in src_page.drawings if not _is_rule(d.bbox, src_page.width)]
-    if not paths:
-        return []
-
-    # Caption marker lines, top of page downwards. Each one closes off the band below the previous.
-    markers = sorted((ln for ln in lines if _is_caption_marker(ln.text)),
-                     key=lambda ln: -ln.bbox[3])
-    figures: list[tuple[str, tuple, str]] = []
-    band_top = src_page.height
-    for index, marker in enumerate(markers):
-        band_bottom = marker.bbox[3]
-        inside = [p for p in paths if p[1] >= band_bottom and p[3] <= band_top]
-        band_top = _caption_block_bottom(lines, marker)
-        caption = _caption_block(sorted((ln for ln in lines if ln.bbox[3] <= marker.bbox[3]),
-                                        key=lambda ln: -ln.bbox[3])) or ""
-        if len(inside) < MIN_VECTOR_PATHS:
-            continue
-        bbox = (min(p[0] for p in inside), min(p[1] for p in inside),
-                max(p[2] for p in inside), max(p[3] for p in inside))
-        if bbox[1] - band_bottom > VECTOR_CAPTION_MAX_GAP_PT:
-            continue    # drawn far above the caption: unrelated page furniture, not its figure
-        coverage = (bbox[2] - bbox[0]) * (bbox[3] - bbox[1]) / page_area
-        if not (FIGURE_MIN_COVERAGE <= coverage <= FIGURE_MAX_COVERAGE):
-            continue
-        if any(_overlaps(bbox, other) for _fid, other in taken):
-            continue    # already found as a raster image; never describe the same region twice
-        figures.append((f"p{src_page.number}v{index}", bbox, caption))
-    return figures
-
-
-def _caption_block_bottom(lines: list[TextLine], marker: TextLine) -> float:
-    """The y of the bottom of a caption's full wrapped block -- the ceiling for the next figure
-    down the page, which must not reach up into the caption above it."""
-    ordered = sorted((ln for ln in lines if ln.bbox[3] <= marker.bbox[3]),
-                     key=lambda ln: -ln.bbox[3])
-    bottom = marker.bbox[1]
-    for prev, nxt in zip(ordered, ordered[1:]):
-        if prev.bbox[1] - nxt.bbox[3] > CAPTION_CONTINUATION_GAP_PT:
-            break
-        bottom = nxt.bbox[1]
-    return bottom
-
-
-def _overlaps(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
-    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
-
-
-def _horizontally_overlaps(a: tuple[float, float, float, float],
-                           b: tuple[float, float, float, float]) -> bool:
-    return a[0] < b[2] and b[0] < a[2]
-
-
-def _is_caption_marker(text: str) -> bool:
-    """Whether a line opens with a caption label of any kind, numbered or not.
-
-    Not a sentence *about* a figure: "Figure 3A. is FTIR spectra of..." opened a paragraph of a
-    real journal page, was taken for a caption, and made the table above it a figure.
-    """
-    match = CAPTION_MARKER_RE.match(text.strip())
-    if match is None:
-        return False
-    rest = text.strip()[match.end():].split()
-    if rest and re.fullmatch(r"\(?[A-Za-z]?\)?[.:]?", rest[0]):
-        rest = rest[1:]         # a panel letter: "Figure 3A." / "Fig. 2 (b)"
-    return not (rest and rest[0].lower() in CAPTION_PROSE_VERBS)
-
-
-def _caption_number(text: str) -> str | None:
-    """The figure number a line's caption marker names ("Fig. 8" -> "8").
-
-    None when the line is not a caption *or* when it is an unnumbered one ("Photograph of the
-    reading room."). The number's only job is matching a caption to its figure across a page
-    break, which an unnumbered caption cannot do anyway -- so the two cases are the same answer
-    to this question, and `_is_caption_marker` is what asks whether a line is a caption at all.
-    """
-    match = CAPTION_MARKER_RE.match(text.strip())
-    return match.group(1) if match and _is_caption_marker(text) else None
-
-
-def _caption_block(ordered: list[TextLine], used: list | None = None) -> str | None:
-    """`ordered[0]` must be a caption-marker line; concatenate it with any tightly-following
-    continuation lines (small vertical gap -- the same paragraph, not unrelated content) into the
-    full caption text, capped at CAPTION_MAX_LINES as a safety backstop.
-
-    `used`, when given, is filled with the lines the block was built from. The caller needs those
-    to tag them `/Caption`, and they cannot be recovered afterwards by matching the text back
-    against the page: the search that found this block filtered the lines first (by position
-    relative to the figure), so re-deriving it from all of them picks up whatever OCR noise fell
-    between the caption's lines and produces a different string.
-    """
-    if not ordered or not _is_caption_marker(ordered[0].text):
-        return None
-    block = [ordered[0]]
-    for prev, nxt in zip(ordered, ordered[1:]):
-        if len(block) >= CAPTION_MAX_LINES:
-            break
-        gap = prev.bbox[1] - nxt.bbox[3]   # y-up: prev is above nxt once sorted top-to-bottom
-        if gap > CAPTION_CONTINUATION_GAP_PT:
-            break
-        block.append(nxt)
-    # `ordered` may walk outward from a figure bottom-to-top (the "caption above" fallback) rather
-    # than top-to-bottom -- re-sort by position so the joined text always reads in the document's
-    # true top-to-bottom order regardless of which direction found it.
-    block.sort(key=lambda ln: -ln.bbox[3])
-    if used is not None:
-        used.extend(block)
-    return _join_caption_lines([ln.text.strip() for ln in block])
-
-
-def _join_caption_lines(parts: list[str]) -> str:
-    """Join a caption's lines, healing the hyphen the typesetter put in to break a word.
-
-    A line ending in "-" was broken mid-word, so joining with a space produces "iconograph- ical
-    elements" -- which is what a screen reader then says, one syllable at a time. The hyphen and
-    the space both go. Anything else joins with a space as before.
-
-    Only a *trailing* hyphen is touched, and only when the next line starts lowercase: a real
-    compound ("Greco-Roman") never carries its hyphen at the end of the line, and a line ending in
-    a dash before a capital is far more likely to be an em-dash aside than a broken word.
-    """
-    out = ""
-    for part in parts:
-        if not out:
-            out = part
-        elif out.endswith("-") and part[:1].islower():
-            out = out[:-1] + part
-        else:
-            out += " " + part
-    return out
-
-
-def _caption_is_substantial(text: str) -> bool:
-    """Whether a caption says more than just its own label. WCAG 1.1.1 is explicit that a
-    figure's bare label ("Figure 8") never serves as its text alternative on its own -- it must
-    convey the image's actual content. A local match that's just the marker (or the marker plus a
-    page-break artifact like "(Continued)") isn't usable as-is; _document_captions is what finds
-    the real caption elsewhere in that case.
-    """
-    remainder = CAPTION_MARKER_RE.sub("", text.strip(), count=1)
-    return len(remainder.split()) >= MIN_CAPTION_WORDS
-
-
-def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, float],
-                    used: list | None = None) -> str | None:
-    """The figure's own caption, if the document has one directly adjacent to it -- reusing the
-    author's own words is more accurate than anything Rebind could invent, and skips the app's
-    manual describe step entirely for a figure that already names itself. Conservative by
-    construction, like every other heuristic in this module: no adjacent "Fig. N" line means no
-    caption, not a guess. May return a bare/thin match (just the marker); the caller decides
-    whether that's substantial enough or should fall back to _document_captions.
-    """
-    fx0, fy0, fx1, fy1 = bbox
-
-    below = sorted(
-        (ln for ln in lines if ln.bbox[3] <= fy0 and _horizontally_overlaps(ln.bbox, bbox)),
-        key=lambda ln: -ln.bbox[3],   # closest to the figure (highest y1) first
-    )
-    if below and (fy0 - below[0].bbox[3]) <= CAPTION_MAX_GAP_PT:
-        found = _caption_block(below, used)
-        if found is not None:
-            return found
-
-    above = sorted(
-        (ln for ln in lines if ln.bbox[1] >= fy1 and _horizontally_overlaps(ln.bbox, bbox)),
-        key=lambda ln: ln.bbox[1],   # closest to the figure (lowest y0) first
-    )
-    if above and (above[0].bbox[1] - fy1) <= CAPTION_MAX_GAP_PT:
-        return _caption_block(above, used)
-    return None
-
-
-def _caption_groups(content_lines: list[TextLine], content_roles: list[str],
-                    caption_of: dict[int, int], blocks: list[list[TextLine]],
-                    boxed: set[int] | frozenset[int] = frozenset()) -> list[int | None]:
-    """Which caption each content line belongs to, with the strays in between folded in.
-
-    A caption's own lines are known exactly. What is not is what the recogniser dropped between
-    them: on a real scan a stray "~" and "|" sat between the lines of a caption in the margin, and
-    since a plan entry is a contiguous run, those two marks split one caption into three elements.
-
-    A line is folded into a caption when it sits inside that caption's vertical span and within
-    arm's length of it horizontally. It has to be near in both, or an unrelated line level with the
-    caption on the other side of the page would join it -- which is the same mistake as reading
-    across a gutter.
-
-    A line a layout model already placed in a block of its own (`boxed`) is never folded in: the
-    model has seen the gutter. A table title in the left column of a journal page took the two
-    lines of body text level with it in the right column, which sat closer than arm's length.
-    """
-    groups: list[int | None] = [caption_of.get(id(line)) for line in content_lines]
-    if not blocks:
-        return groups
-    extents = [(min(ln.bbox[0] for ln in b), min(ln.bbox[1] for ln in b),
-                max(ln.bbox[2] for ln in b), max(ln.bbox[3] for ln in b)) for b in blocks]
-    for index, (line, role) in enumerate(zip(content_lines, content_roles)):
-        if groups[index] is not None or role != "P" or id(line) in boxed:
-            continue
-        centre = (line.bbox[1] + line.bbox[3]) / 2
-        for group, (bx0, by0, bx1, by1) in enumerate(extents):
-            if not by0 <= centre <= by1:
-                continue
-            gap = max(0.0, max(bx0 - line.bbox[2], line.bbox[0] - bx1))
-            if gap <= CAPTION_STRAY_MAX_GAP_PT:
-                groups[index] = group
-                content_roles[index] = "Caption"
-                break
-    return groups
-
-
-def _records_in_reading_order(records: list[dict]) -> list[dict]:
-    """The editor's elements for one page, in the order the page is actually read.
-
-    That order is not re-derived here. It was decided by `layout.order_page`'s XY-cut before any
-    of this ran, `_lines_for` returned the page's lines in it, and every record carries the index
-    of the line it starts at as `_order`. Sorting on that reproduces the cut exactly -- including
-    its columns -- and the key never reaches the editor.
-
-    This function used to guess instead, grouping records into visual rows and sorting each row
-    left to right. Both halves of that were wrong on a real scanned book (a tilted two-page
-    spread, `The_power_of_images...`):
-
-    * The row's lower edge was `max(top + height)` over its members, which only ever grows, so a
-      row of overlapping multi-line paragraphs never closed. All twenty elements on a page landed
-      in one row.
-    * That row was then sorted by left edge -- and a tilted scan drifts every line's left edge
-      about 0.7pt further across as the page goes down, so the sort walked the page BOTTOM TO TOP.
-
-    On a two-column page it also read straight across the gutter, because a left-column element
-    and the right-column element beside it share a row. The tagged output was correct throughout
-    (it is built from the plan, which kept the cut's order); it was the person correcting that
-    output who was handed word salad to tab through.
-    """
-    # Stable, so a table's row sub-elements -- which share their table's key -- stay with it.
-    return [{k: v for k, v in record.items() if k != "_order"}
-            for record in sorted(records, key=lambda r: r["_order"])]
-
-
-def _side_captions(lines: list[TextLine], bbox: tuple[float, float, float, float]
-                   ) -> list[tuple[str, list[TextLine]]]:
-    """Every caption block sitting *beside* a figure, in the margin to its left or right.
-
-    A book with a wide outer margin stacks its captions there rather than under the pictures, and
-    a search that only looks up and down finds nothing at all on such a page. Each caption-marker
-    line clear of the figure horizontally, whose own vertical span overlaps the figure's, starts a
-    block; the caller decides what to do when more than one comes back, because several figures
-    can share one vertical span and their captions are stacked beside all of them.
-    """
-    fx0, fy0, fx1, fy1 = bbox
-    out: list[tuple[str, list[TextLine]]] = []
-    for line in sorted(lines, key=lambda ln: -ln.bbox[3]):
-        lx0, ly0, lx1, ly1 = line.bbox
-        if not _is_caption_marker(line.text):
-            continue
-        gap = (lx0 - fx1) if lx0 >= fx1 else (fx0 - lx1)
-        if not 0 <= gap <= CAPTION_SIDE_MAX_GAP_PT:
-            continue
-        if min(ly1, fy1) - max(ly0, fy0) <= 0:
-            continue        # not beside it at all -- above or below, which the caller handles
-        block_lines: list[TextLine] = []
-        block = _caption_block(
-            sorted((ln for ln in lines if ln.bbox[3] <= ly1 and _horizontally_overlaps(
-                ln.bbox, (lx0, ly0, lx1, ly1))), key=lambda ln: -ln.bbox[3]), block_lines)
-        if block:
-            out.append((block, block_lines))
-    return out
-
-
-def _nearby_caption_number(lines: list[TextLine],
-                           bbox: tuple[float, float, float, float]) -> str | None:
-    """A more lenient search than _figure_caption: the closest "Fig. N" line within vertical range
-    of the figure, WITHOUT requiring horizontal alignment -- used only to identify which figure
-    this is when nothing adjacent forms a full, usable caption block itself. Confirmed necessary on
-    a real sample: the marker line ("Fig. 8") sits at a different indent than the image itself, so
-    it fails _figure_caption's (deliberately stricter, for building an actual caption block)
-    horizontal-overlap check entirely -- but it still reliably names which figure this is.
-    """
-    fx0, fy0, fx1, fy1 = bbox
-    candidates: list[tuple[float, TextLine]] = []
-    for ln in lines:
-        if ln.bbox[3] <= fy0:
-            gap = fy0 - ln.bbox[3]
-        elif ln.bbox[1] >= fy1:
-            gap = ln.bbox[1] - fy1
-        else:
-            continue   # vertically overlaps the figure itself -- not a caption candidate
-        if gap <= CAPTION_MAX_GAP_PT:
-            candidates.append((gap, ln))
-    for _gap, line in sorted(candidates, key=lambda item: item[0]):
-        number = _caption_number(line.text)
-        if number:
-            return number
-    return None
-
-
-def _document_captions(per_page: list[tuple]) -> dict[str, str]:
-    """Map figure number -> the fullest caption text found ANYWHERE in the document, regardless of
-    proximity to any image. Backs the fallback for a multi-part figure whose image sits on one
-    page while its real caption sits on another -- confirmed on a real sample: an image with only
-    a bare "Fig. 8 (Continued)" nearby (a page-break artifact, no descriptive content), while the
-    real, substantial caption is on the following page. `lines` is already in reading order, so a
-    caption block is built by walking forward from each marker line found -- correctly stopping at
-    a large geometric gap (e.g. a column break), which is safe: worse case is an early-terminated
-    block, never a wrong one.
-    """
-    best: dict[str, str] = {}
-    for _src_page, lines, _used_ocr in per_page:
-        for i, line in enumerate(lines):
-            number = _caption_number(line.text)
-            if number is None:
-                continue
-            block = _caption_block(lines[i:])
-            if block and (number not in best or len(block) > len(best[number])):
-                best[number] = block
-    return best
-
-
-def _crop_data_uri(page_image, bbox, page_width, page_height, max_side: int = 220) -> str:
-    """A small PNG preview (data URI) of the figure region, cropped from the rendered page."""
-    import base64
-
-    png = _png(page_image, bbox, page_width, page_height, max_side)
-    return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
-
-
-def _png(page_image, bbox, page_width, page_height, max_side: int) -> bytes:
-    """A region of the rendered page as PNG bytes, scaled down to fit `max_side`."""
-    from PIL import Image
-
-    height_px, width_px = page_image.shape[:2]
-    sx, sy = width_px / page_width, height_px / page_height
-    x0, y0, x1, y1 = bbox
-    # PDF y is bottom-up; image y is top-down.
-    box = (int(x0 * sx), int((page_height - y1) * sy), int(x1 * sx), int((page_height - y0) * sy))
-    crop = Image.fromarray(page_image).convert("RGB").crop(box)
-    crop.thumbnail((max_side, max_side))
-    buffer = io.BytesIO()
-    crop.save(buffer, format="PNG")
-    return buffer.getvalue()
-
-
-def _figure_xobject(pdf: pikepdf.Pdf, page_image, bbox, page_width, page_height) -> pikepdf.Object:
-    """A JPEG image XObject of the figure region, for redrawing it inside a tagged /Figure."""
-    from PIL import Image
-
-    height_px, width_px = page_image.shape[:2]
-    sx, sy = width_px / page_width, height_px / page_height
-    x0, y0, x1, y1 = bbox
-    box = (int(x0 * sx), int((page_height - y1) * sy), int(x1 * sx), int((page_height - y0) * sy))
-    crop = Image.fromarray(page_image).convert("RGB").crop(box)
-    buffer = io.BytesIO()
-    crop.save(buffer, format="JPEG", quality=90)
-    image_obj = pdf.make_stream(buffer.getvalue())
-    image_obj.Type = Name.XObject
-    image_obj.Subtype = Name.Image
-    image_obj.Width = crop.width
-    image_obj.Height = crop.height
-    image_obj.ColorSpace = Name.DeviceRGB
-    image_obj.BitsPerComponent = 8
-    image_obj.Filter = Name.DCTDecode
-    return image_obj
-
-
-def _escape(text: str) -> str:
-    return text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
-
-
-def _encode_winansi(text: str) -> bytes:
-    """Encode text for the invisible overlay font (Type1 Helvetica, /Encoding /WinAnsiEncoding).
-
-    The overlay font's declared encoding is WinAnsi (cp1252), so the string bytes must be cp1252,
-    not the Python default of UTF-8 -- encoding non-ASCII text (accents, curly quotes, ligatures,
-    all routine in real scanned/academic text) as UTF-8 into a WinAnsi string silently corrupts it:
-    each UTF-8 byte is reinterpreted as its own WinAnsi codepoint, and some land on one of cp1252's
-    five undefined byte values (0x81/0x8D/0x8F/0x90/0x9D) -- an invalid Unicode mapping that fails
-    PDF/UA-2 8.4.5.8/8.4.5.9. A character with no cp1252 representation at all (Greek, CJK, ...) is
-    replaced with '?' -- a real loss for that one character, but confined to the invisible text
-    layer, and an honest substitution beats a silently wrong glyph.
-
-    C0 control characters (0x00-0x1F: tab, newline, ...) get the same treatment even though most
-    have a defined *codepoint* -- WinAnsiEncoding's own glyph table (PDF spec Annex D) assigns no
-    glyph name to any of them, so they encode to Unicode 0 regardless, the same failure. A real
-    born-digital source's own extracted text can carry a literal tab used for visual alignment
-    (confirmed on a real sample: a document with "II.\tImaging..."-style headings, 52 instances of
-    exactly this) -- replaced with a space, which is what the tab visually was anyway.
-    """
-    text = "".join(" " if ord(ch) < 0x20 else ch for ch in text)
-    return text.encode("cp1252", errors="replace")
-
-
-def _draw_line(out: io.BytesIO, line: TextLine, font_name: str) -> None:
-    """The invisible (render mode 3) text for one line, with no marked-content wrapper of its own."""
-    x0, y0, x1, y1 = line.bbox
-    size = max(y1 - y0, 1.0)
-    out.write(b"q BT 3 Tr /" + font_name.encode("ascii") + b" 1 Tf\n")
-    out.write(f"{size:.2f} 0 0 {size:.2f} {x0:.2f} {y0:.2f} Tm (".encode("ascii"))
-    out.write(_encode_winansi(_escape(line.text)))
-    out.write(b") Tj\nET Q\n")
-
-
-def _tagged_text_stream(lines: list[TextLine], font_name: str,
-                        mcids: list[int | None]) -> bytes:
-    """Invisible text (render mode 3), one marked-content sequence per line.
-
-    A line with an MCID is wrapped in `/P <</MCID n>> BDC ... EMC` so the structure tree can point
-    at it. A line with `None` is wrapped in `/Artifact BMC ... EMC` instead: page furniture -- a
-    running header, a footer, a folio -- which PDF/UA requires be marked as an artifact rather than
-    tagged as content, so a screen reader does not announce "Makoto Kamei et al., 34" in the middle
-    of the prose on every single page. The text is still drawn, so it stays selectable and
-    searchable; it simply is not part of the document's content.
-    """
-    out = io.BytesIO()
-    for line, mcid in zip(lines, mcids):
-        out.write(b"/Artifact BMC\n" if mcid is None
-                  else f"/P <</MCID {mcid}>> BDC\n".encode("ascii"))
-        _draw_line(out, line, font_name)
-        out.write(b"EMC\n")
-    return out.getvalue()
-
-
-def _merge_bare_markers(lines: list[TextLine]) -> list[TextLine]:
-    """Merge a lone list-marker line ('•', '-', '1.') into the item text that follows it.
-
-    Some renderers (WeasyPrint's <ul>, Word) draw the bullet in its own text box, so pdfminer
-    yields the marker and its content as separate lines. Merging them (when they sit on the same
-    row) lets the list detector see a real list item rather than a stray marker plus a paragraph.
-    """
-    out: list[TextLine] = []
-    i = 0
-    while i < len(lines):
-        cur = lines[i]
-        item = _list_item_text(cur.text)
-        bare = item is not None and not item[0]
-        if bare and i + 1 < len(lines):
-            nxt = lines[i + 1]
-            same_row = min(cur.bbox[3], nxt.bbox[3]) - max(cur.bbox[1], nxt.bbox[1]) > 0
-            if same_row and nxt.bbox[0] >= cur.bbox[0]:
-                out.append(replace(
-                    nxt, text=f"{cur.text} {nxt.text}",
-                    bbox=(min(cur.bbox[0], nxt.bbox[0]), min(cur.bbox[1], nxt.bbox[1]),
-                          max(cur.bbox[2], nxt.bbox[2]), max(cur.bbox[3], nxt.bbox[3]))))
-                i += 2
-                continue
-        out.append(cur)
-        i += 1
-    return out
 
 
 def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int,
@@ -810,1778 +159,251 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int,
     return ordered, used_ocr, layout, layout_model.hints_for(ordered, regions)
 
 
-def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, font: pikepdf.Object, name: str) -> None:
-    resources = page.obj.get("/Resources")
-    if resources is None:
-        resources = pdf.make_indirect(Dictionary())
-        page.obj["/Resources"] = resources
-    fonts = resources.get("/Font")
-    if fonts is None:
-        fonts = Dictionary()
-        resources["/Font"] = fonts
-    fonts[Name("/" + name)] = font
-
-
-def _ocr_heading_sizes(lines: list[TextLine]) -> dict[int, float]:
-    """For the OCR lines on one page, return {id(line): size} for lines that look like headings.
-
-    `lines` must arrive in reading order (`layout.order_page` put them there); isolation is
-    measured against each line's neighbours in that order.
-
-    A heading is larger than the page's body text, set apart by whitespace (isolation), and does
-    not fill the text column (shortness). No signal alone is trusted, but their conjunction is not
-    something a body line -- which sits inside its paragraph spanning the full width -- produces.
-
-    Size is the line's DECLARED font size, not its box height. Box height was tried first and is
-    wrong on the shape this exists for: a tilted scan's words share a line but not a baseline, so
-    the box spans the drift across the line's width and measures the tilt rather than the type. On
-    a real scanned book (samples/The_power_of_images_in_the_Age_of_Augustus_ocr.pdf) that inflated
-    every 10pt body line's box to ~16pt while the 16.1pt chapter title's box was 19.68 -- 1.21x the
-    body median, under the bar -- and the whole 25-page book came out with no headings at all.
-    The declared size separated them cleanly at 16.1 against 10.0. Nothing is given up by trusting
-    it: a third-party OCR layer writes a real size, and for Rebind's own recognizer size IS the box
-    height by definition (`ocr.py`), so this is the same measurement it always was.
-
-    Trusting a declared size means guarding against a nonsensical one, which is what the first two
-    checks are for. The same book's recogniser found a lone '|' at 26pt and 'at  1' at 17.1pt with
-    its five characters strewn across 191pt -- dirt on the platen, isolated and short, and promoted
-    to headings the moment size was believed. A heading has to have some text in it, and its
-    characters cannot sit further apart than the type is tall.
-    """
-    if len(lines) < 3:
-        return {}
-    sizes = sorted(ln.size for ln in lines)
-    body_size = sizes[len(sizes) // 2] or 1.0
-    max_width = max((ln.bbox[2] - ln.bbox[0]) for ln in lines) or 1.0
-    result: dict[int, float] = {}
-    for idx, line in enumerate(lines):
-        text = line.text.strip()
-        width = line.bbox[2] - line.bbox[0]
-        height = line.bbox[3] - line.bbox[1]
-        if len(text) < MIN_HEADING_CHARS:
-            continue
-        if width / len(text) > line.size:
-            continue        # characters further apart than the type is tall: not a line of text
-        if line.size < body_size * OCR_HEADING_HEIGHT_RATIO:
-            continue
-        if width > max_width * OCR_HEADING_MAX_WIDTH_RATIO:
-            continue
-
-        def gap_to(other: TextLine | None, above: bool, line: TextLine = line,
-                   height: float = height) -> float:
-            """Whitespace between `line` and the neighbour before (above) or after it."""
-            if other is None:
-                return float("inf")
-            gap = (other.bbox[1] - line.bbox[3]) if above else (line.bbox[1] - other.bbox[3])
-            # Not vertically adjacent at all: the neighbour is across a column or page break, which
-            # is isolation rather than crowding. Measuring against whatever sat nearest vertically
-            # anywhere on the page is what hid every title on a two-page spread, where the line
-            # alongside on the *other* page sits level with it.
-            return float("inf") if gap < -height else gap
-
-        gap_above = gap_to(lines[idx - 1] if idx > 0 else None, True)
-        gap_below = gap_to(lines[idx + 1] if idx < len(lines) - 1 else None, False)
-        if max(gap_above, gap_below) >= body_size * OCR_HEADING_ISOLATION_RATIO:
-            result[id(line)] = line.size
-    return result
-
-
-def _demote_heading_bursts(levels: list[int]) -> list[int]:
-    """Demote a run of more than MAX_HEADING_BURST_RUN consecutive lines at the SAME exact raw
-    heading level back to paragraphs (0).
-
-    Grouping strictly by the same level (not "any heading, regardless of level") matters: a real
-    title immediately followed by its own subtitle uses two DIFFERENT levels and must never be
-    treated as a burst just for being adjacent, no matter how many levels are involved -- only a
-    run of lines that all share one style is the signature of a byline or diagram-label burst.
-
-    This counts LINES, deliberately, even though `_same_heading` can tell that two of them are one
-    wrapped heading. Counting joined headings instead was tried and reverted: a byline that wraps
-    is geometrically indistinguishable from a title that wraps -- same face, same tight leading,
-    same horizontal overlap -- so exempting joins let the real sample's 3-fragment byline back into
-    the outline as headings. The limit of 2 already admits a title set across two lines, which is
-    the shape that actually occurs; a title needing three is demoted, which is the safe direction.
-    """
-    out = list(levels)
-    i, n = 0, len(out)
-    while i < n:
-        if not out[i]:
-            i += 1
-            continue
-        j = i
-        while j < n and out[j] == out[i]:
-            j += 1
-        if j - i > MAX_HEADING_BURST_RUN:
-            for k in range(i, j):
-                out[k] = 0
-        i = j
-    return out
-
-
-def _same_heading(lines: list[TextLine], index: int) -> bool:
-    """Whether `lines[index]` is the next line of the same wrapped heading as the line before it.
-
-    A heading is joined on much simpler evidence than a paragraph: there is no measure to run out
-    to (a title is usually centred, and one that fills its line does so by accident), and no
-    first-line indent to read. What is left is that the two lines are set the same way, sit
-    directly under one another, and overlap horizontally -- which a wrapped title does and the two
-    shapes it must not swallow do not. Byline fragments broken around superscript markers share a
-    baseline rather than stacking, and a diagram's callout labels are spread across the picture.
-    """
-    previous, current = lines[index - 1], lines[index]
-    if previous.bold != current.bold or previous.italic != current.italic:
-        return False
-    if abs(previous.size - current.size) > max(PARAGRAPH_SIZE_TOLERANCE * max(
-            previous.size, current.size, 1.0), 0.5):
-        return False
-    if previous.ocr_confidence is None and current.ocr_confidence is None \
-            and previous.font != current.font:
-        return False
-
-    height = max(previous.bbox[3] - previous.bbox[1], 1.0)
-    gap = previous.bbox[1] - current.bbox[3]
-    # Strictly below, by less than its own leading. The lower bound is what excludes fragments of
-    # one physical line, which overlap vertically rather than following one another.
-    if not -height * HEADING_OVERLAP_SLACK <= gap <= height * PARAGRAPH_GAP_SLACK:
-        return False
-
-    left = max(previous.bbox[0], current.bbox[0])
-    right = min(previous.bbox[2], current.bbox[2])
-    narrower = min(previous.bbox[2] - previous.bbox[0], current.bbox[2] - current.bbox[0])
-    return (right - left) >= HEADING_MIN_OVERLAP * max(narrower, 1.0)
-
-
-def _height_tiers(heights: list[float]) -> list[float]:
-    """Cluster heading heights into representative tiers, largest first (a tier per size level)."""
-    tiers: list[float] = []
-    for height in sorted(set(heights), reverse=True):
-        if not tiers or (tiers[-1] - height) > tiers[-1] * OCR_HEADING_TIER_TOLERANCE:
-            tiers.append(height)
-    return tiers
-
-
-def _structure_roles(per_page: list[tuple], profile,
-                     not_headings: list[set[int]] | None = None) -> list[list[str]]:
-    """A structure type ('P' or 'H1'..'H6') for each line, per page.
-
-    Born-digital headings come from the document-global typographic profile. Recognizer output
-    (Rebind's OCR, or a hidden OCR layer over a scan) has no reliable font size, so its headings are
-    instead recovered geometrically -- size, isolation and shortness together (`_ocr_heading_sizes`)
-    -- with heading levels assigned from document-global size tiers. Levels are then normalized so
-    the sequence starts at H1 and never skips a level, which PDF/UA requires (7.4.2).
-
-    `not_headings[page]` holds the ids of lines a layout model saw inside a block of running text
-    or a caption. However large their type, they are not headings: on a journal's first page the
-    "ORIGINAL ARTICLE" kicker and the authors' names are set bigger than the body, and were tagged
-    H1 on size alone. They are left out before levels are assigned, so the outline still starts at
-    H1 and never skips.
-    """
-    ocr_headings: list[dict[int, float]] = []   # per page: {id(line): height} for OCR headings
-    for src_page, lines, used_ocr in per_page:
-        page_is_ocr = used_ocr or _is_ocr_over_scan(src_page)
-        ocr_headings.append(_ocr_heading_sizes(lines) if page_is_ocr else {})
-
-    tiers = _height_tiers([h for page in ocr_headings for h in page.values()])
-
-    def tier_level(height: float) -> int:
-        for i, tier in enumerate(tiers):
-            if abs(height - tier) <= tier * OCR_HEADING_TIER_TOLERANCE:
-                return i + 1
-        return len(tiers) or 1
-
-    raw: list[list[int]] = []   # per page: 0 for paragraph, or the raw heading level (>=1)
-    for page_index, ((src_page, lines, used_ocr), page_headings) in enumerate(
-            zip(per_page, ocr_headings)):
-        page_is_ocr = used_ocr or _is_ocr_over_scan(src_page)
-        prose = not_headings[page_index] if not_headings else set()
-        page_levels: list[int] = []
-        for line in lines:
-            if id(line) in prose:
-                page_levels.append(0)
-            elif page_is_ocr:
-                page_levels.append(tier_level(page_headings[id(line)]) if id(line) in page_headings else 0)
-            elif line.ocr_confidence is not None:
-                page_levels.append(0)
-            elif (profile.role_of(line, page_height=src_page.height) == "heading"
-                  and len(line.text.strip()) >= MIN_HEADING_CHARS):
-                page_levels.append(profile.heading_level(style_of(line)) or 1)
-            else:
-                page_levels.append(0)
-        if not page_is_ocr:
-            # OCR headings already carry their own isolation signal (_ocr_heading_sizes);
-            # only born-digital candidacy (style + length alone) needs the burst check too.
-            page_levels = _demote_heading_bursts(page_levels)
-        raw.append(page_levels)
-
-    if not any(lvl for page in raw for lvl in page):
-        return [["P"] * len(page_levels) for page_levels in raw]
-
-    # Anchor H1 to whichever heading the reader meets FIRST in reading order, not to the single
-    # largest font anywhere in the document. Global size-rank alone can let a heading appearing
-    # later -- an emphasized "References" header, say -- usurp H1 out from under the document's
-    # real first heading (confirmed on a real sample: raw output was H2, H1, H3...). PDF/UA and
-    # Adobe's own checker both require the first heading to be H1. Anything at least as large as
-    # that first heading is treated as an equally top-level sibling, not promoted above H1 --
-    # there is no level above H1 to fabricate, and real documents legitimately have several
-    # top-level headings (chapter titles) of the same or incidentally differing size.
-    first_raw = next(lvl for page in raw for lvl in page if lvl)
-
-    # Assign each NEW raw style (in reading-order first-appearance) at most one level deeper than
-    # the CURRENTLY OPEN branch -- not the deepest level ever reached historically. This is normal
-    # outline-nesting semantics (same as HTML/EPUB headings): returning to a shallower, previously
-    # -seen level CLOSES any deeper branch that was open, so a brand-new style encountered after
-    # that can only go one level past wherever the outline currently sits, not past its historical
-    # peak. Getting this wrong is the difference between satisfying veraPDF's PDF/UA-2 check and
-    # Adobe Acrobat's own stricter "Appropriate nesting" check: veraPDF is satisfied as long as the
-    # GLOBAL SET of levels used has no gaps, but Adobe requires the SEQUENCE itself to never skip
-    # locally. Confirmed on a real sample that validated PDF/UA-2 compliant (veraPDF, 0 failures)
-    # yet still failed Adobe's check: H2, H3, H2, H2, H2, [new style] -- tracking the historical
-    # max (3, from the H3) let the new style become H4; tracking the CURRENT depth (2, since the
-    # H3 branch had already closed by returning to H2) correctly gives it H3 instead.
-    #
-    # A new style goes one level below the deepest OPEN heading set larger than it, not below
-    # whatever happens to be open. A journal's "Abstract" (10pt) comes before its "Introduction"
-    # (12pt); nesting each new style under the last one made Introduction a subsection of
-    # Abstract, and every section of the paper a level deeper than it should be.
-    level_map: dict[int, int] = {}
-    branch: list[tuple[int, int]] = []      # the open headings, (raw, level), shallowest first
-    for page_levels in raw:
-        for lvl in page_levels:
-            if not lvl:
-                continue
-            if lvl not in level_map:
-                larger = [level for raw_level, level in branch if raw_level < lvl]
-                level_map[lvl] = 1 if lvl <= first_raw else min(
-                    (larger[-1] if larger else 0) + 1, 6)
-            level = level_map[lvl]
-            branch = [(r, v) for r, v in branch if v < level] + [(lvl, level)]
-
-    return [
-        [f"H{level_map[lvl]}" if lvl else "P" for lvl in page_levels]
-        for page_levels in raw
-    ]
-
-
-def _is_list_item(text: str) -> bool:
-    item = _list_item_text(text)
-    return item is not None and bool(item[0])
-
-
-def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextLine]]]:
-    """Group a table's cells (mcid, line) into rows by vertical band, each row sorted left to right."""
-    if not cells:
-        return []
-    heights = sorted(ln.bbox[3] - ln.bbox[1] for _mcid, ln in cells)
-    band = (heights[len(heights) // 2] or 1.0) * 0.6
-    ordered = sorted(cells, key=lambda cl: -((cl[1].bbox[1] + cl[1].bbox[3]) / 2))
-    rows: list[list[tuple[int, TextLine]]] = []
-    current: list[tuple[int, TextLine]] = []
-    current_center: float | None = None
-    for mcid, line in ordered:
-        center = (line.bbox[1] + line.bbox[3]) / 2
-        if current_center is None or current_center - center <= band:
-            current.append((mcid, line))
-            current_center = center if current_center is None else current_center
-        else:
-            rows.append(current)
-            current = [(mcid, line)]
-            current_center = center
-    if current:
-        rows.append(current)
-    return [sorted(row, key=lambda cl: cl[1].bbox[0]) for row in rows]
-
-
-def _tagged_table(pdf: pikepdf.Pdf, rows: list[tuple[str, list[tuple[int, TextLine]]]],
-                  document_elem: pikepdf.Object, page_obj: pikepdf.Object, leaf,
-                  row_tags: dict[str, str]) -> pikepdf.Object:
-    """Build a fully tagged `/Table` from its rows of cells, top to bottom, each as `(row id,
-    [(line index, line)] left to right)` (`_table_row_groups`): a regular grid of `/TR`s whose
-    first row is header cells (`/TH` scoped to their column) and the rest data cells (`/TD`) by
-    default -- a person can override any row's header/data status per row through the editor
-    (`row_tags`, keyed by row id; see `ROW_TAG_KEYS`).
-
-    Cells are snapped to document-consistent column positions (their clustered left edges), so every
-    row emits one cell per column -- an empty cell where a value is missing -- making the grid
-    regular, which is what lets assistive technology read a data cell against its column header.
-    """
-    columns: list[float] = []
-    for x in sorted(line.bbox[0] for _row_id, row in rows for _mcid, line in row):
-        if not columns or x - columns[-1] > COLUMN_ALIGN_TOLERANCE_PT:
-            columns.append(x)
-
-    def column_of(line: TextLine) -> int:
-        return min(range(len(columns)), key=lambda c: abs(line.bbox[0] - columns[c]))
-
-    table = pdf.make_indirect(Dictionary(
-        Type=Name.StructElem, S=Name.Table, P=document_elem, K=Array([])))
-    trs: list[pikepdf.Object] = []
-    header_texts: list[str] = []
-    row_count = 0
-    for row_index, (row_id, row) in enumerate(rows):
-        row_count += 1
-        tr = pdf.make_indirect(Dictionary(
-            Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
-        # Several of a row's cells can snap to one column -- their left edges sit within the
-        # tolerance of each other, which a noisy OCR'd grid produces constantly. They share the
-        # cell rather than the later ones being dropped: dropping one would leave its marked
-        # content on the page owned by nothing, which is untagged content, not a tidier table.
-        by_column: dict[int, list[tuple[int, TextLine]]] = {}
-        for mcid, line in row:
-            by_column.setdefault(column_of(line), []).append((mcid, line))
-        # The default guess -- the first detected row is the header -- unless a person corrected
-        # this specific row through the editor (Task 3's row sub-elements).
-        override = row_tags.get(row_id)
-        is_header = override == "TH" if override in ("TH", "TD") else row_index == 0
-        cell_type = Name.TH if is_header else Name.TD
-        row_cells: list[pikepdf.Object] = []
-        for c in range(len(columns)):
-            if c in by_column:
-                members = by_column[c]
-                extra = {"A": Dictionary(O=Name.Table, Scope=Name.Column)} if is_header else None
-                row_cells.append(leaf([mcid for mcid, _line in members], cell_type, tr, extra))
-                if is_header:
-                    header_texts.append(
-                        " ".join(line.text.strip() for _mcid, line in members).strip())
-            else:
-                # An empty cell keeps the grid regular; it holds no content, so no marked content.
-                row_cells.append(pdf.make_indirect(Dictionary(
-                    Type=Name.StructElem, S=cell_type, P=tr, K=Array([]))))
-        tr.K = Array(row_cells)
-        trs.append(tr)
-    table.K = Array(trs)
-    summary = _table_summary(len(columns), row_count, header_texts)
-    table.Alt = String(summary)
-    # Also the dedicated /Summary Table attribute (ISO 32000-2's own mechanism for this, the same
-    # /A <</O /Table ...>> pattern already used for /Scope on header cells) -- confirmed necessary
-    # on a real sample: Adobe Acrobat's "Tables must have a summary" check kept failing with /Alt
-    # alone, even though /Alt is the generic PDF/UA alternate-description mechanism and should have
-    # been enough on its own.
-    table.A = Dictionary(O=Name.Table, Summary=String(summary))
-    return table
-
-
-def _cell_rows(boxes: list[tuple[float, float, float, float]]) -> list[list[int]]:
-    """Group cell boxes into rows, top to bottom, each row's indices left to right.
-
-    By vertical overlap rather than by centre: a cell that wraps over three lines sits beside
-    one-line cells set level with its top, and their centres are a line or more apart. A cell joins
-    the row above it when it shares at least half of the shorter of the two heights with it.
-    """
-    rows: list[list] = []       # [member indices, bottom, top]
-    for i in sorted(range(len(boxes)), key=lambda k: -boxes[k][3]):
-        _x0, y0, _x1, y1 = boxes[i]
-        if rows:
-            members, low, high = rows[-1]
-            overlap = min(high, y1) - max(low, y0)
-            if overlap >= 0.5 * min(max(y1 - y0, 1.0), max(high - low, 1.0)):
-                members.append(i)
-                rows[-1][1], rows[-1][2] = min(low, y0), max(high, y1)
-                continue
-        rows.append([[i], y0, y1])
-    return [sorted(members, key=lambda k: boxes[k][0]) for members, _low, _high in rows]
-
-
-def _cell_table(pdf: pikepdf.Pdf, cells: list[tuple[str, list[int]]], lines: list[TextLine],
-                document_elem: pikepdf.Object, leaf) -> pikepdf.Object:
-    """A `/Table` built around a run of elements a person marked as cells, `(TH|TD, line indices)`.
-
-    The grid is laid out from where the cells sit: rows by `_cell_rows`, columns by clustering left
-    edges exactly as `_tagged_table` does, and an empty cell wherever a row has nothing in a column,
-    so every row is the same width. A header cell is scoped to its column when its whole row is
-    headers (the usual header row) and to its row otherwise (a label down the left-hand side).
-    """
-    boxes = [(min(lines[i].bbox[0] for i in indices), min(lines[i].bbox[1] for i in indices),
-              max(lines[i].bbox[2] for i in indices), max(lines[i].bbox[3] for i in indices))
-             for _kind, indices in cells]
-    columns: list[float] = []
-    for x in sorted(box[0] for box in boxes):
-        if not columns or x - columns[-1] > COLUMN_ALIGN_TOLERANCE_PT:
-            columns.append(x)
-
-    def column_of(k: int) -> int:
-        return min(range(len(columns)), key=lambda c: abs(boxes[k][0] - columns[c]))
-
-    table = pdf.make_indirect(Dictionary(
-        Type=Name.StructElem, S=Name.Table, P=document_elem, K=Array([])))
-    trs: list[pikepdf.Object] = []
-    header_texts: list[str] = []
-    rows = _cell_rows(boxes)
-    for row in rows:
-        tr = pdf.make_indirect(Dictionary(Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
-        by_column: dict[int, list[int]] = {}
-        for k in row:
-            by_column.setdefault(column_of(k), []).append(k)
-        header_row = all(cells[k][0] == "TH" for k in row)
-        scope = Name.Column if header_row else Name.Row
-        row_cells: list[pikepdf.Object] = []
-        for c in range(len(columns)):
-            members = by_column.get(c)
-            if not members:
-                row_cells.append(pdf.make_indirect(Dictionary(
-                    Type=Name.StructElem, S=Name.TH if header_row else Name.TD, P=tr,
-                    K=Array([]))))
-                continue
-            # Two cells snapped to one column share it, as in `_tagged_table`: dropping one would
-            # leave its content on the page owned by nothing.
-            indices = [i for k in members for i in cells[k][1]]
-            if any(cells[k][0] == "TH" for k in members):
-                row_cells.append(leaf(indices, Name.TH, tr,
-                                      {"A": Dictionary(O=Name.Table, Scope=scope)}))
-                header_texts.append(" ".join(lines[i].text.strip() for i in indices).strip())
-            else:
-                row_cells.append(leaf(indices, Name.TD, tr))
-        tr.K = Array(row_cells)
-        trs.append(tr)
-    table.K = Array(trs)
-    summary = _table_summary(len(columns), len(rows), header_texts)
-    table.Alt = String(summary)
-    table.A = Dictionary(O=Name.Table, Summary=String(summary))
-    return table
-
-
-def _table_summary(column_count: int, row_count: int, header_texts: list[str]) -> str:
-    """An honest, non-fabricated /Alt for a /Table (Adobe's 'Tables must have a summary' check).
-
-    Built entirely from structure Rebind already knows -- column/row count and header cell text --
-    never a guess at what the table is *about* (invariant 1: never fabricate a table's meaning).
-    """
-    summary = f"Table with {column_count} columns and {row_count} rows."
-    if header_texts:
-        summary += f" Column headers: {', '.join(header_texts)}."
-    return summary
-
-
-def _center_in_box(bbox: tuple, box: tuple) -> bool:
-    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
-    return box[0] <= cx <= box[2] and box[1] <= cy <= box[3]
-
-
-def _is_full_page_scan(src_page) -> bool:
-    """Whether the page is one big picture -- a scanned sheet -- rather than a laid-out page.
-
-    That is the same image `_page_figures` rejects for covering too much of the page to be a figure
-    on it. Here the fact is used the other way round: it is what says the page's illustrations have
-    to be found in the pixels, because the file itself holds only the one raster.
-    """
-    area = src_page.width * src_page.height
-    if area <= 0:
-        return False
-    for image in src_page.images:
-        x0, y0, x1, y1 = image.bbox
-        if (x1 - x0) * (y1 - y0) / area > FIGURE_MAX_COVERAGE:
-            return True
-    return False
-
-
-def _scanned_figures(source: Path, src_page, lines: list[TextLine], dpi: int,
-                     already: list[tuple[str, tuple]]) -> list[tuple[str, tuple]]:
-    """Pictures printed on a scanned page, found from its pixels. Each is (stable id, bbox).
-
-    A region that overlaps something already found (a placed image, a line-art figure) is dropped:
-    the same picture must not be announced twice, and the earlier detections know more about what
-    they are.
-    """
-    from .ocr import render_page_to_image
-    from .regions import find_picture_regions
-
-    try:
-        page_image = render_page_to_image(source, src_page.number, dpi=REGION_SCAN_DPI)
-    except Exception:  # noqa: BLE001 -- a page that will not render simply yields no figures
-        return []
-    found = find_picture_regions(
-        page_image, [line.bbox for line in lines],
-        page_width=src_page.width, page_height=src_page.height)
-    out: list[tuple[str, tuple]] = []
-    for index, region in enumerate(found):
-        if any(_boxes_overlap(region.bbox, bbox) for _fid, bbox in already + out):
-            continue
-        out.append((f"p{src_page.number}r{index}", region.bbox))
-    return out
-
-
-def _is_speck(line: TextLine, hints: layout_model.PageHints) -> bool:
-    """Whether a line on a scanned page is a speck: a mark the recogniser read as text.
-
-    Two shapes, both seen on real scans: a line of nothing but marks ("|", "~", "." -- dirt on the
-    platen, a rule's end, a gutter shadow), and a one- or two-character line the layout model found
-    in no region where words are expected, set alone in a margin or a gap. A real word is never one
-    of these: born-digital text is not passed here, and anything inside a block of text, a title, a
-    table or an equation is kept whatever its length.
-    """
-    text = line.text.strip()
-    if not text:
-        return False
-    if len(text) <= SPECK_MAX_MARKS and not any(ch.isalnum() for ch in text):
-        return True
-    return (hints.tables is not None and len(text) <= SPECK_MAX_CHARS
-            and id(line) not in hints.in_text)
-
-
-def _holds_table(lines: list[TextLine], hints: layout_model.PageHints, bbox: tuple) -> bool:
-    """Whether most of the text inside a region is a table's -- as the layout model boxed it, or,
-    without a model, as the geometric detector finds it."""
-    inside = [ln for ln in lines if _center_in_box(ln.bbox, bbox)]
-    if len(inside) < MIN_TABLE_LINES_IN_FIGURE:
-        return False
-    table = ({id(ln) for ln in inside if id(ln) in hints.tables} if hints.tables is not None
-             else detect_table_lines(inside))
-    return len(table) >= TABLE_SHARE_OF_FIGURE * len(inside)
-
-
-def _margin_furniture(lines: list[TextLine], width: float, height: float) -> list[TextLine]:
-    """Sideways text standing clear of the page's other text, lines made only of icon glyphs
-    (private-use characters: an envelope, a globe, a tick) that have nothing to read out, and text
-    set off the page entirely, which nobody sees."""
-    upright = [ln for ln in lines if not ln.rotated]
-    out = []
-    for line in lines:
-        text = line.text.strip()
-        x0, y0, x1, y1 = line.bbox
-        # In the margin: hardly any of the page's text shares its width. (Not "beyond the
-        # rightmost line": a heading's trailing spaces reached past a stamp on a real page.)
-        sharing = sum(1 for ln in upright if _horizontally_overlaps(ln.bbox, line.bbox))
-        if line.rotated and sharing <= MARGIN_SHARE * len(upright):
-            out.append(line)
-        elif x1 <= 0 or y1 <= 0 or x0 >= width or y0 >= height:
-            out.append(line)
-        elif text and all("" <= ch <= "" or ch.isspace() for ch in text):
-            out.append(line)
-    return out
-
-
-def _boxes_overlap(a: tuple, b: tuple) -> bool:
-    return not (a[2] <= b[0] or b[2] <= a[0] or a[3] <= b[1] or b[3] <= a[1])
-
-
-def _figure_text_strict(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
-    """A picture's own callout labels, when the picture's box is a guess rather than a declaration.
-
-    Used for a figure found in a scan's pixels. Two things are given up compared with
-    `_figure_text`: ownership never grows outward from the box, and only *labels* are claimed --
-    a few words, the length a callout runs to. Anything longer is a sentence, and a sentence inside
-    the box is prose the picture happens to sit around, not part of it.
-
-    Both restrictions are there for the same reason. Growing from a guessed box cascaded across the
-    page on a real scanned book and pulled 117 paragraphs out of the reading order; claiming every
-    line inside the box still held 238 of them back. Text hidden from a screen reader is the worst
-    outcome available here, so a guessed box gets no benefit of the doubt.
-    """
-    # Text turned sideways inside a picture is lettering on it (a plan's room labels), not prose.
-    return [line for line in lines
-            if _center_in_box(line.bbox, bbox)
-            and (line.rotated or len(line.text.split()) <= FIGURE_LABEL_MAX_WORDS)]
-
-
-def _area(bbox: tuple) -> float:
-    return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
-
-
-def _music_text(lines: list[TextLine], example) -> list[TextLine]:
-    """What a music example owns of the page's text: anything on its staves, which is notation the
-    recogniser misread whatever it came out as, and the short labels around them -- figures under a
-    bass, a tempo marking. Never its caption ("Ex. 24."), which is read in its own right."""
-    owned = []
-    for line in lines:
-        if any(_center_in_box(line.bbox, band) for band in example.bands):
-            owned.append(line)      # even one that opens like a caption: it is on the stave
-        elif (_center_in_box(line.bbox, example.bbox) and not music.is_label(line.text)
-              and not _is_caption_marker(line.text)
-              and len(line.text.split()) <= FIGURE_LABEL_MAX_WORDS):
-            owned.append(line)
-    return owned
-
-
-def _figure_text(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
-    """The lines belonging to a figure: its own callout labels, not the prose around it.
-
-    A label sits *on* the artwork, but the figure's box is the extent of its ink, and a label
-    routinely sits just past that -- "Bonding" printed a few points above the top of the drawing it
-    names, at the end of a leader line. So the box is tested with a small tolerance, and ownership
-    grows: a line near the figure joins it and widens the box, which may in turn reach a label near
-    only that. Prose does not sit on artwork, so it is never reached.
-
-    Growth is floored at the caption. The caption is real text that belongs in the reading order in
-    its own right -- it is also what the figure's alt text was taken from -- so neither it nor the
-    body text beneath it may be swallowed, however close the artwork comes to it.
-
-    Only labels are ever claimed, never a line of a paragraph (`_paragraph_lines`). Growing
-    through prose cascaded on a real journal: a cover's sidebar image swallowed the whole title
-    block beside it, and a page's chart swallowed the five paragraphs stacked above it, leading
-    for leading -- all of it hidden from a screen reader as decoration.
-    """
-    floor = max(
-        (ln.bbox[3] for ln in lines
-         if _is_caption_marker(ln.text) and ln.bbox[3] <= bbox[1] + FIGURE_TEXT_TOLERANCE_PT),
-        default=None,
-    )
-    prose = _paragraph_lines(lines)
-    candidates = [ln for ln in lines if (floor is None or ln.bbox[3] > floor)
-                  and id(ln) not in prose]
-    owned: list[TextLine] = []
-    box = bbox
-    changed = True
-    while changed:
-        changed = False
-        grown = (box[0] - FIGURE_TEXT_TOLERANCE_PT, box[1] - FIGURE_TEXT_TOLERANCE_PT,
-                 box[2] + FIGURE_TEXT_TOLERANCE_PT, box[3] + FIGURE_TEXT_TOLERANCE_PT)
-        for line in candidates:
-            if any(line is seen for seen in owned):
-                continue
-            if _center_in_box(line.bbox, grown) or _overlaps(line.bbox, grown):
-                owned.append(line)
-                box = (min(box[0], line.bbox[0]), min(box[1], line.bbox[1]),
-                       max(box[2], line.bbox[2]), max(box[3], line.bbox[3]))
-                changed = True
-    return owned
-
-
-def _paragraph_lines(lines: list[TextLine]) -> set[int]:
-    """The lines (by `id`) that are running text: a line longer than a label set in a run with
-    other lines, and every line set at a paragraph's leading next to one -- the last line of a
-    paragraph ("rivers."), a title's short last line, a byline's DOI under its journal reference.
-
-    A long line standing alone is not a paragraph: on a drawing it is a callout ("D  Bond this part
-    with super glue"), and it stays the drawing's."""
-    def near(line: TextLine, other: TextLine) -> bool:
-        if other is line or not _horizontally_overlaps(line.bbox, other.bbox):
-            return False
-        gap = max(other.bbox[1] - line.bbox[3], line.bbox[1] - other.bbox[3])
-        return gap <= PARAGRAPH_LEADING_GAP * max(line.bbox[3] - line.bbox[1],
-                                                  other.bbox[3] - other.bbox[1])
-
-    prose = {id(ln) for ln in lines if len(ln.text.split()) > FIGURE_LABEL_MAX_WORDS
-             and any(near(ln, other) for other in lines)}
-    grew = True
-    while grew:
-        grew = False
-        for line in lines:
-            if id(line) not in prose and any(id(o) in prose and near(line, o) for o in lines):
-                prose.add(id(line))
-                grew = True
-    return prose
-
-
-def _figure_anchor(lines: list[TextLine], mcids: list[int | None], figure_index: int,
-                   owner_figure: dict[int, int], bbox: tuple) -> int | None:
-    """The MCID of the content line a figure should be read *before*, or None to read it last.
-
-    Reading order is a sequence, so a figure needs a place in it. Its own labels were already
-    spliced to the right height by the layout pass, so the line following them is where the figure
-    belongs. Failing that (a figure with no labels of its own) it is read straight after the text
-    above it *in its own column* -- the last line over it that it shares any width with -- or, with
-    nothing above, before the first such line below it. Taking simply the first line anywhere below
-    the figure put a left-hand column's music examples into the middle of the right-hand column on
-    a real two-column page, since the right column's lower half is "below" them too.
-    """
-    seen_own_text = False
-    content: list[tuple[TextLine, int]] = []
-    for line, mcid in zip(lines, mcids):
-        if owner_figure.get(id(line)) == figure_index:
-            seen_own_text = True
-            continue
-        if mcid is None:
-            continue
-        if seen_own_text:
-            return mcid
-        content.append((line, mcid))
-    middle = (bbox[1] + bbox[3]) / 2
-    column = [k for k, (line, _mcid) in enumerate(content)
-              if _horizontally_overlaps(line.bbox, bbox)]
-    above = [k for k in column if (content[k][0].bbox[1] + content[k][0].bbox[3]) / 2 > middle]
-    if above:
-        after = max(above) + 1
-        return content[after][1] if after < len(content) else None
-    below = [k for k in column if k not in above]
-    if below:
-        return content[min(below)][1]
-    return next((mcid for line, mcid in content if line.bbox[3] <= bbox[1]), None)
-
-
-def _top_index_for(tops: list, owners: list, anchor: int | None) -> int:
-    """Where in `tops` an element anchored before MCID `anchor` belongs."""
-    if anchor is None or anchor >= len(owners):
-        return len(tops)
-    owner = owners[anchor]
-    for position, top in enumerate(tops):
-        if top is owner or _contains(top, owner):
-            return position
-    return len(tops)
-
-
-def _contains(parent, target) -> bool:
-    """Whether `target` is `parent` or sits somewhere beneath it in the structure tree."""
-    kids = parent.get("/K")
-    if not isinstance(kids, Array):
-        return False
-    for kid in kids:
-        if isinstance(kid, Dictionary):
-            if kid == target or _contains(kid, target):
-                return True
-    return False
-
-
 @dataclass
-class Edits:
-    """A person's corrections to what Rebind decided, applied on the next run.
+class _LineSort:
+    """Where each of a page's lines went before anything is drawn. Three kinds, and only one of
+    them is the document's content:
 
-    Everything is keyed by element id, and an element id is derived from the source line it starts
-    at -- never from its position in the list -- so removing or retagging one element cannot
-    silently shift what every later correction refers to.
+    * page furniture (running head, footer, folio) -> an /Artifact, never tagged content;
+    * text belonging to a described figure -> drawn INSIDE that figure's marked content, so the
+      figure is one thing in the reading order rather than a picture plus a scatter of loose labels
+      ("A", "B", "3 mm") a screen reader would read out as if it were prose;
+    * everything else -> ordinary content, tagged with its own MCID.
     """
 
-    tags: dict[str, str] = field(default_factory=dict)      # element id -> structure type
-    removed: set[str] = field(default_factory=set)          # element ids to drop from the tree
-    alts: dict[str, str] = field(default_factory=dict)      # figure id -> alt text
-    # element id -> the frame a person drew around it, as (left, top, width, height) in percent of
-    # the page -- the editor's own coordinates. The element becomes exactly the lines whose centres
-    # fall inside it (`_apply_frames`).
-    frames: dict[str, tuple[float, float, float, float]] = field(default_factory=dict)
-    # inserted element id -> the element it was inserted after, which it follows in the reading
-    # order wherever its lines are on the page (`_apply_frames`).
-    after: dict[str, str] = field(default_factory=dict)
-
-    @classmethod
-    def from_payload(cls, payload: dict | None) -> Edits:
-        payload = payload or {}
-
-        # TH/TD are accepted on any id: on a detected table's row they set that row, and on any
-        # other element they make it a cell of a table built around it (`_page_structure`), so a
-        # bare /TH with no /TR or /Table around it can no longer arise from either.
-        def allowed(v: str) -> bool:
-            return v in EDITABLE_TAGS
-
-        def frame(v) -> tuple[float, float, float, float] | None:
-            try:
-                left, top, width, height = (float(x) for x in v)
-            except (TypeError, ValueError):
-                return None
-            values = (left, top, width, height)
-            if not all(math.isfinite(x) for x in values) or width <= 0 or height <= 0:
-                return None
-            return values
-
-        frames = {str(k): frame(v) for k, v in (payload.get("frames") or {}).items()}
-        return cls(
-            tags={str(k): str(v) for k, v in (payload.get("tags") or {}).items()
-                  if allowed(str(v))},
-            removed={str(v) for v in (payload.get("removed") or [])},
-            alts={str(k): str(v).strip() for k, v in (payload.get("alts") or {}).items()
-                  if str(v).strip()},
-            frames={k: v for k, v in frames.items() if v is not None},
-            after={str(k): str(v) for k, v in (payload.get("after") or {}).items()},
-        )
+    line_ids: list[str]               # an id for every line, tagged or not
+    owner_figure: dict[int, int]      # id(line) -> index into the described figures
+    inside_undescribed: set[int]      # id(line) of labels held out with an undescribed figure
+    specks: set[int]                  # id(line) of marks that are not read or listed at all
+    promoted: set[int]                # line indices the person made content
+    frames: dict[str, tuple]          # frames the person drew on this page, in points
+    is_artifact: list[bool]
 
 
-# What a person may retag an element as, and how each has to be built. ISO 32005 Table 5 governs
-# what may appear directly under the document element, and veraPDF enforces it strictly -- every
-# entry below was checked by producing a document that uses it and validating the result, because
-# guessing got it wrong twice (/Caption and /Quote both look reasonable and are both illegal there).
-#
-# Three shapes, because "legal under Document" is not the same as "may hold content directly":
-#   * CONTENT -- takes the page's marked content as its own children. The ordinary case.
-#   * GROUPING -- a container that may only hold block-level children, so the content is wrapped
-#     in a /P inside it. Tagging one of these directly over content fails; wrapping is the fix.
-#   * built specially -- /Figure needs an /Alt, /Table needs rows and cells, /L needs list items,
-#     /Caption must sit inside the figure or table it captions rather than beside it.
-#
-# Two names that look obviously right and are not. /Aside is HTML5's, not PDF 2.0's, and fails
-# "all structure elements shall belong to one of the following namespaces". /TOC is legal, and can
-# be built (its children must be /TOCI, never /P), but every /TOCI must carry a /Ref identifying
-# what the entry points at -- and Rebind cannot know which heading a line of a contents list refers
-# to without guessing. So it is not offered: a table of contents that names the wrong targets is
-# worse than one tagged as ordinary paragraphs.
-CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "Formula", "Form",
-                "Note")
-# /Part is not offered: it is a container with no behaviour of its own that /Sect and /Div do not
-# already have, so it was one more thing to choose between for no gain to a reader.
-GROUPING_TAGS = ("Sect", "Div", "Art", "Index", "NonStruct")
-SPECIAL_TAGS = ("Figure", "Table", "L", "Caption")
-# A cell is never tagged where it stands -- a /TH or /TD is only legal inside a /TR inside a /Table.
-# A run of elements marked as cells is gathered into one table around them (`_cell_table`), which
-# is how a table Rebind did not detect is built by hand.
-CELL_TAGS = ("TH", "TD")
-EDITABLE_TAGS = CONTENT_TAGS + GROUPING_TAGS + SPECIAL_TAGS + CELL_TAGS
-
-# One keystroke per type, so retagging is Tab-and-press rather than Tab-and-open-a-menu. Chosen for
-# the first letter of the thing wherever it is free, and the digits for heading levels. Defined
-# here rather than in the page's script so the keys, the labels and the tags cannot drift apart.
-# The third column is what the editor shows in big letters when an element has focus, with its key
-# beside it; the fourth says what the type *means* -- a librarian retagging a page should not have
-# to already know what a PDF structure type does, and "BlockQuote" is not self-explanatory to
-# anyone who doesn't.
-#
-# /Artifact is not here either. It is not a structure type -- it is the absence of one -- and
-# offering it alongside real types put a non-answer in the list of answers.
-TAG_KEYS = (
-    ("p", "P", "Paragraph", "Ordinary body text. The default, and right for most things."),
-    ("1", "H1", "Heading 1", "The document's top-level heading — usually its title."),
-    ("2", "H2", "Heading 2", "A major section heading beneath a Heading 1."),
-    ("3", "H3", "Heading 3", "A subsection heading beneath a Heading 2."),
-    ("4", "H4", "Heading 4", "A fourth-level heading."),
-    ("5", "H5", "Heading 5", "A fifth-level heading."),
-    ("6", "H6", "Heading 6", "A sixth-level heading — the deepest there is."),
-    ("q", "BlockQuote", "Block quote", "An extended quotation set apart from the body text."),
-    ("c", "Caption", "Caption", "The text that describes a figure or table. Rebind puts it inside "
-                                "the figure or table it belongs to."),
-    ("f", "Figure", "Figure", "A picture, chart or diagram. Needs a description, so a screen "
-                              "reader has something to say about it."),
-    ("t", "Table", "Table", "A grid of data. Rebind builds the rows, cells and column headers."),
-    ("h", "TH", "Table header cell", "A cell that labels a row or column of a table. Cells marked "
-                                     "one after another are built into one table."),
-    ("b", "TD", "Table data cell", "An ordinary cell of a table, read against its header. Cells "
-                                   "marked one after another are built into one table."),
-    ("l", "L", "List", "A bulleted or numbered list."),
-    ("s", "Sect", "Section", "A container grouping related content together."),
-    ("d", "Div", "Division", "A generic container, when nothing more specific fits."),
-    ("a", "Art", "Article", "A self-contained piece of writing within the document."),
-    ("i", "Index", "Index", "An index of terms and where they appear."),
-    ("n", "NonStruct", "No structure", "Content that carries no structural meaning of its own."),
-    ("m", "Formula", "Formula (maths)", "A mathematical or chemical expression."),
-    ("e", "Code", "Code", "Program code or other text where the exact characters matter."),
-    ("o", "Form", "Form field", "An interactive field a reader fills in."),
-    ("v", "Note", "Footnote", "A footnote or endnote — read separately from the body text it "
-                              "annotates, not in the middle of it."),
-)
-
-# Not a type, so not in TAG_KEYS -- an action, on its own key: take this out of the reading order
-# and let it be drawn as page furniture instead. Page furniture Rebind already identified is an
-# artifact without anyone pressing anything; this is for the one it got wrong.
-ARTIFACT_KEY = "x"
-ARTIFACT_LABEL = "Not read"
-ARTIFACT_WHAT = ("Page furniture — on the page, but skipped by a screen reader. Give it a type to "
-                 "have it read after all.")
-
-# A detected table's rows answer to a keymap of their own, sent to the frontend separately (like
-# ARTIFACT_KEY) and swapped in only when the focused element is a row: a row is only ever a header
-# row or a data row. Its keys are the same as the whole-element cell keys above, so marking a cell
-# is the same keystroke whether or not Rebind found the table.
-ROW_TAG_KEYS = (
-    ("h", "TH", "Header cell", "This row labels the columns beneath it — a screen reader reads "
-                               "it before each data cell in its column."),
-    ("b", "TD", "Data cell", "An ordinary cell of the table, read against its column's header."),
-)
-ROW_TAGS = tuple(tag for _key, tag, _label, _what in ROW_TAG_KEYS)
-
-
-def _element_records(src_page, plan: list[dict], lines: list[TextLine],
-                     mcid_of: list[int | None], edits: Edits,
-                     source_index: list[int]) -> list[dict]:
-    """One record per element for the app's editor: what it is, where it is, what it says.
-
-    A `Table` entry also yields one sub-record per detected row -- its own id and bbox -- so a
-    row's header/data status can be corrected without retagging the whole table (`ROW_TAG_KEYS`).
-    A row's id is derived from the table's, never from a source line, so it can never collide with
-    a top-level element's id.
-
-    `source_index` maps an index into `lines` back to the line's position on the page as the XY-cut
-    ordered it. Each record carries that as `_order`, which is what puts the editor's walk in
-    reading order (`_records_in_reading_order`); a table's rows share their table's key so they
-    stay with it. It is stripped before the records reach the editor.
-    """
-    out = []
-    order_of: dict[str, int] = {}
-    for entry in plan:
-        first, last = entry["first"], entry["last"]
-        if mcid_of[first] is None:
+def _sort_lines(src_page, lines: list[TextLine], hints: layout_model.PageHints,
+                figs: PageFigures, edits: Edits, profile, scanned: bool) -> _LineSort:
+    owner_figure: dict[int, int] = {}
+    for k, (fid, fbox) in enumerate(figs.described):
+        for line in figs.text_of(lines, fid, fbox):
+            owner_figure[id(line)] = k
+    # A figure with no description yet stays a decorative artifact (tagging it without an /Alt
+    # is a conformance failure), but its own callout labels still belong to it. Left loose they
+    # became elements in their own right -- "A", "B", "3 mm" tagged as paragraphs and read out
+    # as if they were prose, which is how a picture ends up in the reading order as a scatter
+    # of fragments. They are held out here and drawn as artifacts with the picture.
+    inside_undescribed: set[int] = set()
+    for fid, fbox in figs.undescribed:
+        for line in figs.text_of(lines, fid, fbox):
+            if id(line) not in owner_figure:
+                inside_undescribed.add(id(line))
+    # An id for every line on the page, whether or not it ends up tagged. Giving a tag to a line
+    # Rebind set aside is how an element is *added*: the exact inverse of removing one, and the
+    # answer to "this running head really is a heading" or "that label inside the figure needs
+    # reading". Anything with a tag override is content, whatever it would otherwise have been.
+    line_ids = [f"p{src_page.number}n{index}" for index in range(len(lines))]
+    promoted = {index for index, key in enumerate(line_ids) if key in edits.tags}
+    # A frame drawn on this page reaches lines Rebind set aside as well: drawing one over a
+    # running head or a stray label is how it gets read, the same as tagging it. A line inside
+    # a described picture stays the picture's.
+    page_key = re.compile(rf"p{src_page.number}[a-z]")
+    frames = {key: _frame_in_points(value, src_page.width, src_page.height)
+              for key, value in edits.frames.items() if page_key.match(key)}
+    for index, ln in enumerate(lines):
+        if id(ln) in owner_figure:
             continue
-        # An element inserted after another is listed with it (the sort is stable, and the plan
-        # already has it straight after), not where its lines happen to sit on the page.
-        anchor = edits.after.get(entry["id"]) or entry.get("_after", "")
-        order_of[entry["id"]] = order_of.get(anchor, entry.get("_order", source_index[first]))
-        members = lines[first:last + 1]
-        box = (min(ln.bbox[0] for ln in members), min(ln.bbox[1] for ln in members),
-               max(ln.bbox[2] for ln in members), max(ln.bbox[3] for ln in members))
-        out.append({
-            "id": entry["id"],
-            "_order": order_of[entry["id"]],
-            "page": src_page.number,
-            "kind": entry["kind"],
-            "alt": entry.get("alt", ""),
+        cx, cy = (ln.bbox[0] + ln.bbox[2]) / 2, (ln.bbox[1] + ln.bbox[3]) / 2
+        if any(x0 <= cx <= x1 and y0 <= cy <= y1 for x0, y0, x1, y1 in frames.values()):
+            promoted.add(index)
+    # Specks: what a recogniser makes of dirt on the scan. Not read, and not listed in the
+    # editor either -- a page of them was a page of Tab stops. A frame drawn over one still
+    # brings it back, like any line Rebind set aside.
+    specks = {id(ln) for ln in lines if scanned and _is_speck(ln, hints)}
+    # Text turned sideways in a margin (a download stamp, an archive identifier) and icon
+    # glyphs with no characters a reader could say are furniture too.
+    specks |= {id(ln) for ln in _margin_furniture(lines, src_page.width, src_page.height)}
+    is_artifact = [
+        index not in promoted
+        and id(ln) not in owner_figure
+        and (id(ln) in inside_undescribed or id(ln) in hints.furniture or id(ln) in specks
+             or profile.role_of(ln, page_height=src_page.height) == "artifact")
+        for index, ln in enumerate(lines)
+    ]
+    return _LineSort(line_ids, owner_figure, inside_undescribed, specks, promoted, frames,
+                     is_artifact)
+
+
+def _page_plan(src_page, lines: list[TextLine], page_roles: list[str],
+               hints: layout_model.PageHints, figs: PageFigures, sort: _LineSort, edits: Edits):
+    """The page's content lines in reading order, the source index of each, and the plan of
+    elements over them -- the page's structural judgement, then the person's corrections on top.
+    Also the table rows the person took out, listed so they can be put back."""
+    # A caption Rebind was willing to use as a picture's description is, self-evidently, a
+    # caption -- so it is tagged as one rather than left as an ordinary paragraph. The text
+    # already had to be recognised to become the /Alt; not carrying that through to the tag
+    # threw the knowledge away at the last step, and a screen reader met the document's own
+    # captions as unremarkable prose sitting between the paragraphs.
+    # A table's title, as the layout model boxed it ("Table 2 The descriptives of ..."), is a
+    # caption too. Without it the title's first line was read as the table's first row and
+    # the rest of it as two stray paragraphs beside the table.
+    caption_blocks = list(figs.caption_blocks)
+    already = {id(line) for block in caption_blocks for line in block}
+    for region in sorted(set(hints.captions.values())):
+        block = [line for line in lines if hints.captions.get(id(line)) == region
+                 and id(line) not in already and id(line) not in sort.owner_figure]
+        if block:
+            caption_blocks.append(block)
+    caption_of = {id(line): group for group, block in enumerate(caption_blocks) for line in block}
+
+    content_lines: list[TextLine] = []
+    content_roles: list[str] = []
+    content_source: list[int] = []      # content index -> index into `lines`
+    for index, (line, role, artifact) in enumerate(zip(lines, page_roles, sort.is_artifact)):
+        if artifact or (id(line) in sort.owner_figure and index not in sort.promoted):
+            continue
+        content_lines.append(line)
+        # A displayed equation the layout model boxed is a formula, not a paragraph. Its text is
+        # still what the page says; a description in words is the person's to add.
+        content_roles.append(
+            "Caption" if id(line) in caption_of and role == "P"
+            else "Formula" if id(line) in hints.formulas and role == "P" else role)
+        content_source.append(index)
+
+    caption_groups = _caption_groups(content_lines, content_roles, caption_of, caption_blocks,
+                                     set(hints.blocks))
+
+    # Ids are keyed to the *source* line index, not to a position in the element list, so they
+    # survive a re-run in which earlier elements were retagged, merged or removed.
+    plan = plan_page(content_lines, content_roles, caption_groups, hints)
+    for entry in plan:
+        entry["id"] = f"p{src_page.number}n{content_source[entry['first']]}"
+        entry["kind"] = edits.tags.get(entry["id"], entry["kind"])
+        entry["alt"] = edits.alts.get(entry["id"], "")
+    # Frames a person drew regroup the lines before anything is numbered. The content lines
+    # are re-ordered along with the plan, so every later step still sees each element's lines
+    # as one contiguous run.
+    # Elements a person inserted: an id of their own (`p{page}a{n}`), whatever type they were
+    # given, and the lines their frame encloses. An element made of lines a frame released
+    # (`p{page}o{n}`) only exists once that frame is applied, so its own frame is taken the
+    # same way -- and it is placed like any released lines, after what is above it in its
+    # column (`_given_up_anchors`; its own id as the source, so it joins nothing else).
+    added_id = re.compile(rf"p{src_page.number}[ao]\d+x?")
+    added = [{"kind": edits.tags.get(key, "P"), "id": key, "alt": edits.alts.get(key, ""),
+              **({"_given_up_by": key} if "o" in key[len(f"p{src_page.number}"):] else {})}
+             for key in sorted(sort.frames) if added_id.fullmatch(key)]
+    order, plan = _apply_frames(
+        plan, content_lines, sort.frames,
+        lambda index: f"p{src_page.number}o{content_source[index]}", added, edits.removed,
+        edits.after)
+    for entry in plan:      # where each element stands in the page's own reading order
+        entry["_order"] = content_source[entry.pop("_at", entry["first"])]
+    if order != list(range(len(content_lines))):
+        content_lines = [content_lines[i] for i in order]
+        content_source = [content_source[i] for i in order]
+        for entry in plan:      # a line a frame gave up is an element that can be retagged too
+            entry["kind"] = edits.tags.get(entry["id"], entry["kind"])
+    # A table row taken out is listed as a row that is not read, so it can be put back.
+    dropped_rows = [entry for entry in plan if entry.get("removed_row")]
+    plan = [entry for entry in plan if entry["id"] not in edits.removed]
+    return content_lines, content_source, plan, dropped_rows
+
+
+def _page_records(source: Path, src_page, lines: list[TextLine], content_lines: list[TextLine],
+                  content_source: list[int], plan: list[dict], mcid_of: list[int | None],
+                  dropped_rows: list[dict], sort: _LineSort, edits: Edits) -> list[dict]:
+    """The editor's records for the page's text, in the page's reading order."""
+    records = _element_records(src_page, plan, content_lines, mcid_of, edits, content_source)
+    in_dropped_row: set[int] = set()
+    for entry in dropped_rows:
+        members = content_lines[entry["first"]:entry["last"] + 1]
+        in_dropped_row.update(content_source[i] for i in range(entry["first"], entry["last"] + 1))
+        x0 = min(ln.bbox[0] for ln in members)
+        y0 = min(ln.bbox[1] for ln in members)
+        x1 = max(ln.bbox[2] for ln in members)
+        y1 = max(ln.bbox[3] for ln in members)
+        records.append({
+            **_untagged_record(src_page, entry["id"], members[0], content_source[entry["first"]]),
             "text": " ".join(ln.text.strip() for ln in members).strip()[:300],
-            "left": round(100 * box[0] / src_page.width, 2),
-            "top": round(100 * (src_page.height - box[3]) / src_page.height, 2),
-            "width": round(100 * (box[2] - box[0]) / src_page.width, 2),
-            "height": round(100 * (box[3] - box[1]) / src_page.height, 2),
-            "editable": True,
+            "left": round(100 * x0 / src_page.width, 2),
+            "top": round(100 * (src_page.height - y1) / src_page.height, 2),
+            "width": round(100 * (x1 - x0) / src_page.width, 2),
+            "height": round(100 * (y1 - y0) / src_page.height, 2),
+            "row": True,
         })
-        if entry["kind"] == "Table":
-            for row_index, (row_id, row) in enumerate(_table_row_groups(entry, lines)):
-                row_lines = [lines[i] for i in row]
-                rbox = (min(ln.bbox[0] for ln in row_lines), min(ln.bbox[1] for ln in row_lines),
-                        max(ln.bbox[2] for ln in row_lines), max(ln.bbox[3] for ln in row_lines))
-                default_kind = "TH" if row_index == 0 else "TD"
-                out.append({
-                    "id": row_id,
-                    "_order": order_of[entry["id"]],
-                    "page": src_page.number,
-                    "kind": edits.tags.get(row_id, default_kind),
-                    "text": " ".join(ln.text.strip() for ln in row_lines).strip()[:300],
-                    "left": round(100 * rbox[0] / src_page.width, 2),
-                    "top": round(100 * (src_page.height - rbox[3]) / src_page.height, 2),
-                    "width": round(100 * (rbox[2] - rbox[0]) / src_page.width, 2),
-                    "height": round(100 * (rbox[3] - rbox[1]) / src_page.height, 2),
-                    "editable": True,
-                    "row": True,
-                })
-    return out
-
-
-def _record_box(record: dict, src_page) -> tuple[float, float, float, float]:
-    """An editor record's box back in PDF points (its left/top/width/height are page percents)."""
-    x0 = record["left"] * src_page.width / 100
-    x1 = (record["left"] + record["width"]) * src_page.width / 100
-    y1 = src_page.height - record["top"] * src_page.height / 100
-    y0 = y1 - record["height"] * src_page.height / 100
-    return (x0, y0, x1, y1)
-
-
-def _untagged_record(src_page, element_id: str, line: TextLine, order: int) -> dict:
-    """A line Rebind left out of the structure tree -- page furniture, or text inside a figure --
-    offered to the editor so it can be given a tag and read after all."""
-    x0, y0, x1, y1 = line.bbox
-    return {
-        "id": element_id, "_order": order, "page": src_page.number, "kind": "Artifact",
-        "text": line.text.strip()[:300],
-        "left": round(100 * x0 / src_page.width, 2),
-        "top": round(100 * (src_page.height - y1) / src_page.height, 2),
-        "width": round(100 * (x1 - x0) / src_page.width, 2),
-        "height": round(100 * (y1 - y0) / src_page.height, 2),
-        "editable": True,
-    }
-
-
-def plan_page(lines: list[TextLine], page_roles: list[str],
-              caption_groups: list[int | None] | None = None,
-              hints: layout_model.PageHints | None = None) -> list[dict]:
-    """Group a page's content lines into the elements the structure tree will hold.
-
-    This is the whole of Rebind's per-page structural judgement, expressed as plain data before any
-    PDF object exists: `[{"kind": "P"|"H1".."H6"|"L"|"Table", "first": i, "last": j}]`, over
-    inclusive indices into `lines`. Separating it out is what lets the app show a page's elements,
-    let a person correct them, and rebuild from the corrected plan -- the alternative, editing a
-    structure tree after the fact, cannot change which lines belong together.
-
-    `caption_groups[i]` names the caption a line belongs to, or None. Captions are grouped by that
-    rather than by the paragraph rule, because the paragraph rule cannot hold them together: a
-    caption set in a narrow margin column has no measure to run out to, and on a scan the
-    recogniser drops stray marks between its lines, each of which breaks a run of "consecutive
-    lines with the same role". The caption search already decided which lines are one caption --
-    this just carries that decision through instead of trying to re-derive it from geometry.
-
-    `hints` is what a layout model saw on the page (`layout_model.hints_for`). Where it boxed two
-    neighbouring lines, its boxes decide: lines in one block of text are one paragraph, lines in
-    different blocks are not, and a table is exactly the lines in its table region. Where it boxed
-    neither, the geometric rules below decide as they always have. The model is far better at this
-    than measuring margins: a born-digital paragraph whose lines each carry a slightly different
-    font came out as one element per line, and a paragraph that runs down past a table's foot was
-    cut where the table's rows ended.
-    """
-    n = len(lines)
-    groups = caption_groups if caption_groups is not None else [None] * n
-    modelled = hints is not None and hints.tables is not None
-    if modelled:
-        table_of = [hints.tables.get(id(line)) for line in lines]
-    else:
-        table_line_ids = detect_table_lines(lines)
-        table_of = [0 if id(line) in table_line_ids else None for line in lines]
-    is_table = [region is not None for region in table_of]
-    block_of = [hints.blocks.get(id(line)) for line in lines] if hints else [None] * n
-    # The geometric detector misses sparse rows, so it bridges a few unflagged lines; a table
-    # region already contains its sparse rows, and anything outside it is not part of the table.
-    table_gap = 0 if modelled else MAX_INTERNAL_TABLE_GAP
-
-    def continues(first: int, index: int, same) -> bool:
-        before, here = block_of[index - 1], block_of[index]
-        if before is not None and here is not None:
-            return before == here
-        return same(index, first)
-
-    measures = _column_measures(lines, page_roles)
-    plan: list[dict] = []
-    i = 0
-    while i < n:
-        if is_table[i]:
-            # Extend from the first detected row to the last, absorbing sparse rows in between
-            # (see MAX_INTERNAL_TABLE_GAP) so no row is dropped and the table is not fragmented.
-            last = i
-            j = i + 1
-            # (j - last - 1) is the count of undetected lines since the last detected row.
-            while j < n and (j - last - 1) <= table_gap:
-                if table_of[j] == table_of[i]:
-                    last = j
-                elif is_table[j]:
-                    break       # another table
-                j += 1
-            plan.append({"kind": "Table", "first": i, "last": last})
-            i = last + 1
-            continue
-
-        if _is_list_item(lines[i].text):
-            j = i
-            while j < n and not is_table[j] and _is_list_item(lines[j].text):
-                j += 1
-            if j - i >= MIN_LIST_ITEMS:
-                plan.append({"kind": "L", "first": i, "last": j - 1})
-                i = j
-                continue
-
-        # Body text runs on until something says the paragraph has ended. Everything else -- a
-        # heading, a caption, page furniture -- is one element per line by nature.
-        # A caption is one element, and which lines it is made of was settled when it was found.
-        if page_roles[i] == "Caption" and groups[i] is not None:
-            j = i
-            while j + 1 < n and groups[j + 1] == groups[i]:
-                j += 1
-            plan.append({"kind": "Caption", "first": i, "last": j})
-            i = j + 1
-            continue
-
-        if page_roles[i] in ("P", "Caption"):
-            j = i
-            while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == page_roles[i]
-                   and not _is_list_item(lines[j + 1].text)
-                   and continues(i, j + 1, lambda index, first: _same_paragraph(
-                       lines, first, index, measures))):
-                j += 1
-            plan.append({"kind": page_roles[i], "first": i, "last": j})
-            i = j + 1
-            continue
-
-        # An equation is the lines in its own region, the number beside it included -- and
-        # nothing else, whatever the margins say.
-        if page_roles[i] == "Formula":
-            j = i
-            while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == "Formula"
-                   and continues(i, j + 1, lambda _index, _first: False)):
-                j += 1
-            plan.append({"kind": "Formula", "first": i, "last": j})
-            i = j + 1
-            continue
-
-        # A heading runs on the same way a paragraph does, on its own simpler evidence: a title
-        # too long for one line is one title, and leaving it as two elements puts a phantom entry
-        # in a screen reader's heading list and a pause in the middle of the title.
-        if page_roles[i].startswith("H"):
-            j = i
-            while (j + 1 < n and not is_table[j + 1] and page_roles[j + 1] == page_roles[i]
-                   and continues(i, j + 1, lambda index, _first: _same_heading(lines, index))):
-                j += 1
-            plan.append({"kind": page_roles[i], "first": i, "last": j})
-            i = j + 1
-            continue
-
-        plan.append({"kind": page_roles[i], "first": i, "last": i})
-        i += 1
-    return plan
-
-
-def _apply_frames(plan: list[dict], lines: list[TextLine],
-                  frames: dict[str, tuple[float, float, float, float]],
-                  orphan_id, added: list[dict] | None = None,
-                  removed: set[str] | frozenset[str] = frozenset(),
-                  after: dict[str, str] | None = None) -> tuple[list[int], list[dict]]:
-    """Regroup a page's plan around the frames a person drew: `(new line order, new plan)`.
-
-    A framed element becomes exactly the lines whose centres its frame (PDF points, x0 y0 x1 y1)
-    encloses, taken from whatever element held them -- so dragging a frame down over the next line
-    merges it in, and pulling it back up gives the line away. An element emptied that way is gone;
-    lines a frame gave up that no other frame took become an element of their own where they were
-    (`orphan_id(line index)` names it, stably, from its first line). Where two frames overlap, the
-    earlier element in the plan keeps the line.
-
-    `added` are elements a person inserted (Insert in the editor): entries with an id and a kind
-    but no lines of their own, which hold whatever their frame encloses, after the plan's own
-    frames have had theirs. One whose frame encloses nothing yet is left out. An inserted element
-    or row named in `after` is read straight after the element or row it was inserted after,
-    wherever its own lines sit on the page -- inserting is putting something into the sequence at
-    a place a person chose.
-
-    Plan entries are ranges over the line list, and a frame can gather lines that were not next to
-    each other, so the lines are put into a new order in which every element's lines are adjacent:
-    the returned order lists old line indices, and the new plan's ranges index into it. Each
-    element sits where its first line was, which leaves every unframed element where it stood.
-    Ids are the plan's own, decided before any frame, so a frame is found again on the next run.
-
-    A detected table's rows (`{table id}r{n}`, see `_table_row_groups`) can be framed too. A row's
-    frame takes the lines it encloses into that row -- and into the table, wherever they were --
-    after element frames have had theirs; a line it gives up leaves the table, as above. A framed
-    row id the table never had is a row a person inserted. A row whose id is in `removed` leaves
-    the table: its lines become an entry under the row's own id, marked `"removed_row"`, for the
-    caller to drop with the other removed elements. The table's entry then carries its rows
-    explicitly (`"rows"`), under the ids they had before any frame, so a row keeps its id, its tag
-    and its frame however the others are reshaped.
-    """
-    added = [{**entry, "first": 0, "last": -1} for entry in (added or [])]
-    row_frames: dict[str, list[tuple[str, list[int]]]] = {}
-    new_rows: dict[str, list[str]] = {}
-    for entry in [*plan, *added]:
-        if entry["kind"] != "Table":
-            continue
-        base = _table_row_groups(entry, lines) if entry["last"] >= entry["first"] else []
-        known = {row_id for row_id, _members in base}
-        extra = sorted((key for key in frames
-                        if key not in known and re.fullmatch(re.escape(entry["id"]) + r"r\d+", key)),
-                       key=lambda key: int(key[len(entry["id"]) + 1:]))
-        if extra or any(row_id in frames or row_id in removed for row_id in known):
-            row_frames[entry["id"]] = base
-            new_rows[entry["id"]] = extra
-    framed = [entry for entry in [*plan, *added] if entry["id"] in frames]
-    if not framed and not row_frames:
-        return list(range(len(lines))), plan
-
-    def inside(frame, line: TextLine) -> bool:
-        x0, y0, x1, y1 = frame
-        cx = (line.bbox[0] + line.bbox[2]) / 2
-        cy = (line.bbox[1] + line.bbox[3]) / 2
-        return x0 <= cx <= x1 and y0 <= cy <= y1
-
-    claimed: dict[int, str] = {}
-    for entry in framed:
-        for i, line in enumerate(lines):
-            if i not in claimed and inside(frames[entry["id"]], line):
-                claimed[i] = entry["id"]
-    row_of: dict[int, str] = {}         # line -> the framed row that took it
-    given_up: set[int] = set()          # a framed row's own lines, until a frame takes them again
-    dropped: dict[str, list[int]] = {}  # a removed row -> its lines
-    for table_id, base in row_frames.items():
-        for row_id, members in base:
-            if row_id in removed:
-                dropped[row_id] = members
-                given_up.update(members)
-        framing = [(row_id, members) for row_id, members in base
-                   if row_id in frames and row_id not in removed]
-        framing += [(row_id, []) for row_id in new_rows[table_id] if row_id not in removed]
-        for row_id, members in framing:
-            given_up.update(members)
-            for i, line in enumerate(lines):
-                if (i not in row_of and claimed.get(i, table_id) == table_id
-                        and inside(frames[row_id], line)):
-                    claimed[i] = table_id
-                    row_of[i] = row_id
-    given_up -= row_of.keys()
-    dropped_line = {i: row_id for row_id, members in dropped.items() for i in members
-                    if i not in claimed}
-
-    groups: list[tuple[dict, list[int]]] = []
-    for row_id, members in dropped.items():
-        mine = [i for i in members if dropped_line.get(i) == row_id]
-        if mine:
-            groups.append(({"kind": "P", "id": row_id, "alt": "", "removed_row": True}, mine))
-    for entry in [*plan, *added]:
-        own = range(entry["first"], entry["last"] + 1)
-        framed_whole = entry["id"] in frames
-        members = sorted({*(i for i, owner in claimed.items() if owner == entry["id"]),
-                          *(() if framed_whole else
-                            (i for i in own if i not in claimed and i not in given_up))})
-        if framed_whole:
-            # Read as the lines sit inside the frame. Their places in the line order are not to be
-            # trusted for this: a line taken from an element that held it wrongly -- a table read
-            # across both columns -- has the place that element gave it.
-            members = _top_to_bottom(members, lines)
-        if members:
-            groups.append((entry, members))
-        run: list[int] = []
-        for i in [*own, None]:
-            if (i is not None and i not in claimed and i not in dropped_line
-                    and (framed_whole or i in given_up)):
-                run.append(i)
-                continue
-            if run:
-                # Named from its first line -- unless an element already has that name (one made
-                # of released lines whose frame has since moved off them), then from the next.
-                taken = {e["id"] for e in [*plan, *added]}
-                name = next((orphan_id(i) for i in run if orphan_id(i) not in taken),
-                            orphan_id(run[0]) + "x")
-                groups.append(({"kind": "P", "id": name, "alt": "",
-                                "_given_up_by": entry["id"]}, run))
-                run = []
-    # Each element stays where its own first line was; one whose own lines all went elsewhere goes
-    # where the first of its new ones was.
-    def stands_at(group: tuple[dict, list[int]]) -> int:
-        entry, members = group
-        mine = [i for i in members if entry.get("first", 0) <= i <= entry.get("last", -1)]
-        return min(mine) if mine else min(members)
-
-    groups.sort(key=stands_at)
-    groups = _join_given_up(groups, lines)
-    placed = _given_up_anchors(groups, lines)
-    groups = _follow_anchors(groups, lambda group: group[0]["id"], {**placed, **(after or {})})
-
-    order: list[int] = []
-    out: list[dict] = []
-    for entry, members in groups:
-        start = len(order)
-        at = stands_at((entry, members))
-        order.extend(members)
-        new_entry = {k: v for k, v in entry.items() if k != "_given_up_by"}
-        new_entry.update(first=start, last=len(order) - 1, _at=at)
-        if entry["id"] in placed:
-            new_entry["_after"] = placed[entry["id"]]
-        if entry["id"] in row_frames:
-            position = {old: start + k for k, old in enumerate(members)}
-            original = {i: row_id for row_id, rows in row_frames[entry["id"]] for i in rows}
-            by_row: dict[str, list[int]] = {}
-            stray: list[int] = []
-            for i in members:
-                row_id = row_of.get(i) or original.get(i)
-                if row_id is None or row_id in removed:
-                    stray.append(i)
-                else:
-                    by_row.setdefault(row_id, []).append(position[i])
-            for n, row in enumerate(_table_rows([(i, lines[i]) for i in stray])):
-                by_row[f"{entry['id']}s{n}"] = [position[i] for i, _line in row]
-            new_entry["rows"] = _follow_anchors(
-                sorted(by_row.items(), key=lambda item: -max(
-                    lines[order[p]].bbox[3] for p in item[1])),
-                lambda item: item[0], after or {})
-        out.append(new_entry)
-    return order, out
-
-
-def _top_to_bottom(members: list[int], lines: list[TextLine]) -> list[int]:
-    """Line indices in the order they sit on the page: by line, top to bottom, each left to right."""
-    return [i for row in _table_rows([(i, lines[i]) for i in members]) for i, _line in row]
-
-
-def _box(members: list[int], lines: list[TextLine]) -> tuple[float, float, float, float]:
-    return (min(lines[i].bbox[0] for i in members), min(lines[i].bbox[1] for i in members),
-            max(lines[i].bbox[2] for i in members), max(lines[i].bbox[3] for i in members))
-
-
-def _join_given_up(groups: list[tuple[dict, list[int]]], lines: list[TextLine]
-                   ) -> list[tuple[dict, list[int]]]:
-    """Join the lines one element gave up into one paragraph wherever they run on down a column.
-
-    Shrinking a table's rows back off the prose beside it gives that prose up a line at a time --
-    each row lets go of one line -- and five one-line paragraphs is not what was on the page.
-    Runs join when they overlap across and the gap between them is under a line's height.
-    """
-    out: list[tuple[dict, list[int]]] = []
-    for entry, members in groups:
-        source = entry.get("_given_up_by")
-        if source is not None:
-            x0, y0, x1, _y1 = _box(members, lines)
-            for k in range(len(out) - 1, -1, -1):
-                other, theirs = out[k]
-                if other.get("_given_up_by") != source:
-                    continue
-                ox0, oy0, ox1, oy1 = _box(theirs, lines)
-                height = min(lines[i].bbox[3] - lines[i].bbox[1] for i in [*members, *theirs])
-                across = min(x1, ox1) - max(x0, ox0)
-                gap = max(oy0 - _box(members, lines)[3], _box(members, lines)[1] - oy1)
-                if across > 0.5 * min(x1 - x0, ox1 - ox0) and gap < height:
-                    out[k] = (other, _top_to_bottom([*theirs, *members], lines))
-                    break
-            else:
-                out.append((entry, members))
-            continue
-        out.append((entry, members))
-    return out
-
-
-def _given_up_anchors(groups: list[tuple[dict, list[int]]], lines: list[TextLine]
-                      ) -> dict[str, str]:
-    """Where each run of given-up lines is read: after the nearest element above it in its column.
-
-    A given-up line's own place in the line order is where the page's reading order put it, which
-    is wherever the element that held it was -- and an element that held it wrongly (a table read
-    across both columns) put it in the wrong column. So it is placed by where it sits instead:
-    after the closest element above it that starts in the same column (a heading run across both
-    columns does not, so text at the top of the right column is not read before the left one).
-    One with nothing above it stays where it was.
-    """
-    tolerance = 20.0
-    anchors: dict[str, str] = {}
-    boxes = [(entry["id"], _box(members, lines)) for entry, members in groups]
-    for entry, members in groups:
-        if "_given_up_by" not in entry:
-            continue
-        x0, _y0, x1, y1 = _box(members, lines)
-        best: tuple[float, str] | None = None
-        for other_id, (ox0, oy0, ox1, _oy1) in boxes:
-            if other_id == entry["id"] or min(x1, ox1) <= max(x0, ox0):
-                continue
-            if ox0 < x0 - tolerance or oy0 < y1 - 2.0:
-                continue
-            if best is None or oy0 < best[0]:
-                best = (oy0, other_id)
-        if best is not None:
-            anchors[entry["id"]] = best[1]
-    return anchors
-
-
-def _follow_anchors(items: list, key, after: dict[str, str]) -> list:
-    """`items` with each one named in `after` moved to straight after the item it names.
-
-    One whose anchor is not among `items` stays where it was. Placed one at a time, so an item
-    inserted after an item that was itself inserted follows it, and the latest of several
-    inserted after the same item comes first -- straight after the item, as it was when made.
-    """
-    out = [item for item in items if key(item) not in after]
-    pending = [item for item in items if key(item) in after]
-    while pending:
-        placed = False
-        for item in list(pending):
-            ids = [key(x) for x in out]
-            if after[key(item)] in ids:
-                out.insert(ids.index(after[key(item)]) + 1, item)
-                pending.remove(item)
-                placed = True
-        if not placed:
-            break
-    for item in pending:        # anchor gone: back where it would have been
-        out.insert(min(len(out), items.index(item)), item)
-    return out
-
-
-def _table_row_groups(entry: dict, lines: list[TextLine]) -> list[tuple[str, list[int]]]:
-    """A table entry's rows, top to bottom, as `(row id, line indices left to right)`.
-
-    The rows a frame settled (`_apply_frames`) when there are any, otherwise the detected ones
-    (`_table_rows`), numbered `{table id}r{n}` from the top.
-    """
-    if "rows" in entry:
-        return [(row_id, sorted(members, key=lambda i: lines[i].bbox[0]))
-                for row_id, members in entry["rows"]]
-    cells = [(i, lines[i]) for i in range(entry["first"], entry["last"] + 1)]
-    return [(f"{entry['id']}r{n}", [i for i, _line in row])
-            for n, row in enumerate(_table_rows(cells))]
-
-
-def _frame_in_points(frame: tuple[float, float, float, float], width: float,
-                     height: float) -> tuple[float, float, float, float]:
-    """The editor's (left, top, width, height) page percentages as a PDF-space (x0, y0, x1, y1)."""
-    left, top, w, h = frame
-    x0 = left * width / 100
-    y1 = height - top * height / 100
-    return x0, y1 - h * height / 100, x0 + w * width / 100, y1
-
-
-def _column_measures(lines: list[TextLine], roles: list[str]) -> list[tuple[float, float]]:
-    """For each line, the (left, right) margins of the column of body text it sits in.
-
-    The right margin is what tells a last line from a middle one, and it has to come from the text
-    itself: nothing in a PDF states where a column ends. It is taken as the furthest right reached
-    by more than one nearby line -- a paragraph's own full lines cluster tightly around their true
-    margin, so requiring at least two of them to agree is what keeps a single outlier from setting
-    it by itself.
-
-    That outlier is not hypothetical: a caption or an "Exhibit N.N" title is commonly set at the
-    same left margin as the body column beneath it (ordinary typesetting) while running much wider
-    -- to the left-edge grouping in `near`, sharing a margin is all it takes to look like the same
-    column. On a real sample (`1087881.pdf` p.8) one such title at x0=86.5 running to x1=506.5 sat
-    within PARAGRAPH_COLUMN_TOLERANCE_PT of a paragraph whose own eleven lines all ended near
-    x1=306 -- so every one of them read as falling short of a 506.5pt margin that was never really
-    its own, and a single paragraph became eleven one-line elements. Requiring company before a
-    right edge counts fixes that without weakening the rule for an ordinary paragraph, where
-    several lines legitimately reach the true margin together.
-    """
-    body = [ln for ln, role in zip(lines, roles) if role == "P"]
-    out: list[tuple[float, float]] = []
-    for line in lines:
-        near = [ln for ln in body
-                if abs(ln.bbox[0] - line.bbox[0]) <= PARAGRAPH_COLUMN_TOLERANCE_PT]
-        if not near:
-            out.append((line.bbox[0], line.bbox[2]))
-            continue
-        rights = sorted((ln.bbox[2] for ln in near), reverse=True)
-        measure = next(
-            (r for r in rights
-             if sum(1 for x in rights if abs(x - r) <= PARAGRAPH_ALIGN_TOLERANCE_PT) >= 2),
-            rights[0])   # nothing recurs (too few lines to tell) -- fall back to the widest line
-        out.append((min(ln.bbox[0] for ln in near), measure))
-    return out
-
-
-def _same_paragraph(lines: list[TextLine], first: int, index: int,
-                    measures: list[tuple[float, float]]) -> bool:
-    """Whether `lines[index]` continues the paragraph that started at `lines[first]`."""
-    previous, current = lines[index - 1], lines[index]
-    if previous.bold != current.bold or previous.italic != current.italic:
-        return False
-    # Size is compared with tolerance, and the face only when both lines are born-digital. A
-    # recognized line has neither exactly: its "size" is derived from the height of a box drawn
-    # around inked pixels, which varies line to line with whatever ascenders and descenders happen
-    # to be in it, and its font name is whatever the recognizer reports. Demanding equality there
-    # refused nearly every join on a scan -- 470 paragraphs of 15 words each on a real one, which
-    # is a page of prose read as a list.
-    if abs(previous.size - current.size) > max(PARAGRAPH_SIZE_TOLERANCE * max(
-            previous.size, current.size, 1.0), 0.5):
-        return False
-    born_digital = previous.ocr_confidence is None and current.ocr_confidence is None
-    if born_digital and previous.font != current.font:
-        return False
-
-    height = max(previous.bbox[3] - previous.bbox[1], 1.0)
-    gap = previous.bbox[1] - current.bbox[3]
-    if gap < -height:
-        return False        # not below the previous line at all: a new column, or a new page
-    if gap > height * PARAGRAPH_GAP_SLACK:
-        return False        # set apart by more than its own leading
-
-    left, right = measures[index - 1]
-    if previous.bbox[2] < right - PARAGRAPH_RAGGED_FRACTION * max(right - left, 1.0):
-        return False        # the previous line stopped short of the measure, so it ended there
-
-    # The paragraph's own left margin is set by its *second* line: the first may be indented, and
-    # comparing against an indented first line would split every indented paragraph in two.
-    margin = lines[first + 1].bbox[0] if index > first + 1 else current.bbox[0]
-    if current.bbox[0] > margin + PARAGRAPH_INDENT_MIN_PT:
-        return False        # indented: the first line of the next paragraph
-    return abs(current.bbox[0] - margin) <= PARAGRAPH_ALIGN_TOLERANCE_PT
-
-
-def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
-                    mcid_of: list[int | None],
-                    document_elem: pikepdf.Object, page_obj: pikepdf.Object,
-                    caption_hosts: list | None = None, edits: Edits | None = None):
-    """Build one page's structure elements from an (already decided, possibly edited) plan.
-
-    Returns (top-level elements in reading order, owners) where `owners[mcid]` is the leaf element
-    that directly holds that MCID -- what the page's ParentTree entry indexes.
-    """
-    owners: dict[int, pikepdf.Object] = {}
-    tops: list[pikepdf.Object] = []
-
-    def leaf(index: int | list[int], structure_type, parent,
-             extra: dict | None = None) -> pikepdf.Object:
-        """One element holding the marked content of one line -- or of several, when more than one
-        line lands in the same cell. Every id passed in is owned; dropping one would leave content
-        drawn on the page that no element claims (clause 8.2.2)."""
-        mcids = [mcid_of[i] for i in ([index] if isinstance(index, int) else index)]
-        elem = pdf.make_indirect(Dictionary(
-            Type=Name.StructElem, S=structure_type, P=parent, Pg=page_obj,
-            K=Array(mcids) if len(mcids) > 1 else mcids[0], **(extra or {})))
-        for mcid in mcids:
-            owners[mcid] = elem
-        return elem
-
-    def spanning(kind: str, parent, indices: list[int]) -> pikepdf.Object:
-        """One element holding every line's marked content directly."""
-        elem = pdf.make_indirect(Dictionary(
-            Type=Name.StructElem, S=Name("/" + kind), P=parent, Pg=page_obj,
-            K=Array([mcid_of[i] for i in indices]) if len(indices) > 1 else mcid_of[indices[0]]))
-        for i in indices:
-            owners[mcid_of[i]] = elem
-        return elem
-
-    captions: list[tuple[int, pikepdf.Object]] = []      # (first line, the caption element)
-    table_boxes: dict[tuple, tuple] = {}                 # a table's objgen -> its lines' box
-    # Elements marked as cells, waiting for the run of them to end so they can become one table.
-    cells: list[tuple[str, list[int]]] = []
-
-    def close_cells() -> None:
-        if cells:
-            tops.append(_cell_table(pdf, list(cells), lines, document_elem, leaf))
-            cells.clear()
-
-    for entry in plan:
-        first, last, kind = entry["first"], entry["last"], entry["kind"]
-        if any(mcid_of[i] is None for i in range(first, last + 1)):
-            continue        # every line of this element was removed by an edit
-        indices = list(range(first, last + 1))
-
-        if kind in CELL_TAGS:
-            cells.append((kind, indices))
-            continue
-        close_cells()
-
-        if kind == "Table":
-            row_tags = edits.tags if edits else {}
-            rows = [(row_id, [(i, lines[i]) for i in members])
-                    for row_id, members in _table_row_groups(entry, lines)]
-            table = _tagged_table(pdf, rows, document_elem, page_obj, leaf, row_tags)
-            table_boxes[table.objgen] = (min(lines[i].bbox[0] for i in indices),
-                                         min(lines[i].bbox[1] for i in indices),
-                                         max(lines[i].bbox[2] for i in indices),
-                                         max(lines[i].bbox[3] for i in indices))
-            tops.append(table)
-        elif kind == "L":
-            lst = pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name.L, P=document_elem, K=Array([])))
-            items = []
-            for i in indices:
-                li = pdf.make_indirect(Dictionary(
-                    Type=Name.StructElem, S=Name.LI, P=lst, K=Array([])))
-                li.K = Array([leaf(i, Name.LBody, li)])
-                items.append(li)
-            lst.K = Array(items)
-            tops.append(lst)
-        elif kind in GROUPING_TAGS:
-            # A grouping element may only hold block-level children, never content of its own --
-            # tagging one straight over the text fails validation, so the text goes in a /P inside.
-            group = pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name("/" + kind), P=document_elem, K=Array([])))
-            group.K = Array([spanning("P", group, indices)])
-            tops.append(group)
-        elif kind == "Figure":
-            figure = spanning("Figure", document_elem, indices)
-            # Never fabricated: a figure made out of text is described by that text unless the
-            # person typed something better, which is what the editor's description box is for.
-            figure.Alt = String(entry.get("alt")
-                                or " ".join(lines[i].text.strip() for i in indices).strip()
-                                or "Figure")
-            tops.append(figure)
-        elif kind == "Caption":
-            box = (min(lines[i].bbox[0] for i in indices),
-                   min(lines[i].bbox[1] for i in indices),
-                   max(lines[i].bbox[2] for i in indices),
-                   max(lines[i].bbox[3] for i in indices))
-            captions.append((first, spanning("Caption", document_elem, indices), box))
-        else:
-            elem = spanning(kind, document_elem, indices)
-            # A formula's description in words, where the person gave one. Without it a screen
-            # reader reads the formula's own text, which is all Rebind knows of it.
-            if kind == "Formula" and entry.get("alt"):
-                elem.Alt = String(entry["alt"])
-            tops.append(elem)
-    close_cells()
-
-    # A /Caption is not legal beside the thing it captions -- it belongs inside it. Each is moved
-    # into the figure or table it is nearest to; one with nothing left to caption stays where it
-    # is, as a paragraph, rather than being dropped or made non-conformant.
+    # Lines Rebind set aside are listed too, marked as untagged, so the editor can offer them.
+    # They sit at the position they occupy on the page, so the list stays the page's order.
     #
-    # Two constraints from PDF/UA-2 shape this, and both were learned by failing them. A figure may
-    # hold AT MOST ONE caption (Table 5, Figure-Caption), so a host that already has one is not
-    # offered again -- on a page with two pictures, taking "the last figure built" put every
-    # caption into the same one. And a caption must be the FIRST OR LAST child of its parent
-    # (clause 8.2.5.27), which one of several siblings cannot be.
-    taken: set = set()
-    for first, caption, box in captions:
-        host = _caption_host(list(caption_hosts or []) + tops, box, taken, table_boxes)
-        if host is None:
-            caption.S = Name.P
-            tops.insert(_position_for(tops, first, plan), caption)
+    # Except the ones that belong to a figure. Those are already part of it -- drawn inside its
+    # marked content, and read out as part of it -- so listing them again puts the picture's
+    # own insides into the walk as separate stops. On a scanned architectural plan that is what
+    # the recogniser makes of hatching and rules: page 25 of a real book came to 181 elements,
+    # 175 of them one- and two-character scraps from inside a single figure, and getting past
+    # that page meant 175 presses of Tab.
+    planned = {entry["id"] for entry in plan}
+    tagged = {content_source[e] for e in range(len(content_source)) if mcid_of[e] is not None}
+    for index, line in enumerate(lines):
+        if sort.line_ids[index] in planned or not line.text.strip() or index in tagged:
             continue
-        taken.add(host.objgen)
-        caption.P = host
-        kids = host.get("/K")
-        kids = list(kids) if isinstance(kids, Array) else ([kids] if kids is not None else [])
-        # A table's title set above it is read before it, as its first child; anything else is
-        # read after what it captions.
-        host_box = table_boxes.get(host.objgen)
-        above = host_box is not None and (box[1] + box[3]) / 2 > host_box[3]
-        host.K = Array([caption] + kids if above else kids + [caption])
-    return tops, owners
+        if (id(line) in sort.owner_figure or id(line) in sort.inside_undescribed
+                or index in in_dropped_row or id(line) in sort.specks):
+            continue
+        records.append(_untagged_record(src_page, sort.line_ids[index], line, index))
+    # A formula with no description yet gets a draft of one, read from its picture
+    # (`formula_reader`) -- offered in the editor for the person to check, never written into
+    # the document on its own.
+    drafts = formula_reader.drafts_for_page(
+        source, src_page.number, src_page.width, src_page.height,
+        {record["id"]: _record_box(record, src_page) for record in records
+         if record.get("kind") == "Formula" and not record.get("alt")})
+    for record in records:
+        if record["id"] in drafts:
+            record["alt_guess"] = drafts[record["id"]]
+    return _records_in_reading_order(records)
 
 
-def _caption_host(tops: list, box: tuple, taken: set,
-                  table_boxes: dict | None = None) -> pikepdf.Object | None:
-    """The figure or table a caption belongs inside: the nearest one that has not got one already.
+def _draw_figures(pdf: pikepdf.Pdf, page_image, src_page, lines: list[TextLine],
+                  mcids: list[int | None], figs: PageFigures, owner_figure: dict[int, int],
+                  first_mcid: int) -> tuple[bytes, dict, list[tuple]]:
+    """Draw each described figure (a crop of the rendered region) inside a tagged /Figure,
+    together with any text that belongs to it, all under the figure's single MCID.
 
-    Nearness is measured between boxes, so a caption in the margin goes to the picture beside it
-    rather than to whichever figure happened to be built last. A figure records its own box (in
-    `/A /BBox`); a table's comes from `table_boxes`, the box its lines span. Taking the last table
-    built instead put the title of a page's first table inside its second.
+    Returns the drawing, the image objects it uses, and each figure's
+    `(mcid, alt, bbox, anchor mcid)` for the structure tree.
     """
-    table_boxes = table_boxes or {}
-    best, best_gap = None, None
-    for elem in tops:
-        if elem.objgen in taken:
-            continue
-        if str(elem.get("/S")) == "/Figure":
-            layout = elem.get("/A")
-            bbox = layout.get("/BBox") if layout is not None else None
-        elif str(elem.get("/S")) == "/Table":
-            bbox = table_boxes.get(elem.objgen)
-        else:
-            continue
-        if bbox is None:
-            continue
-        fx0, fy0, fx1, fy1 = (float(v) for v in bbox)
-        gap = max(0.0, max(fx0 - box[2], box[0] - fx1)) + max(0.0, max(fy0 - box[3], box[1] - fy1))
-        if best_gap is None or gap < best_gap:
-            best, best_gap = elem, gap
-    if best is not None:
-        return best
-    for elem in reversed(tops):
-        if str(elem.get("/S")) == "/Table" and elem.objgen not in taken:
-            return elem
-    return None
+    stream = io.BytesIO()
+    xobjects: dict = {}
+    specs: list[tuple] = []
+    mcid = first_mcid
+    for k, (fid, bbox) in enumerate(figs.described):
+        xobjects[f"Fig{k}"] = _figure_xobject(pdf, page_image, bbox, src_page.width,
+                                              src_page.height)
+        x0, y0, x1, y1 = bbox
+        stream.write(f"/Figure <</MCID {mcid}>> BDC q {x1 - x0:.2f} 0 0 {y1 - y0:.2f} "
+                     f"{x0:.2f} {y0:.2f} cm /Fig{k} Do Q\n".encode())
+        for line in lines:
+            if owner_figure.get(id(line)) == k:
+                _draw_line(stream, line, "RebindF")
+        stream.write(b"EMC\n")
+        specs.append((mcid, figs.alt[fid], bbox,
+                      _figure_anchor(lines, mcids, k, owner_figure, bbox)))
+        mcid += 1
+    return stream.getvalue(), xobjects, specs
 
 
-def _position_for(tops: list, first: int, plan: list[dict]) -> int:
-    """Where an element starting at line `first` belongs among the page's elements."""
-    seen = 0
-    for entry in plan:
-        if entry["first"] >= first:
-            return min(seen, len(tops))
-        seen += 1
-    return len(tops)
-
-
-def _has_marked_content(page: pikepdf.Page) -> bool:
-    """Whether the page's content already contains marked-content operators.
-
-    Such a page cannot simply be wrapped in an artifact -- tagged content may not live inside an
-    artifact (veraPDF 7.1-2) -- so it is rebuilt from a clean render instead of kept verbatim.
-    """
-    try:
-        for _operands, operator in pikepdf.parse_content_stream(page):
-            if str(operator) in ("BDC", "BMC"):
-                return True
-    except (pikepdf.PdfError, Exception):  # noqa: BLE001 -- unparseable content -> rebuild clean
-        return True
-    return False
-
-
-def _text_visibility(page: pikepdf.Page) -> tuple[bool, bool]:
-    """(has any text, has any *visible* text) for one page.
-
-    Rendering mode 3 draws nothing: it is how an OCR tool lays a searchable text layer over a scan.
-    Text drawn that way is not perceivable, so it is not text a reader can be said to see.
-    """
-    try:
-        instructions = list(pikepdf.parse_content_stream(page))
-    except Exception:  # noqa: BLE001 -- an unparseable stream tells us nothing either way
-        return (False, False)
-    has_text = has_visible = False
-    mode = 0
-    saved: list[int] = []
-    for ins in instructions:
-        operator = str(getattr(ins, "operator", ""))
-        if operator == "Tr":
-            mode = int(ins.operands[0])
-        elif operator == "q":
-            saved.append(mode)
-        elif operator == "Q" and saved:
-            mode = saved.pop()
-        elif operator in ("Tj", "TJ", "'", '"'):
-            has_text = True
-            if mode != 3:
-                has_visible = True
-    return (has_text, has_visible)
-
-
-def _invisible_text_pages(source: Path) -> set[int]:
-    """Page numbers whose text is *entirely* invisible -- a scan with an OCR layer over it.
-
-    Such a page's words are not something a reader perceives: what they see is the picture. Their
-    colours are therefore not a colour decision the document made, and measuring the contrast of
-    text drawn in rendering mode 3 produces failures for text that is not on the page at all
-    (939 lines and 49 "failures" on a real Tesseract-processed scan, every one of them invisible).
-    Rebind strips that layer anyway, so the measurement would describe a document that no longer
-    exists by the time it is written.
-    """
-    with pikepdf.open(source) as pdf:
-        return {number for number, page in enumerate(pdf.pages, start=1)
-                if _text_visibility(page) == (True, False)}
-
-
-def _strip_invisible_text(pdf: pikepdf.Pdf, page: pikepdf.Page) -> bool:
-    """Remove a scan's own invisible OCR text layer, leaving every visible mark untouched.
-
-    A scan that has already been through an OCR tool carries the picture plus a layer of text drawn
-    in rendering mode 3 -- invisible, there only to be selectable. Rebind lays its *own* tagged
-    invisible layer over the same page, so the original's is a second, untagged copy of the same
-    words; and Tesseract's stand-in font ("GlyphLessFont") declares a ToUnicode CMap veraPDF
-    rejects, failing clause 8.4.5.8 for a font the document no longer needs. Removing that layer
-    (rather than re-rendering the whole page, which would resample the scan) keeps the page's own
-    pixels exactly as they were -- nothing that marks the page is touched, so it still looks
-    identical -- and takes the unusable font out with it.
-
-    Returns whether anything was removed.
-    """
-    try:
-        instructions = list(pikepdf.parse_content_stream(page))
-    except Exception:  # noqa: BLE001 -- unparseable content is left alone, never half-rewritten
-        return False
-
-    out: list = []
-    block: list = []            # the current BT..ET run, held back until we know if it shows ink
-    in_text = False
-    mode = 0                    # text rendering mode, part of the graphics state (persists past ET)
-    block_mode: int | None = None
-    visible = False
-    removed = False
-    saved: list[int] = []       # `q`/`Q` save and restore the mode along with the rest of the state
-    for ins in instructions:
-        operator = str(getattr(ins, "operator", ""))
-        if operator == "BT":
-            in_text, block, visible, block_mode = True, [ins], False, None
-            continue
-        if not in_text:
-            # Tracking q/Q matters: a mode restored by Q and not re-set is 0, and mistaking that
-            # for a still-invisible state would delete text the page actually shows.
-            if operator == "q":
-                saved.append(mode)
-            elif operator == "Q" and saved:
-                mode = saved.pop()
-            elif operator == "Tr":
-                mode = int(ins.operands[0])
-            out.append(ins)
-            continue
-        block.append(ins)
-        if operator == "Tr":
-            mode = int(ins.operands[0])
-            block_mode = mode
-        elif operator in ("Tj", "TJ", "'", '"') and mode != 3:
-            visible = True
-        elif operator == "ET":
-            in_text = False
-            if visible:
-                out.extend(block)
-            else:
-                removed = True
-                # A rendering mode set inside the dropped run persists past ET, so it has to be
-                # re-stated: dropping it silently would make the *next* run visible or invisible.
-                if block_mode is not None:
-                    out.append(pikepdf.ContentStreamInstruction([block_mode], pikepdf.Operator("Tr")))
-            block = []
-    out.extend(block)           # an unterminated BT run: keep it rather than lose content
-    if not removed:
-        return False
-
-    page.obj.Contents = pdf.make_stream(pikepdf.unparse_content_stream(out))
-    # Fonts nothing draws with any more go too -- leaving one behind would keep failing 8.4.5.8.
-    used = {str(ins.operands[0]) for ins in out
-            if str(getattr(ins, "operator", "")) == "Tf" and ins.operands}
-    fonts = (page.obj.get("/Resources") or Dictionary()).get("/Font")
-    if fonts is not None:
-        for key in [str(k) for k in fonts.keys() if str(k) not in used]:
-            del fonts[key]
-    return True
-
-
-def _add_xobject(pdf: pikepdf.Pdf, page: pikepdf.Page, xobject: pikepdf.Object, name: str) -> None:
-    resources = page.obj.get("/Resources")
-    if resources is None:
-        resources = pdf.make_indirect(Dictionary())
-        page.obj["/Resources"] = resources
-    xobjects = resources.get("/XObject")
-    if xobjects is None:
-        xobjects = Dictionary()
-        resources["/XObject"] = xobjects
-    xobjects[Name("/" + name)] = xobject
-
-
-def _rebuild_page(pdf: pikepdf.Pdf, page: pikepdf.Page, page_image, overlay: bytes,
-                  extra_xobjects: dict, font: pikepdf.Object,
-                  width_pt: float, height_pt: float) -> None:
-    """Replace the page's content with the rendered page image (artifact) + the tagged overlay --
-    a clean slate that discards any pre-existing marked content while looking identical."""
-    from PIL import Image
-
-    pil = Image.fromarray(page_image).convert("RGB")
-    buffer = io.BytesIO()
-    pil.save(buffer, format="JPEG", quality=90)
-    image_obj = pdf.make_stream(buffer.getvalue())
-    image_obj.Type = Name.XObject
-    image_obj.Subtype = Name.Image
-    image_obj.Width = pil.width
-    image_obj.Height = pil.height
-    image_obj.ColorSpace = Name.DeviceRGB
-    image_obj.BitsPerComponent = 8
-    image_obj.Filter = Name.DCTDecode
-    content = (
-        f"/Artifact BMC q {width_pt:.2f} 0 0 {height_pt:.2f} 0 0 cm /Im0 Do Q EMC\n".encode()
-        + overlay
-    )
-    page.obj.Contents = pdf.make_stream(content)
-    xobjects = Dictionary(Im0=image_obj)
-    for name, obj in extra_xobjects.items():
-        xobjects[Name("/" + name)] = obj
-    page.obj.Resources = Dictionary(XObject=xobjects, Font=Dictionary(RebindF=font))
+def _editor_picture(source: Path, render_source: Path, src_page, page_image,
+                    darken_contrast: bool) -> bytes:
+    """The picture of the page the editor lays its elements over -- reusing the render already
+    made for a figure crop or a rebuild where there is one, and the picture from the last rebuild
+    where the page has not changed (an edit never changes how a page looks)."""
+    stamp = file_key(source)
+    key = stamp and stamp + (src_page.number, darken_contrast)
+    picture = _editor_pictures.get(key)
+    if picture is None:
+        image = page_image if page_image is not None else render_page_to_image(
+            render_source, src_page.number, dpi=EDITOR_PAGE_DPI)
+        picture = _editor_pictures.put(key, _png(
+            image, (0.0, 0.0, src_page.width, src_page.height),
+            src_page.width, src_page.height, max_side=EDITOR_PAGE_PX))
+    return picture
 
 
 def remediate(source: Path, target: Path, *, title: str | None = None, lang: str = "en",
@@ -2662,68 +484,17 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             render_source = target.with_name(target.stem + ".recoloured.tmp.pdf")
             pdf.save(render_source)
 
-    struct_root = pdf.make_indirect(Dictionary(Type=Name.StructTreeRoot))
-    # PDF/UA-2 (ISO 14289-2) namespace. All the structure types below (/P, /H1-/H6, /Table, /TR,
-    # /TD, /TH, /L, /LI, /LBody, /Figure) keep their names as-is in the PDF 2.0 Standard Structure
-    # Namespace -- confirmed against `verapdf -f ua2` (see docs/decisions/ for the spike). /Note is
-    # the one exception: it still needs the RoleMap entry below. Only the root Document element
-    # needs /NS set explicitly; every descendant inherits it, so nothing else in this function's
-    # tag-building changes. Getting the namespace URI wrong (e.g. the plausible but incorrect
-    # "http://iso.org/pdf/ssn") fails clause 8.2.5.2 silently -- confirmed by trial.
-    PDF2_SSN_NAMESPACE = "http://iso.org/pdf2/ssn"
-    ssn_namespace = pdf.make_indirect(Dictionary(Type=Name.Namespace, NS=String(PDF2_SSN_NAMESPACE)))
-    document_elem = pdf.make_indirect(
-        Dictionary(Type=Name.StructElem, S=Name.Document, NS=ssn_namespace, P=struct_root, K=Array([]))
-    )
-    struct_root.K = Array([document_elem])
-    # PDF/UA-2 clause 8.2.5.14: "the Note standard structure type shall not be present in
-    # conforming documents unless role mapped to a structure element in the PDF 2.0 namespace" --
-    # unlike its neighbours above, /Note fails validation without this line. Confirmed by trial:
-    # removing it reproduces that exact veraPDF failure.
-    struct_root.RoleMap = Dictionary(Note=Name.P)
-    struct_root.Namespaces = Array([ssn_namespace])
-    parent_tree_nums = Array([])
-    # Page StructParents keys use 0..page_count-1 (the enumerate index below); annotation
-    # StructParent keys start right after, so neither numbering ever collides in the flat Nums array.
-    next_parent_key = len(source_pages)
+    tree = StructTree(pdf, len(source_pages))
     font = pdf.make_indirect(Dictionary(
         Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
     undescribed_figures: list[dict] = []
     page_elements: list[dict] = []
     page_images: dict[int, bytes] = {}
     figure_boxes: dict[int, tuple] = {}
-    heading_entries: list[tuple[int, pikepdf.Object, str]] = []   # (level, struct_elem, title)
 
     for struct_parent, (page, (src_page, lines, used_ocr), page_roles, hints) in enumerate(
         zip(pdf.pages, per_page, roles, page_hints)
     ):
-        figures = _page_figures(src_page)
-        vector = _vector_figures(src_page, list(lines), figures)
-        figures += [(fid, bbox) for fid, bbox, _caption in vector]
-        anchored = {fid: caption for fid, _bbox, caption in vector}
-        # A scanned page places no images at all -- the whole sheet is one raster, and a diagram
-        # printed on it is a patch of that raster, invisible to `_page_figures`. Every illustration
-        # in a scanned book was therefore missed. They are found from the pixels instead: ink that
-        # is not text (see `regions`).
-        #
-        # "Scanned" cannot mean "Rebind ran OCR on it": a scan that arrived already OCR'd has a
-        # text layer, so nothing is recognized here and that test is false on exactly the documents
-        # this is for. A page is a scan when its words are an invisible layer over a picture, or
-        # when one image covers the whole sheet -- both of which are known by now.
-        #
-        # The layout model's picture boxes come first. It looks at the whole page and boxes a
-        # picture as a picture, where the pixel search can only guess from ink that is not text --
-        # which is why a pixel guess nobody captions is dropped below, and a picture the model found
-        # is not: an illustration the book never captions still needs describing, and used to
-        # vanish. Its box also claims the scraps the recogniser made of the picture's own labels.
-        scan_regions: set[str] = set()
-        modelled: set[str] = set()
-        scanned = used_ocr or src_page.number in invisible_pages or _is_full_page_scan(src_page)
-        # Printed music, found by its staves (see `music`) -- first, because it is the surest
-        # thing on the page about what a picture is. It replaces a picture found some other way
-        # over the same music, unless that picture is much bigger than the music (a photograph of a
-        # manuscript page, say), which keeps its own box.
-        music_of: dict[str, music.Example] = {}
         # The page at full resolution, rendered once and only if something needs it.
         rendered: list = []
 
@@ -2732,335 +503,51 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                 held.append(render_page_to_image(render_source, number, dpi=dpi))
             return held[0]
 
-        if scanned or src_page.drawings or src_page.images:
-            for index, example in enumerate(music.examples_for_page(
-                    source, src_page.number, src_page.width, src_page.height, list(lines),
-                    keep_out=lambda line: music.is_label(line.text) or _is_caption_marker(line.text),
-                    render=(lambda: (full_render(), dpi)) if scanned else None)):
-                covering = [(fid, bbox) for fid, bbox in figures
-                            if _boxes_overlap(bbox, example.bbox)]
-                if any(_area(bbox) > MUSIC_REPLACES_AREA * _area(example.bbox)
-                       for _fid, bbox in covering):
-                    continue
-                figures = [(fid, bbox) for fid, bbox in figures if (fid, bbox) not in covering]
-                fid = f"p{src_page.number}s{index}"
-                figures.append((fid, example.bbox))
-                music_of[fid] = example
-        if scanned:
-            pictures = [(f"p{src_page.number}m{index}", bbox)
-                        for index, bbox in enumerate(hints.pictures)
-                        if not any(_boxes_overlap(bbox, known) for _fid, known in figures)]
-            modelled = {fid for fid, _bbox in pictures}
-            figures += pictures
-            found = _scanned_figures(render_source, src_page, list(lines), dpi, figures)
-            scan_regions = {fid for fid, _bbox in found}
-            figures += found
-        # A table is not a picture. A drawn table's rules look like line art and a scanned one's
-        # ink like an illustration, so a figure found from drawings or pixels that holds a table's
-        # lines gives way to the table: tagged as one, a screen reader can move through it cell by
-        # cell with each header announced, which no description of it can do (WCAG 1.3.1).
-        figures = [(fid, bbox) for fid, bbox in figures
-                   if fid in music_of or re.fullmatch(r"p\d+f\d+", fid)
-                   or not _holds_table(lines, hints, bbox)]
-        # A figure sitting directly under (or, less commonly, above) a "Fig. N ..." caption needs
-        # no manual description at all: the author's own words are more accurate than anything
-        # Rebind could invent, and this skips the app's describe step entirely. A thin local match
-        # (just the marker, e.g. a "(Continued)" page-break artifact -- not substantial per WCAG
-        # 1.1.1) falls back to document_captions, which may have found the real caption elsewhere.
-        # Explicit user-supplied text (alt_texts) always wins over either -- the user may have
-        # deliberately typed something better, or the caption match may be imperfect.
-        #
-        # If NOTHING substantial turns up anywhere, this returns None on purpose, so the figure
-        # lands in the app's describe list and the user is asked. A bare label ("Fig. 8", or the
-        # "Fig. 8 (Continued)" page-break artifact) must never be accepted as alt text just because
-        # it exists: it satisfies a checker's "has /Alt" box while telling a screen-reader user
-        # nothing about the image, which is the exact failure WCAG 1.1.1 is about. Silence that
-        # prompts a human beats a placeholder that suppresses the prompt.
-        # Which of this page's lines each accepted caption was built from, so they can be tagged
-        # /Caption rather than left as ordinary prose -- one list per caption, because they are
-        # grouped into elements by which caption they belong to, not by being adjacent.
-        caption_blocks: list[list[TextLine]] = []
-
-        def caption_for(fid: str, bbox: tuple) -> str | None:
-            # Music is never described on its own: its label opens the draft the person checks.
-            if fid in music_of:
-                return None
-            used: list[TextLine] = []
-            local = anchored.get(fid) or _figure_caption(lines, bbox, used)
-            if local and _caption_is_substantial(local):
-                if used:
-                    caption_blocks.append(used)
-                return local
-            number = (_caption_number(local) if local else None) or _nearby_caption_number(lines, bbox)
-            elsewhere = document_captions.get(number) if number else None
-            if elsewhere and _caption_is_substantial(elsewhere):
-                return elsewhere
-            return None
-
-        effective_alt = {fid: alt_texts.get(fid) or caption_for(fid, bbox)
-                         for fid, bbox in figures}
-        # A caption does not always sit under its picture. In a book laid out with a wide outer
-        # margin the captions are stacked *beside* the pictures, which is how a real page's
-        # photograph came out with "Rebind found no caption to guess from" while its caption --
-        # "Fig. 2. Head of the statue in figure 1..." -- sat two inches to its right.
-        #
-        # Reaching sideways is much more dangerous than reaching down, because several figures
-        # share one vertical span and their captions are stacked in the margin beside all of them.
-        # So it is taken only when the answer is unambiguous: exactly one caption block beside this
-        # figure that no other figure has already claimed. Anything else leaves it undescribed and
-        # asks the person, which is the honest outcome -- the wrong caption is a fabrication, and
-        # worse than an empty box.
-        claimed = {text for text in effective_alt.values() if text}
-        for fid, bbox in figures:
-            # Music is labelled beside its staves with a bare "Ex. 238.", never a sentence; a
-            # "caption" found beside it is the next column's text.
-            if effective_alt[fid] or fid in music_of:
-                continue
-            beside = [(text, used) for text, used in _side_captions(lines, bbox)
-                      if text not in claimed]
-            if len(beside) == 1 and _caption_is_substantial(beside[0][0]):
-                effective_alt[fid] = beside[0][0]
-                claimed.add(beside[0][0])
-                if beside[0][1]:
-                    caption_blocks.append(beside[0][1])
-        # A picture guessed from a scan's pixels, with no caption anywhere in the document to say
-        # what it is, is treated as no picture at all. The guess comes from ink that is not text,
-        # and on a page of maps and plans that is mostly the drawing's own hatching and rules --
-        # pages 20 and 25 of a real scanned book produced a scatter of them. A picture the document
-        # never captions is one Rebind has nothing to say about and no way to check, so it goes
-        # back to being part of the page: no element, no held-out text, nothing to answer. What is
-        # lost is a genuinely uncaptioned illustration, which the person can still mark by hand.
-        #
-        # This applies only to guesses. An image the FILE declares really is there, whatever the
-        # document says about it, and stays -- undescribed and asking.
-        figures = [(fid, bbox) for fid, bbox in figures
-                   if effective_alt[fid] or fid not in scan_regions]
-        # ...and a figure the person has taken out stays out. Figures live outside the plan, so the
-        # edit that removes an element never reached them: pressing "x" on a picture did nothing at
-        # all, which on a page with two wrongly-found ones is a wall the walk cannot get past.
-        figures = [(fid, bbox) for fid, bbox in figures if fid not in edits.removed]
-
-        described = [(fid, bbox) for fid, bbox in figures if effective_alt[fid]]
-        undescribed = [(fid, bbox) for fid, bbox in figures if not effective_alt[fid]]
+        # "Scanned" cannot mean "Rebind ran OCR on it": a scan that arrived already OCR'd has a
+        # text layer, so nothing is recognized here and that test is false on exactly the documents
+        # this is for. A page is a scan when its words are an invisible layer over a picture, or
+        # when one image covers the whole sheet -- both of which are known by now.
+        scanned = used_ocr or src_page.number in invisible_pages or _is_full_page_scan(src_page)
+        figs = find_figures(source, render_source, src_page, lines, hints, scanned=scanned,
+                            dpi=dpi, full_render=full_render)
+        describe_figures(figs, lines, alt_texts, document_captions, edits.removed)
         rebuild = _has_marked_content(page)
-        page_image = full_render() if rebuild or figures else None
+        page_image = full_render() if rebuild or figs.boxes else None
 
-        # Classify every line before anything is drawn. Three kinds, and only one of them is the
-        # document's content:
-        #   * page furniture (running head, footer, folio) -> an /Artifact, never tagged content;
-        #   * text belonging to a described figure -> drawn INSIDE that figure's marked content, so
-        #     the figure is one thing in the reading order rather than a picture plus a scatter of
-        #     loose labels ("A", "B", "3 mm") a screen reader would read out as if it were prose;
-        #   * everything else -> ordinary content, tagged with its own MCID.
-        def figure_text(fid: str, fbox: tuple) -> list[TextLine]:
-            if fid in music_of:
-                return _music_text(lines, music_of[fid])
-            return (_figure_text_strict(lines, fbox) if fid in scan_regions or fid in modelled
-                    else _figure_text(lines, fbox))
+        sort = _sort_lines(src_page, lines, hints, figs, edits, profile, scanned)
+        content_lines, content_source, plan, dropped_rows = _page_plan(
+            src_page, lines, page_roles, hints, figs, sort, edits)
 
-        owner_figure: dict[int, int] = {}   # id(line) -> index into `described`
-        for k, (fid, fbox) in enumerate(described):
-            for line in figure_text(fid, fbox):
-                owner_figure[id(line)] = k
-        # A figure with no description yet stays a decorative artifact (tagging it without an /Alt
-        # is a conformance failure), but its own callout labels still belong to it. Left loose they
-        # became elements in their own right -- "A", "B", "3 mm" tagged as paragraphs and read out
-        # as if they were prose, which is how a picture ends up in the reading order as a scatter
-        # of fragments. They are held out here and drawn as artifacts with the picture.
-        inside_undescribed: set[int] = set()
-        for fid, fbox in undescribed:
-            for line in figure_text(fid, fbox):
-                if id(line) not in owner_figure:
-                    inside_undescribed.add(id(line))
-        # An id for every line on the page, whether or not it ends up tagged. Giving a tag to a line
-        # Rebind set aside is how an element is *added*: the exact inverse of removing one, and the
-        # answer to "this running head really is a heading" or "that label inside the figure needs
-        # reading". Anything with a tag override is content, whatever it would otherwise have been.
-        line_ids = [f"p{src_page.number}n{index}" for index in range(len(lines))]
-        promoted = {index for index, key in enumerate(line_ids) if key in edits.tags}
-        # A frame drawn on this page reaches lines Rebind set aside as well: drawing one over a
-        # running head or a stray label is how it gets read, the same as tagging it. A line inside
-        # a described picture stays the picture's.
-        page_key = re.compile(rf"p{src_page.number}[a-z]")
-        frames = {key: _frame_in_points(value, src_page.width, src_page.height)
-                  for key, value in edits.frames.items() if page_key.match(key)}
-        for index, ln in enumerate(lines):
-            if id(ln) in owner_figure:
-                continue
-            cx, cy = (ln.bbox[0] + ln.bbox[2]) / 2, (ln.bbox[1] + ln.bbox[3]) / 2
-            if any(x0 <= cx <= x1 and y0 <= cy <= y1 for x0, y0, x1, y1 in frames.values()):
-                promoted.add(index)
-        # Specks: what a recogniser makes of dirt on the scan. Not read, and not listed in the
-        # editor either -- a page of them was a page of Tab stops. A frame drawn over one still
-        # brings it back, like any line Rebind set aside.
-        specks = {id(ln) for ln in lines if scanned and _is_speck(ln, hints)}
-        # Text turned sideways in a margin (a download stamp, an archive identifier) and icon
-        # glyphs with no characters a reader could say are furniture too.
-        specks |= {id(ln) for ln in _margin_furniture(lines, src_page.width, src_page.height)}
-        is_artifact = [
-            index not in promoted
-            and id(ln) not in owner_figure
-            and (id(ln) in inside_undescribed or id(ln) in hints.furniture or id(ln) in specks
-                 or profile.role_of(ln, page_height=src_page.height) == "artifact")
-            for index, ln in enumerate(lines)
-        ]
-
-        # A caption Rebind was willing to use as a picture's description is, self-evidently, a
-        # caption -- so it is tagged as one rather than left as an ordinary paragraph. The text
-        # already had to be recognised to become the /Alt; not carrying that through to the tag
-        # threw the knowledge away at the last step, and a screen reader met the document's own
-        # captions as unremarkable prose sitting between the paragraphs.
-        # A table's title, as the layout model boxed it ("Table 2 The descriptives of ..."), is a
-        # caption too. Without it the title's first line was read as the table's first row and
-        # the rest of it as two stray paragraphs beside the table.
-        already = {id(line) for block in caption_blocks for line in block}
-        for region in sorted(set(hints.captions.values())):
-            block = [line for line in lines if hints.captions.get(id(line)) == region
-                     and id(line) not in already and id(line) not in owner_figure]
-            if block:
-                caption_blocks.append(block)
-        caption_of = {id(line): group
-                      for group, block in enumerate(caption_blocks) for line in block}
-
-        content_lines: list[TextLine] = []
-        content_roles: list[str] = []
-        content_source: list[int] = []      # content index -> index into `lines`
-        for index, (line, role, artifact) in enumerate(zip(lines, page_roles, is_artifact)):
-            if artifact or (id(line) in owner_figure and index not in promoted):
-                continue
-            content_lines.append(line)
-            # A displayed equation the layout model boxed is a formula, not a paragraph. Its text is
-            # still what the page says; a description in words is the person's to add.
-            content_roles.append(
-                "Caption" if id(line) in caption_of and role == "P"
-                else "Formula" if id(line) in hints.formulas and role == "P" else role)
-            content_source.append(index)
-
-        caption_groups = _caption_groups(content_lines, content_roles, caption_of, caption_blocks,
-                                         set(hints.blocks))
-
-        # The page's structural judgement as data, then the user's corrections on top of it. Ids
-        # are keyed to the *source* line index, not to a position in the element list, so they
-        # survive a re-run in which earlier elements were retagged, merged or removed.
-        plan = plan_page(content_lines, content_roles, caption_groups, hints)
-        for entry in plan:
-            entry["id"] = f"p{src_page.number}n{content_source[entry['first']]}"
-            entry["kind"] = edits.tags.get(entry["id"], entry["kind"])
-            entry["alt"] = edits.alts.get(entry["id"], "")
-        # Frames a person drew regroup the lines before anything is numbered. The content lines
-        # are re-ordered along with the plan, so every later step still sees each element's lines
-        # as one contiguous run.
-        # Elements a person inserted: an id of their own (`p{page}a{n}`), whatever type they were
-        # given, and the lines their frame encloses. An element made of lines a frame released
-        # (`p{page}o{n}`) only exists once that frame is applied, so its own frame is taken the
-        # same way -- and it is placed like any released lines, after what is above it in its
-        # column (`_given_up_anchors`; its own id as the source, so it joins nothing else).
-        added_id = re.compile(rf"p{src_page.number}[ao]\d+x?")
-        added = [{"kind": edits.tags.get(key, "P"), "id": key, "alt": edits.alts.get(key, ""),
-                  **({"_given_up_by": key} if "o" in key[len(f"p{src_page.number}"):] else {})}
-                 for key in sorted(frames) if added_id.fullmatch(key)]
-        order, plan = _apply_frames(
-            plan, content_lines, frames,
-            lambda index: f"p{src_page.number}o{content_source[index]}", added, edits.removed,
-            edits.after)
-        for entry in plan:      # where each element stands in the page's own reading order
-            entry["_order"] = content_source[entry.pop("_at", entry["first"])]
-        if order != list(range(len(content_lines))):
-            content_lines = [content_lines[i] for i in order]
-            content_roles = [content_roles[i] for i in order]
-            content_source = [content_source[i] for i in order]
-            for entry in plan:      # a line a frame gave up is an element that can be retagged too
-                entry["kind"] = edits.tags.get(entry["id"], entry["kind"])
-        # A table row taken out is listed as a row that is not read, so it can be put back.
-        dropped_rows = [entry for entry in plan if entry.get("removed_row")]
-        plan = [entry for entry in plan if entry["id"] not in edits.removed]
-
-        kept = {i for entry in plan for i in range(entry["first"], entry["last"] + 1)}
+        # Marked-content ids, in reading order. A line an edit removed is drawn as an artifact. A
+        # line with superscripts or subscripts takes one id per piece (`_pieces`), so each of them
+        # can be tagged as a span of its own -- except in a figure or a formula made of text, which
+        # is read as one thing.
+        kind_of = {i: entry["kind"] for entry in plan
+                   for i in range(entry["first"], entry["last"] + 1)}
         mcid_of: list[int | None] = []
         mcids: list[int | None] = [None] * len(lines)
+        drawn_pieces: dict[int, list] = {}      # page line index -> (mcid, start, end, shift)
+        tagged_pieces: dict[int, list] = {}     # content index -> (mcid, shift)
         next_mcid = 0
         for index, line in enumerate(content_lines):
-            if index not in kept:
-                mcid_of.append(None)        # removed by an edit: drawn as an artifact instead
+            if index not in kind_of:
+                mcid_of.append(None)
                 continue
             mcid_of.append(next_mcid)
             mcids[content_source[index]] = next_mcid
-            next_mcid += 1
-        records = _element_records(src_page, plan, content_lines, mcid_of, edits, content_source)
-        in_dropped_row: set[int] = set()
-        for entry in dropped_rows:
-            members = content_lines[entry["first"]:entry["last"] + 1]
-            in_dropped_row.update(content_source[i]
-                                  for i in range(entry["first"], entry["last"] + 1))
-            x0 = min(ln.bbox[0] for ln in members)
-            y0 = min(ln.bbox[1] for ln in members)
-            x1 = max(ln.bbox[2] for ln in members)
-            y1 = max(ln.bbox[3] for ln in members)
-            records.append({
-                **_untagged_record(src_page, entry["id"], members[0],
-                                   content_source[entry["first"]]),
-                "text": " ".join(ln.text.strip() for ln in members).strip()[:300],
-                "left": round(100 * x0 / src_page.width, 2),
-                "top": round(100 * (src_page.height - y1) / src_page.height, 2),
-                "width": round(100 * (x1 - x0) / src_page.width, 2),
-                "height": round(100 * (y1 - y0) / src_page.height, 2),
-                "row": True,
-            })
-        # Lines Rebind set aside are listed too, marked as untagged, so the editor can offer them.
-        # They sit at the position they occupy on the page, so the list stays the page's order.
-        #
-        # Except the ones that belong to a figure. Those are already part of it -- drawn inside its
-        # marked content, and read out as part of it -- so listing them again puts the picture's
-        # own insides into the walk as separate stops. On a scanned architectural plan that is what
-        # the recogniser makes of hatching and rules: page 25 of a real book came to 181 elements,
-        # 175 of them one- and two-character scraps from inside a single figure, and getting past
-        # that page meant 175 presses of Tab.
-        for index, line in enumerate(lines):
-            if line_ids[index] in {entry["id"] for entry in plan} or not line.text.strip():
-                continue
-            if index in {content_source[e] for e in range(len(content_source))
-                         if mcid_of[e] is not None}:
-                continue
-            if (id(line) in owner_figure or id(line) in inside_undescribed
-                    or index in in_dropped_row or id(line) in specks):
-                continue
-            records.append(_untagged_record(src_page, line_ids[index], line, index))
-        # A formula with no description yet gets a draft of one, read from its picture
-        # (`formula_reader`) -- offered in the editor for the person to check, never written into
-        # the document on its own.
-        drafts = formula_reader.drafts_for_page(
-            source, src_page.number, src_page.width, src_page.height,
-            {record["id"]: _record_box(record, src_page) for record in records
-             if record.get("kind") == "Formula" and not record.get("alt")})
-        for record in records:
-            if record["id"] in drafts:
-                record["alt_guess"] = drafts[record["id"]]
-        page_elements.extend(_records_in_reading_order(records))
+            split = _pieces(line) if kind_of[index] not in ("Figure", "Formula") else []
+            if split:
+                drawn = [(next_mcid + k, start, end, shift)
+                         for k, (start, end, shift) in enumerate(split)]
+                drawn_pieces[content_source[index]] = drawn
+                tagged_pieces[index] = [(mcid, shift) for mcid, _s, _e, shift in drawn]
+            next_mcid += max(len(split), 1)
+        page_elements.extend(_page_records(source, src_page, lines, content_lines, content_source,
+                                           plan, mcid_of, dropped_rows, sort, edits))
 
-        # Draw each described figure (a crop of the rendered region) inside a tagged /Figure,
-        # together with any text that belongs to it, all under the figure's single MCID.
-        figure_stream = b""
-        extra_xobjects: dict = {}
-        figure_specs: list[tuple] = []   # (mcid, alt, bbox, anchor line index)
-        mcid = next_mcid
-        for k, (fid, bbox) in enumerate(described):
-            extra_xobjects[f"Fig{k}"] = _figure_xobject(
-                pdf, page_image, bbox, src_page.width, src_page.height)
-            x0, y0, x1, y1 = bbox
-            block = io.BytesIO()
-            block.write(f"/Figure <</MCID {mcid}>> BDC q {x1 - x0:.2f} 0 0 {y1 - y0:.2f} "
-                        f"{x0:.2f} {y0:.2f} cm /Fig{k} Do Q\n".encode())
-            for line in lines:
-                if owner_figure.get(id(line)) == k:
-                    _draw_line(block, line, "RebindF")
-            block.write(b"EMC\n")
-            figure_stream += block.getvalue()
-            figure_specs.append((mcid, effective_alt[fid], bbox, _figure_anchor(lines, mcids, k,
-                                                                               owner_figure, bbox)))
-            mcid += 1
-
-        overlay = _tagged_text_stream(lines, "RebindF", mcids) + figure_stream
-
+        figure_stream, extra_xobjects, figure_specs = _draw_figures(
+            pdf, page_image, src_page, lines, mcids, figs, sort.owner_figure, next_mcid)
+        overlay = _tagged_text_stream(lines, "RebindF", mcids, drawn_pieces) + figure_stream
         if rebuild:
             _rebuild_page(pdf, page, page_image, overlay, extra_xobjects, font,
                           src_page.width, src_page.height)
@@ -3076,171 +563,23 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         page.obj.StructParents = struct_parent
         page.obj.Tabs = Name.S
 
-        # Figures are built before the rest of the page's structure, because a /Caption the user
-        # marked has to be put *inside* the figure it captions and so needs it to exist already.
-        figure_elems = [
-            pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name.Figure, P=document_elem, Pg=page.obj, K=fmcid,
-                Alt=String(alt),
-                A=Dictionary(O=Name.Layout, BBox=Array([round(v, 2) for v in bbox]))))
-            for fmcid, alt, bbox, _anchor in figure_specs
-        ]
-        tops, owner_of_mcid = _page_structure(pdf, content_lines, plan, mcid_of,
-                                              document_elem, page.obj,
-                                              caption_hosts=figure_elems, edits=edits)
-        # The parent tree is indexed BY marked-content id, so every slot must hold the element that
-        # owns that id. Appending here instead of assigning (as this briefly did) shifts the figure
-        # entries past their own ids and leaves nulls behind -- content that names a structure
-        # element the tree cannot resolve, which reads as untagged content and fails clause 8.2.2.
-        owners: list = [None] * mcid
-        for key, elem in owner_of_mcid.items():
-            owners[key] = elem
-        assert all(o is not None for o in owners[:next_mcid]), "unowned marked content"
-        for entry in plan:
-            kind, first = entry["kind"], entry["first"]
-            if kind.startswith("H") and kind[1:].isdigit() and content_lines[first].text.strip():
-                owner = owner_of_mcid.get(mcid_of[first])
-                if owner is not None:
-                    heading_entries.append(
-                        (int(kind[1:]), owner, content_lines[first].text.strip()))
-        # A figure goes into the reading order where it actually sits, not after everything else.
-        # `tops` holds the page's top-level elements in reading order; each figure is spliced in at
-        # the element that owns the first content line below it. Appending them all at the end (as
-        # this did originally) put every figure after the whole page's prose -- so a screen reader
-        # met a page's figures only once it had finished reading the page.
-        placements: list[tuple[int, pikepdf.Object]] = []
-        for (fmcid, _alt, _bbox, anchor), figure_elem in zip(figure_specs, figure_elems):
-            owners[fmcid] = figure_elem
-            placements.append((_top_index_for(tops, owners, anchor), figure_elem))
-        for position, figure_elem in sorted(placements, key=lambda p: -p[0]):
-            tops.insert(position, figure_elem)
-        document_elem.K.extend(tops)
-        parent_tree_nums.append(struct_parent)
-        parent_tree_nums.append(pdf.make_indirect(Array(owners)))
+        tree.add_page(page, struct_parent, content_lines, plan, mcid_of,
+                      next_mcid + len(figure_specs), figure_specs, edits, tagged_pieces)
+        tree.add_links(page)
 
-        # Tag every surviving annotation (an external URI/GoToR link -- _strip_legacy_destinations
-        # already removed any internal-destination one) into the structure tree: a /Link element
-        # whose sole child is an object reference (OBJR) to the annotation, cross-linked via the
-        # annotation's own /StructParent key into a NEW slot in the parent tree. Annotation
-        # StructParent keys share the same flat Nums numbering space as the page StructParents keys
-        # above but must never collide with them, so they start only after every page's is used.
-        for annot in page.obj.get("/Annots") or []:
-            link_description = _link_alt(annot)
-            link_elem = pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name.Link, P=document_elem,
-                K=Array([Dictionary(Type=Name.OBJR, Obj=annot, Pg=page.obj)]),
-                Alt=String(link_description),
-            ))
-            # Also set directly on the annotation's own /Contents -- a real sample kept failing
-            # Adobe Acrobat's "Tagged annotations" check with /Alt on the struct element alone.
-            annot.Contents = String(link_description)
-            annot.StructParent = next_parent_key
-            parent_tree_nums.append(next_parent_key)
-            parent_tree_nums.append(link_elem)
-            document_elem.K.append(link_elem)
-            next_parent_key += 1
-
-        figure_boxes[src_page.number] = tuple(bbox for _fid, bbox in figures)
-        # Figures join the element list at the position they are read, so the editor's order is
-        # the document's order. Their alt text is editable in place, which is the one correction
-        # only a person can make.
-        #
-        # Undescribed ones are here too, with an empty /Alt. In the DOCUMENT they are decorative
-        # artifacts and must be -- tagging a figure with no description is a conformance failure --
-        # but in the EDITOR they have to be visible, because a picture nobody can see is a picture
-        # nobody will describe. They used to reach the person only through a list of thumbnails in
-        # the report; with that list gone they became invisible, which read exactly like a missed
-        # figure. Tabbing onto one is what opens the description prompt, and a description promotes
-        # it to a real /Figure on the next rebuild.
-        editor_figures = list(figure_specs) + [
-            (None, "", bbox, None) for _fid, bbox in undescribed]
-        # Placed left to right within a row, so two pictures side by side are met the way they are
-        # read. Inserting each one purely by its top edge cannot do this: the two are never level to
-        # the point, and whichever sits a hair higher wins regardless of which side of the page it
-        # is on -- which is how a page's photograph came after the coin printed beside it.
-        editor_figures.sort(key=lambda spec: (-spec[2][3], spec[2][0]))
-        for fmcid, alt, bbox, _anchor in editor_figures:
-            fig_top = 100 * (src_page.height - bbox[3]) / src_page.height
-            fig_bottom = 100 * (src_page.height - bbox[1]) / src_page.height
-            fig_left = 100 * bbox[0] / src_page.width
-
-            fig_right = 100 * bbox[2] / src_page.width
-
-            def after(elem, top=fig_top, bottom=fig_bottom, left=fig_left) -> bool:
-                """Whether `elem` is read after this figure: on a later row, or beside it and
-                further right."""
-                if elem["page"] != src_page.number:
-                    return False
-                shared = min(bottom, elem["top"] + elem["height"]) - max(top, elem["top"])
-                same_row = shared > FIGURE_SAME_ROW_FRACTION * min(
-                    bottom - top, max(elem["height"], 0.01))
-                return elem["left"] > left if same_row else elem["top"] > top
-
-            # In its own column, as in the document (`_figure_anchor`): straight after the last
-            # element above it that shares any of its width, else before the first one below.
-            middle = (fig_top + fig_bottom) / 2
-            column = [i for i, elem in enumerate(page_elements)
-                      if elem["page"] == src_page.number
-                      and elem["kind"] not in ("Figure", "Artifact")
-                      and elem["left"] < fig_right and elem["left"] + elem["width"] > fig_left]
-            above = [i for i in column
-                     if page_elements[i]["top"] + page_elements[i]["height"] / 2 < middle]
-            if above:
-                position = max(above) + 1
-            elif column:
-                position = min(column)
-            else:
-                position = next((i for i, elem in enumerate(page_elements) if after(elem)),
-                                len(page_elements))
-            # Pictures placed at the same spot already, above or before this one, stay first.
-            while (position < len(page_elements)
-                   and page_elements[position]["page"] == src_page.number
-                   and page_elements[position]["kind"] == "Figure"
-                   and not after(page_elements[position])):
-                position += 1
-            figure_id = next(fid for fid, fbox in figures if fbox == bbox)
-            page_elements.insert(position, {
-                "id": figure_id,
-                "page": src_page.number, "kind": "Figure", "text": "", "alt": alt,
-                **({"music": True} if figure_id in music_of else {}),
-                "left": round(100 * bbox[0] / src_page.width, 2),
-                "top": round(100 * (src_page.height - bbox[3]) / src_page.height, 2),
-                "width": round(100 * (bbox[2] - bbox[0]) / src_page.width, 2),
-                "height": round(100 * (bbox[3] - bbox[1]) / src_page.height, 2),
-                "editable": True,
-            })
-        # The editor lays elements over a picture of the page, so every page needs one -- reusing
-        # the render already made for a figure crop or a rebuild where there is one, and the
-        # picture from the last rebuild where the page has not changed (an edit never changes
-        # how a page looks).
-        stamp = file_key(source)
-        picture_key = stamp and stamp + (src_page.number, darken_contrast)
-        picture = _editor_pictures.get(picture_key)
-        if picture is None:
-            editor_image = page_image if page_image is not None else render_page_to_image(
-                render_source, src_page.number, dpi=EDITOR_PAGE_DPI)
-            picture = _editor_pictures.put(picture_key, _png(
-                editor_image, (0.0, 0.0, src_page.width, src_page.height),
-                src_page.width, src_page.height, max_side=EDITOR_PAGE_PX))
-        page_images[src_page.number] = picture
-        for fid, bbox in undescribed:
-            # A caption too thin to be used as alt text on its own ("Fig. 8", or a "(Continued)"
-            # page-break artifact) is still the best opening line anyone has: it is offered to the
-            # editor as a starting point for the person to finish, never written into the document
-            # unedited. Nothing is invented -- an empty box stays empty.
-            label = (anchored.get(fid) or _figure_caption(lines, bbox) or "").strip()
-            # Music comes with a draft read off its staves, after its own label where it has one.
-            if fid in music_of:
-                label = " ".join(part for part in (music.label_for(music_of[fid], lines),
-                                                   music_of[fid].draft) if part)
+        figure_boxes[src_page.number] = tuple(bbox for _fid, bbox in figs.boxes)
+        _place_figures(page_elements, src_page,
+                       [(fid, figs.alt[fid], bbox) for fid, bbox in figs.described]
+                       + [(fid, "", bbox) for fid, bbox in figs.undescribed],
+                       set(figs.music_of))
+        page_images[src_page.number] = _editor_picture(source, render_source, src_page,
+                                                       page_image, darken_contrast)
+        for fid, bbox in figs.undescribed:
             undescribed_figures.append({
-                "id": fid, "page": src_page.number, "alt_guess": label,
+                "id": fid, "page": src_page.number, "alt_guess": figs.draft(lines, fid, bbox),
                 "thumb": _crop_data_uri(page_image, bbox, src_page.width, src_page.height)})
 
-    struct_root.ParentTree = pdf.make_indirect(Dictionary(Nums=parent_tree_nums))
-    struct_root.ParentTreeNextKey = next_parent_key
-    pdf.Root.StructTreeRoot = struct_root
-    _build_outline(pdf, heading_entries)
+    tree.finish()
     _set_metadata(pdf, title=title or source.stem, lang=lang)
     pdf.save(target, min_version="2.0")   # PDF/UA-2 requires a PDF 2.0 base (ISO 32000-2)
     pdf.close()
@@ -3269,210 +608,3 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         contrast=contrast.summarize(measured, darkened=recoloured),
         elements=tuple(page_elements), page_images=page_images,
     )
-
-
-def _build_outline(pdf: pikepdf.Pdf, heading_entries: list[tuple[int, pikepdf.Object, str]]) -> None:
-    """Build a document outline (bookmarks) from the headings remediate() already recovered, nested
-    by level, using real PDF 2.0 **structure destinations** -- an `/SD` reference straight into the
-    heading's own structure element -- rather than a page/coordinate destination, the kind PDF/UA-2
-    clause 8.8 forbids and `_strip_legacy_destinations` removes from the source.
-
-    A source's own outline (built by whatever authored it) always used the legacy kind and is
-    stripped; without this, a document that HAD bookmarks would end up with none at all -- a real
-    navigation loss for long documents (confirmed: Adobe's checker flags "Bookmarks are present in
-    large documents" for exactly this). `heading_entries` is `(level, struct_elem, title)` in
-    reading order, collected as headings are built (`remediate()`'s main loop); a heading whose
-    level jumps deeper than the currently open ancestor simply nests one level under it (the
-    normal case, since `_structure_roles` already guarantees levels never skip).
-    """
-    if not heading_entries:
-        return
-
-    outlines = pdf.make_indirect(Dictionary(Type=Name.Outlines))
-
-    def append_child(parent: pikepdf.Object, item: pikepdf.Object) -> None:
-        if "/First" not in parent:
-            parent.First = item
-            parent.Last = item
-        else:
-            item.Prev = parent.Last
-            parent.Last.Next = item
-            parent.Last = item
-        parent.Count = int(parent.get("/Count", 0)) + 1
-
-    stack: list[tuple[int, pikepdf.Object]] = []   # (level, item) for each currently open ancestor
-    for level, elem, title in heading_entries:
-        while stack and stack[-1][0] >= level:
-            stack.pop()
-        parent = stack[-1][1] if stack else outlines
-        item = pdf.make_indirect(Dictionary(
-            Title=String(title), Parent=parent,
-            Dest=Array([Dictionary(S=Name.XYZ, SD=elem)]),
-        ))
-        append_child(parent, item)
-        stack.append((level, item))
-
-    pdf.Root.Outlines = outlines
-
-
-def _link_alt(annot: pikepdf.Object) -> str:
-    """An honest, non-fabricated /Alt for a /Link structure element (Adobe's 'Other elements
-    alternate text' check). Built entirely from the annotation's own action -- a mechanical fact
-    ("Link to <uri>"), never a guess at the link's purpose. A source PDF's own broken/malformed
-    URI (confirmed in a real sample: a publisher production defect, not something Rebind
-    introduces) is reported as-is -- honestly stating a broken thing is broken, not fabricating a
-    plausible-looking replacement.
-    """
-    action = annot.get("/A")
-    if action is not None:
-        if action.get("/S") == Name.URI and "/URI" in action:
-            return f"Link to {action.URI}"
-        if action.get("/S") == Name.GoToR and "/F" in action:
-            return f"Link to {action.F}"
-    return "Link"
-
-
-def _strip_scripts(pdf: pikepdf.Pdf) -> int:
-    """Remove every script the document carries. Returns how many were removed.
-
-    Not done automatically: a script is behaviour the author put there, and removing behaviour
-    without being asked is precisely what Rebind does not do. The app offers this as the fix
-    alongside the check that reports it, so it happens because someone chose it.
-    """
-    removed = 0
-    names = pdf.Root.get("/Names")
-    if names is not None and "/JavaScript" in names:
-        del names.JavaScript
-        removed += 1
-    if "/OpenAction" in pdf.Root:
-        del pdf.Root.OpenAction
-        removed += 1
-    if "/AA" in pdf.Root:
-        del pdf.Root.AA
-        removed += 1
-    for page in pdf.pages:
-        if "/AA" in page.obj:
-            del page.obj.AA
-            removed += 1
-        for annot in page.obj.get("/Annots") or []:
-            if "/AA" in annot:
-                del annot.AA
-                removed += 1
-            action = annot.get("/A")
-            if action is not None and action.get("/S") == Name.JavaScript:
-                del annot["/A"]
-                removed += 1
-    return removed
-
-
-def _strip_legacy_destinations(pdf: pikepdf.Pdf) -> None:
-    """Remove document navigation that PDF/UA-2 clause 8.8 forbids.
-
-    PDF/UA-2 requires every internal destination (an outline/bookmark entry, a named destination,
-    an OpenAction, or a Link annotation's GoTo target) to be a *structure destination* -- one that
-    names a structure element, not a page + coordinates. Nothing before PDF 2.0 could produce that,
-    so a born-digital source PDF's own navigation (an outline built by whatever authored it -- Word,
-    LaTeX, WeasyPrint -- or in-text cross-reference/TOC links) is carried through verbatim on a page
-    kept verbatim, and it fails this clause (confirmed on a real publisher sample: 137 Link-
-    annotation and Outline destinations in one document). Rebind does not yet build its own
-    structure-destination navigation (a real feature, tracked separately), so the safe choice is to
-    drop the legacy kind rather than ship a document that claims PDF/UA-2 and fails it. This is real
-    navigation lost, not merely a formality -- worth restoring properly, see progress notes.
-
-    A *working* external link (a URI action, or GoToR into another file) is untouched -- clause 8.8
-    is only about destinations *within* this document. A URI link whose target is unusable is
-    dropped too, for a different reason entirely; see `_is_usable_uri`.
-    """
-    root = pdf.Root
-    if "/Outlines" in root:
-        del root.Outlines
-    if "/OpenAction" in root:
-        del root.OpenAction
-    names = root.get("/Names")
-    if names is not None and "/Dests" in names:
-        del names.Dests
-
-    for page in pdf.pages:
-        annots = page.obj.get("/Annots")
-        if annots is None:
-            continue
-        keep = []
-        for annot in annots:
-            is_link = annot.get("/Subtype") == Name.Link
-            action = annot.get("/A") or Dictionary()
-            is_internal_link = is_link and ("/Dest" in annot or action.get("/S") == Name.GoTo)
-            is_broken_link = (
-                is_link
-                and action.get("/S") == Name.URI
-                and not _is_usable_uri(str(action.get("/URI", "")))
-            )
-            if not is_internal_link and not is_broken_link:
-                keep.append(annot)
-        if len(keep) != len(annots):
-            page.obj.Annots = Array(keep)
-
-
-# Schemes whose targets are meaningless without an authority ("//host"). A URI in one of these
-# with no host is not a link anyone can follow, whatever the producer meant by it.
-_AUTHORITY_SCHEMES = frozenset({"http", "https", "ftp", "ftps"})
-
-
-def _is_usable_uri(uri: str) -> bool:
-    """Whether a Link annotation's URI target is something a reader could actually follow.
-
-    A publisher's own auto-linker can fire on text that merely *looks* like a URL and emit a target
-    that resolves to nothing -- confirmed in a real sample (1429254.pdf), where all four URI links
-    are production defects: "http:0.5<en-dash>0.75" over a numeric range, "http:theminplace.We"
-    over a sentence boundary. Rebind cannot repair those (there is no correct target to guess), and
-    keeping them costs twice: a screen-reader user is announced a link that goes nowhere, and Adobe
-    Acrobat's "Tagged annotations" / "Other elements alternate text" checks fail on them regardless
-    of how the tagging is done. So they are dropped, exactly as legacy internal destinations are --
-    removing a thing that never worked, never inventing a plausible-looking replacement.
-
-    Deliberately permissive: anything with a scheme this can't reason about (doi:, urn:, tel:, a
-    custom handler) is kept. Only a clearly unusable target is removed.
-    """
-    uri = uri.strip()
-    if not uri or any(ch.isspace() or ord(ch) < 0x20 for ch in uri):
-        return False
-    parsed = urlsplit(uri)
-    if not parsed.scheme:
-        return False
-    if parsed.scheme.lower() in _AUTHORITY_SCHEMES:
-        # A bare host is legal DNS but never how a real document links out; requiring a dot is what
-        # separates "example.com" from the auto-linker's "0.5<en-dash>0.75" garbage... which also
-        # has dots, hence the hostname character check.
-        host = parsed.hostname or ""
-        return "." in host and all(c.isalnum() or c in "-." for c in host)
-    if parsed.scheme.lower() == "mailto":
-        return "@" in parsed.path
-    return True
-
-
-def _set_metadata(pdf: pikepdf.Pdf, *, title: str, lang: str) -> None:
-    """Language, title, PDF/UA identifier, and the marked / display-title flags a reader needs."""
-    pdf.Root.Lang = String(lang)
-    pdf.Root.MarkInfo = Dictionary(Marked=True)
-    pdf.Root.ViewerPreferences = Dictionary(DisplayDocTitle=True)
-    # The source's own XMP is discarded outright rather than edited in place. Two publisher
-    # artifacts, confirmed in real samples, both survive an in-place edit and both break veraPDF's
-    # strict metadata parser badly enough that it stops seeing OUR dc:title/pdfuaid entries too
-    # (clauses 5 and 8.11.1 both fail), even though pikepdf's own reader still finds them fine:
-    #   * A stray, non-namespaced top-level element (an Elsevier DRM/fingerprinting artifact) --
-    #     well-formed XML, but noise no accessibility-relevant property ever has.
-    #   * A second <rdf:Description> holding the publisher's own dc:title, written without an
-    #     rdf:about attribute (a real sample, `1087881.pdf`). pikepdf's editor manages only the
-    #     rdf:about="" description it owns, so this one is invisible to `meta.keys()` and a
-    #     selective per-key strip can never reach it -- the publisher's title and ours both end up
-    #     in the packet, and that duplication is what trips the parser, not either title alone.
-    # Rebind does not need anything the source's XMP carries -- title and language are about to be
-    # set explicitly -- so there is nothing to lose and a second undiscovered case to pre-empt by
-    # not inheriting any of it.
-    if Name.Metadata in pdf.Root:
-        del pdf.Root[Name.Metadata]
-    with pdf.open_metadata() as meta:
-        meta["dc:title"] = title
-        meta["dc:language"] = lang
-        meta["pdfuaid:part"] = "2"          # PDF/UA-2 identification (veraPDF clause 5)
-        meta["pdfuaid:rev"] = "2024"        # required alongside part for PDF/UA-2
-    pdf.docinfo["/Title"] = title
