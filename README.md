@@ -280,8 +280,9 @@ concerned, or focus lands on the field that fixes it.
 is drawn over the page and is a tab stop, in reading order.
 
 **Right.** The element you are on, named in large type with the key that sets it, and the key
-legend below. Pressing a key sets the type and moves to the next element. `Enter` opens a list of
-every type.
+legend below. Pressing a key sets the type and moves to the next element. `?` (or the **All keys**
+button) opens a list of every key on whatever you are on, a picture included; `Enter` opens it
+too, except on a picture or formula, where `Enter` writes the description.
 
 On a figure, the right column becomes its description with the caption pre-filled. Landing on it
 does not take focus: `Tab` accepts the guess and moves on, `Enter` or any character goes into the
@@ -361,7 +362,7 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.9.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.9.1.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:

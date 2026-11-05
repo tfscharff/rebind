@@ -985,7 +985,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // Nothing until you land on something. The panel used to open with a paragraph explaining what
   // the walk is; it was read once and then sat in the way of the thing it was explaining.
   function idleBanner(){
-    return '<p class="what idle">Tab into the page</p>';
+    return '<p class="what idle">Tab into the page</p>'+
+      '<p class="hint">Then press <kbd>?</kbd> on anything to see every key</p>';
   }
 
   function boxHtml(e,i){
@@ -1149,6 +1150,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         '"><b>Ins</b> '+(out? 'Put back' : (e.row? 'New row' : 'New element'))+'</button>'+
         '<button type="button" class="btn ghost small" id="delel"'+(out?' disabled':'')+
         ' title="Take this out of the reading order"><b>Del</b> Delete</button>'+
+        '<button type="button" class="btn ghost small" id="keysel"'+
+        ' title="Show every key, and what each one makes this"><b>?</b> All keys</button>'+
         '<span class="hint">'+(out? 'Not read. Ins puts it back.'
                                   : e.row? 'In the reading order. Del takes this row out.'
                                   : 'In the reading order. Del takes it out.')+'</span></div>';
@@ -1168,6 +1171,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     if(add) add.addEventListener('click', function(){ addElement(e.id); });
     var del=document.getElementById('delel');
     if(del) del.addEventListener('click', function(){ deleteElement(e, false); });
+    var all=document.getElementById('keysel');
+    if(all) all.addEventListener('click', function(){ openPalette(e.id); });
     var box=document.getElementById('altnow');
     // On 'change', not on 'input'. Every keystroke used to start a save, and a save re-runs the
     // whole conversion -- so typing a sentence queued a rebuild per letter and the page stuttered
@@ -1365,6 +1370,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         if(turnPage(-1, true)){ ev.preventDefault(); }
         return;
       }
+      // ? opens the list of keys on anything, a picture included: Enter only opens it where Enter
+      // has nothing better to do, so on a page of figures and equations it was never seen at all.
+      if(key==='?'){ ev.preventDefault(); openPalette(e.id); return; }
       // On a picture, Enter goes into the description -- that is the work on a picture, and the
       // list of types is not. Everywhere else Enter still opens the list.
       if(key==='Enter'){
@@ -1442,7 +1450,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     ed.elements.forEach(function(x){ if(x.id===elementId) e=x; });
     if(!e) return;
     var current=kindOf(e);
-    var keys=keysFor(e);
+    // A picture is described, not retagged: the one key that answers on it is "not read".
+    var keys=current==='Figure'? keysFor(e).filter(function(k){ return k.tag==='Artifact'; })
+                               : keysFor(e);
     var host=document.createElement('div');
     host.className='palette';
     host.id='palette';
@@ -1450,7 +1460,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     host.setAttribute('aria-modal','true');
     host.setAttribute('aria-label','Change what this element is');
     host.innerHTML='<div class="card"><h2>What is this?</h2>'+
-      '<p class="sub">Press a key. Esc leaves it as it is.</p><ul class="keys">'+
+      '<p class="sub">'+(current==='Figure'? 'A picture is described, not given a type: '+
+        'type on it, or press Enter, to write its description. ' : '')+
+      'Press a key. Esc leaves it as it is.</p><ul class="keys">'+
       keys.map(function(k){
         return '<li'+(k.tag===current?' class="current"':'')+
           (k.tag==='Artifact'?' class="action"':'')+'><kbd>'+esc(k.key)+'</kbd>'+
@@ -1551,8 +1563,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       '<button type="button" class="btn ghost small" id="altskip">Skip</button></div>'+
       '<p class="hint">'+(enter? 'Enter or Tab accepts and moves on · Shift+Enter for a new line'+
         ' · Esc goes back to the page'
-        : formula? 'Enter to check and edit this · Tab moves on without it'
-        : 'Enter to edit this · Tab accepts it and moves on')+'</p></div>';
+        : formula? 'Enter to check and edit this · Tab moves on without it · ? every key'
+        : 'Enter to edit this · Tab accepts it and moves on · ? every key')+'</p></div>';
     // The keys are of no use while the question on screen is a sentence, and the column is only so
     // tall: folding them away is what makes room for the picture and a description box worth
     // writing in.
