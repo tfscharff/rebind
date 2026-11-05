@@ -60,11 +60,20 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
   finder dropped) and `ocr._join_rows`. Drawn piece by piece (`overlay._pieces`), one MCID each,
   and tagged as `/Span` with `/A << /O /Layout /BaselineShift n >>` (`structure._page_structure`).
   Any code that rebuilds a line's text must move its scripts (`Script.moved`).
+- `existing.py` — what an uploaded PDF already says. `existing_descriptions` reads `/Alt` on
+  `/Figure` and `/Formula` from the source's tags and places them by the marked content they draw;
+  `adopt_described_figures` matches them to the pictures found (a person's typed text beats them,
+  and they beat a caption). `original_of` takes Rebind's own layer back off a file Rebind wrote, so
+  re-uploading a result does not double every word; the copy lives in the temp dir under a name
+  from the file's identity, so rebuilds keep their page caches.
+- A picture's frame is its box (`remediate._framed_pictures`), not a claim on lines; `after` can name
+  a picture, resolved to the element the picture is read after (`_read_after_pictures`).
 - `validate.py` — runs veraPDF and parses its report. `ui.py` — the inline browser app.
 
-Per page: a born-digital page is kept **verbatim** (crisp vector); a page that already carries
-marked content (a scan with a hidden OCR layer) is rebuilt from a 300-DPI render, because tagged
-content cannot nest inside an `/Artifact`. Every case validates as **PDF/UA-2** (ISO 14289-2,
+Per page: a born-digital page is kept **verbatim** (crisp vector). It is rebuilt from a 300-DPI
+render only if it has tagged content (a BDC with an MCID: tagged content cannot nest inside an
+`/Artifact`), glyphs with no real Unicode value (`(cid:N)` or private-use, failing 8.4.5.8/8.4.3
+even in an artifact), or a font not embedded (8.4.5.5.1), since no wrapper hides those from veraPDF. Every case validates as **PDF/UA-2** (ISO 14289-2,
 veraPDF `-f ua2`, 0 failures) — there is a compliance test. See ADR 0006 for the migration from
 PDF/UA-1: the PDF 2.0 Standard Structure Namespace retains all the tag names below unchanged (no
 HTML5 lowercase rename needed); only the root `Document` element needs an explicit `/NS`, plus a

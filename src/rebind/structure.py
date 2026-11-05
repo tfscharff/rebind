@@ -11,13 +11,20 @@ from .tables import _cell_table, _table_row_groups, _tagged_table
 
 
 def _top_index_for(tops: list, owners: list, anchor: int | None) -> int:
-    """Where in `tops` an element anchored before MCID `anchor` belongs."""
-    if anchor is None or anchor >= len(owners):
+    """Where in `tops` an element anchored before MCID `anchor` belongs.
+
+    The anchor's owner may not be among them: a caption goes inside its figure, which is not spliced
+    in yet. Then the next content on from it decides -- taking that as "nothing follows" sent a
+    picture to the end of its page whenever the next thing read was its own caption.
+    """
+    if anchor is None:
         return len(tops)
-    owner = owners[anchor]
-    for position, top in enumerate(tops):
-        if top is owner or _contains(top, owner):
-            return position
+    for owner in owners[anchor:]:
+        if owner is None:
+            continue
+        for position, top in enumerate(tops):
+            if top is owner or _contains(top, owner):
+                return position
     return len(tops)
 
 

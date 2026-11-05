@@ -37,6 +37,9 @@ GUTTER_MIN_HEIGHT_FRACTION = 0.5    # text on both sides must each span this muc
 # into spurious "columns". A real column is many lines; two lines each side is the floor.
 COLUMN_MIN_LINES = 2
 BLOCK_GAP_MIN_FRACTION = 0.02       # a block break must be this tall (fraction of region height)
+# A band of lines crossing the gutter under both columns may end in this many lines too short to
+# cross it (`_band_under_columns`).
+BAND_MAX_TAIL_LINES = 2
 
 # Table detection (honest flagging only, no reconstruction). A table is a grid: rows that each
 # split into the same recurring column positions. These separate a grid of short cells from prose
@@ -242,6 +245,30 @@ def _banner_split(lines: list[TextLine], bbox: BBox) -> float | None:
     return None
 
 
+def _band_under_columns(lines: list[TextLine], gap_left: float, gap_width: float) -> float | None:
+    """The y to cut at when lines running across the gutter close the page, under both columns.
+
+    The gutter search tolerates a few lines crossing it, because a real one is ragged. But a
+    full-width caption under a full-width figure crosses it too, and the vertical cut then files
+    that caption in the left column -- read before the right column starts, on a real page. A band
+    is only that when nothing in the right column runs on below it and at most a short last line
+    of its own sits below it on the left (a caption's tail can be too short to cross the gutter).
+    """
+    gap_right = gap_left + gap_width
+    crossing = sorted((ln for ln in lines if ln.bbox[0] < gap_left and ln.bbox[2] > gap_right),
+                      key=lambda ln: -ln.bbox[3])
+    for line in crossing:
+        cut = line.bbox[3]
+        below = [ln for ln in lines if ln.bbox[1] < cut and ln.bbox[3] <= cut + 1.0]
+        above = [ln for ln in lines if not any(ln is other for other in below)]
+        if not above or min(ln.bbox[1] for ln in above) < cut:
+            continue
+        tail = [ln for ln in below if not (ln.bbox[0] < gap_left and ln.bbox[2] > gap_right)]
+        if len(tail) <= BAND_MAX_TAIL_LINES and all(ln.bbox[2] <= gap_right for ln in tail):
+            return (cut + min(ln.bbox[1] for ln in above)) / 2
+    return None
+
+
 def _xy_cut(lines: list[TextLine], bbox: BBox, marginal: list[bool] | None = None) -> Region:
     """Recursively segment `lines` within `bbox`. A vertical (column) cut is tried first; failing
     that, a full-width banner is peeled off the top if doing so reveals columns (`_banner_split`),
@@ -252,6 +279,12 @@ def _xy_cut(lines: list[TextLine], bbox: BBox, marginal: list[bool] | None = Non
         return Region(bbox=bbox, kind="block", lines=[])
     x0, y0, x1, y1 = bbox
     gutter = _widest_vertical_gutter(lines, bbox)
+    band = _band_under_columns(lines, *gutter) if gutter is not None else None
+    if band is not None:
+        return Region(bbox=bbox, kind="block-stack", children=[
+            _xy_cut([ln for ln in lines if ln.bbox[1] >= band], (x0, band, x1, y1), marginal),
+            _xy_cut([ln for ln in lines if ln.bbox[1] < band], (x0, y0, x1, band), marginal),
+        ])
     if gutter is not None:
         gap_left, gap_width = gutter
         if marginal is not None and gap_width < GUTTER_MARGINAL_WIDTH_PT:

@@ -404,7 +404,8 @@ def test_every_offered_tag_produces_a_conformant_document(tag: str, tmp_path: Pa
     # A page with a real figure on it, so /Caption has something to be nested inside.
     source = born_digital_pdf_with_captioned_drawing(tmp_path / "in.pdf")
     plain = remediate(source, tmp_path / "plain.pdf", title="T")
-    target = next(e["id"] for e in plain.elements if e["kind"] == "P")
+    # The page's only text is the figure's caption, which is what Rebind tags it as.
+    target = next(e["id"] for e in plain.elements if e["kind"] in ("P", "Caption"))
 
     out = tmp_path / f"{tag}.pdf"
     result = remediate(source, out, title="T", edits=Edits(tags={target: tag}))

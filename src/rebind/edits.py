@@ -3,10 +3,22 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
 
 from .extract import TextLine
 from .tables import _table_row_groups
+
+
+# Stands in for an element's id where something inserted after a picture is read first on its page,
+# because the picture is. A picture is not an element of the plan, so `after` cannot name it there.
+READ_FIRST = "^"
+
+
+def _is_figure_id(key: str) -> bool:
+    """Whether an element id names a picture rather than an element made of text lines (`n`, or
+    `a` and `o` for inserted ones) or one of a table's rows."""
+    return re.fullmatch(r"p\d+[^nao\d]\d+", key) is not None
 
 
 def _records_in_reading_order(records: list[dict]) -> list[dict]:
@@ -203,8 +215,10 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
             continue
         # An element inserted after another is listed with it (the sort is stable, and the plan
         # already has it straight after), not where its lines happen to sit on the page.
-        anchor = edits.after.get(entry["id"]) or entry.get("_after", "")
-        order_of[entry["id"]] = order_of.get(anchor, entry.get("_order", source_index[first]))
+        anchor = (entry.get("_read_after") or edits.after.get(entry["id"])
+                  or entry.get("_after", ""))
+        order_of[entry["id"]] = -1 if anchor == READ_FIRST else order_of.get(
+            anchor, entry.get("_order", source_index[first]))
         members = lines[first:last + 1]
         box = (min(ln.bbox[0] for ln in members), min(ln.bbox[1] for ln in members),
                max(ln.bbox[2] for ln in members), max(ln.bbox[3] for ln in members))
@@ -273,9 +287,10 @@ FIGURE_SAME_ROW_FRACTION = 0.5
 
 
 def _place_figures(elements: list[dict], src_page, figures: list[tuple[str, str, tuple]],
-                   music: set[str]) -> None:
+                   music: set[str], followed_by: dict[str, str] | None = None) -> None:
     """Put the page's pictures, each `(id, alt, bbox)`, into the editor's elements at the
-    position they are read, so the editor's order is the document's order.
+    position they are read, so the editor's order is the document's order. `followed_by` names the
+    element a person inserted straight after a picture, which settles where that picture is.
 
     Undescribed ones are here too, with an empty alt. In the DOCUMENT they are decorative artifacts
     and must be -- tagging a figure with no description is a conformance failure -- but in the
@@ -317,8 +332,12 @@ def _place_figures(elements: list[dict], src_page, figures: list[tuple[str, str,
             position = min(column)
         else:
             position = next((i for i, elem in enumerate(elements) if after(elem)), len(elements))
+        follower = next((i for i, elem in enumerate(elements)
+                         if elem["id"] == (followed_by or {}).get(figure_id)), None)
+        if follower is not None:
+            position = follower
         # Pictures placed at the same spot already, above or before this one, stay first.
-        while (position < len(elements)
+        while (follower is None and position < len(elements)
                and elements[position]["page"] == src_page.number
                and elements[position]["kind"] == "Figure"
                and not after(elements[position])):

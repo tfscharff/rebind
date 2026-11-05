@@ -89,8 +89,9 @@ def _is_rule(bbox: tuple[float, float, float, float], page_width: float) -> bool
             and max(width, height) >= page_width * RULE_MIN_LENGTH_RATIO)
 
 
-def _vector_figures(src_page, lines: list[TextLine],
-                    taken: list[tuple]) -> list[tuple[str, tuple, str]]:
+def _vector_figures(src_page, lines: list[TextLine], taken: list[tuple],
+                    caption_lines: dict[str, list[TextLine]] | None = None
+                    ) -> list[tuple[str, tuple, str]]:
     """Line-art figures -- schematics, charts, labelled diagrams -- drawn with path operators
     rather than placed as an image, found by anchoring on their captions.
 
@@ -111,7 +112,13 @@ def _vector_figures(src_page, lines: list[TextLine],
     Each result is (stable id, bbox, the anchoring caption's text). The caption travels with the
     figure rather than being rediscovered by proximity later: this function already knows exactly
     which caption it matched, and a drawing sits further from its caption than a raster image does,
-    so re-deriving it downstream loses figures that were found perfectly well here.
+    so re-deriving it downstream loses figures that were found perfectly well here. The lines it
+    was built from go in `caption_lines`, by figure id, so they can be tagged as the caption.
+
+    A caption can also be set beside its drawing, in the outer part of the measure, with the drawing
+    running on below the caption's first line. So what is level with or below the caption and wholly
+    to its left is the drawing too, as long as some of it is level with the caption -- without
+    that test every caption would claim whatever is drawn in the left column under it.
     """
     page_area = src_page.width * src_page.height
     if page_area <= 0 or not src_page.drawings:
@@ -127,10 +134,20 @@ def _vector_figures(src_page, lines: list[TextLine],
     band_top = src_page.height
     for index, marker in enumerate(markers):
         band_bottom = marker.bbox[3]
-        inside = [p for p in paths if p[1] >= band_bottom and p[3] <= band_top]
-        band_top = _caption_block_bottom(lines, marker)
-        caption = _caption_block(sorted((ln for ln in lines if ln.bbox[3] <= marker.bbox[3]),
-                                        key=lambda ln: -ln.bbox[3])) or ""
+        ceiling = band_top
+        inside = [p for p in paths if p[1] >= band_bottom and p[3] <= ceiling]
+        # A line ending before the caption starts is not the caption: it is a label on a drawing
+        # beside it, which sits between the caption's lines when they are sorted down the page.
+        beneath = [ln for ln in lines if ln.bbox[3] <= marker.bbox[3] and ln.bbox[2] > marker.bbox[0]]
+        block_bottom = _caption_block_bottom(beneath, marker)
+        band_top = block_bottom
+        used: list[TextLine] = []
+        caption = _caption_block(sorted(beneath, key=lambda ln: -ln.bbox[3]), used) or ""
+        floor = markers[index + 1].bbox[3] if index + 1 < len(markers) else 0.0
+        beside = [p for p in paths if p[2] <= marker.bbox[0] and p[3] <= ceiling
+                  and p[1] >= floor and not any(p is q for q in inside)]
+        if any(p[1] < band_bottom and p[3] > block_bottom for p in beside):
+            inside = inside + beside
         if len(inside) < MIN_VECTOR_PATHS:
             continue
         bbox = (min(p[0] for p in inside), min(p[1] for p in inside),
@@ -143,6 +160,8 @@ def _vector_figures(src_page, lines: list[TextLine],
         if any(_overlaps(bbox, other) for _fid, other in taken):
             continue    # already found as a raster image; never describe the same region twice
         figures.append((f"p{src_page.number}v{index}", bbox, caption))
+        if caption_lines is not None:
+            caption_lines[figures[-1][0]] = used
     return figures
 
 
@@ -385,6 +404,10 @@ class PageFigures:
     boxes: list[tuple[str, tuple]]
     # Captions found together with line art, by figure id.
     anchored: dict[str, str] = field(default_factory=dict)
+    # The lines those captions were built from, by figure id.
+    anchored_lines: dict[str, list[TextLine]] = field(default_factory=dict)
+    # Pictures whose box a person set. Exactly what is inside the box belongs to them.
+    framed: set[str] = field(default_factory=set)
     # Printed music, by figure id (see `music`).
     music_of: dict[str, music.Example] = field(default_factory=dict)
     # Pictures the layout model boxed on a scan, and pictures guessed from a scan's pixels.
@@ -407,6 +430,8 @@ class PageFigures:
 
     def text_of(self, lines: list[TextLine], fid: str, bbox: tuple) -> list[TextLine]:
         """The lines that belong to a picture: its labels and callouts, read as part of it."""
+        if fid in self.framed:
+            return [ln for ln in lines if _center_in_box(ln.bbox, bbox)]
         if fid in self.music_of:
             return _music_text(lines, self.music_of[fid])
         return (_figure_text_strict(lines, bbox) if fid in self.scan_regions or fid in self.modelled
@@ -435,9 +460,11 @@ def find_figures(source: Path, render_source: Path, src_page, lines: list[TextLi
     `full_render` returns the page rendered at `dpi`, rendering it only the first time it is asked.
     """
     boxes = _page_figures(src_page)
-    vector = _vector_figures(src_page, list(lines), boxes)
+    caption_lines: dict[str, list[TextLine]] = {}
+    vector = _vector_figures(src_page, list(lines), boxes, caption_lines)
     boxes += [(fid, bbox) for fid, bbox, _caption in vector]
-    figs = PageFigures(boxes, anchored={fid: caption for fid, _bbox, caption in vector})
+    figs = PageFigures(boxes, anchored={fid: caption for fid, _bbox, caption in vector},
+                       anchored_lines=caption_lines)
     # A scanned page places no images at all -- the whole sheet is one raster, and a diagram
     # printed on it is a patch of that raster, invisible to `_page_figures`. Every illustration
     # in a scanned book was therefore missed. They are found from the pixels instead: ink that
@@ -512,6 +539,7 @@ def describe_figures(figs: PageFigures, lines: list[TextLine], alt_texts: dict[s
         used: list[TextLine] = []
         local = figs.anchored.get(fid) or _figure_caption(lines, bbox, used)
         if local and _caption_is_substantial(local):
+            used = used or figs.anchored_lines.get(fid, [])
             if used:
                 figs.caption_blocks.append(used)
             return local
@@ -521,7 +549,9 @@ def describe_figures(figs: PageFigures, lines: list[TextLine], alt_texts: dict[s
             return elsewhere
         return None
 
-    figs.alt = {fid: alt_texts.get(fid) or caption_for(fid, bbox) for fid, bbox in figs.boxes}
+    # Looked for even where a description was given: the caption under a picture is still a caption.
+    captions = {fid: caption_for(fid, bbox) for fid, bbox in figs.boxes}
+    figs.alt = {fid: alt_texts.get(fid) or captions[fid] for fid, _bbox in figs.boxes}
     # A caption does not always sit under its picture. In a book laid out with a wide outer
     # margin the captions are stacked *beside* the pictures, which is how a real page's
     # photograph came out with "Rebind found no caption to guess from" while its caption --

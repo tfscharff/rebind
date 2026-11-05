@@ -6,7 +6,15 @@ import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
 from .extract import TextLine
-from .layout import COLUMN_ALIGN_TOLERANCE_PT
+
+# Two cells are in one column when they overlap across by more than this share of the narrower.
+COLUMN_OVERLAP_SHARE = 0.25
+# A cell covers a column when it takes up this share of the column's width.
+COLUMN_COVER_SHARE = 0.5
+# Overlapping a column by no more than this is touching it, not reaching into it.
+COLUMN_TOUCH_PT = 2.0
+# How near a one-cell column must sit to its neighbour, in its own line heights, to be part of it.
+LONE_PIECE_GAP = 0.5
 
 
 def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextLine]]]:
@@ -33,6 +41,102 @@ def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextL
     return [sorted(row, key=lambda cl: cl[1].bbox[0]) for row in rows]
 
 
+def _cell_attributes(span: int, scope) -> Dictionary | None:
+    """A cell's Table attributes: how many columns it runs over, and what a header cell heads."""
+    attributes = Dictionary(O=Name.Table)
+    if scope is not None:
+        attributes.Scope = scope
+    if span > 1:
+        attributes.ColSpan = span
+    return attributes if scope is not None or span > 1 else None
+
+
+def _column_bands(boxes: list[tuple]) -> list[tuple[float, float]]:
+    """A table's columns, left to right, as the x-ranges its cells occupy.
+
+    Not by left edge. A column of numbers set right-aligned or centred under its heading has no
+    left edge in common with it, and clustering on them made a phantom column for each: on real
+    journal tables a value sat in a column whose header cell was empty, so a screen reader announced
+    no header for it, or the neighbouring one.
+
+    Cells that overlap across are one column, narrowest first so that a heading spanning several
+    columns ("Sleep latency" over Scores, Frequency, Percent) meets them already separate. A cell
+    reaching over two or more columns says nothing about where any of them is, and is left out.
+    """
+    bands: list[list[float]] = []
+    for x0, _y0, x1, _y1 in sorted(boxes, key=lambda box: box[2] - box[0]):
+        met = [band for band in bands if _shares_width((x0, x1), band)]
+        # Reaching into a second column by any real amount is spanning it, however little: a heading
+        # over two columns may stop just inside the second, and must not stretch the first over it.
+        reached = [band for band in bands if min(x1, band[1]) - max(x0, band[0]) > COLUMN_TOUCH_PT]
+        if not met and not reached:
+            bands.append([x0, x1])
+        elif len(met) == 1 and len(reached) <= 1:
+            met[0][0], met[0][1] = min(met[0][0], x0), max(met[0][1], x1)
+    bands.sort()
+    joined: list[list[float]] = []
+    for band in bands:
+        # Growing can bring two together; a clean gap between columns is what makes them two.
+        if joined and _shares_width(band, joined[-1]):
+            joined[-1][1] = max(joined[-1][1], band[1])
+        else:
+            joined.append(band)
+    return _without_lone_pieces(joined, boxes)
+
+
+def _without_lone_pieces(bands: list[list[float]], boxes: list[tuple]) -> list[tuple[float, float]]:
+    """Join a one-cell column to its neighbour when it is set closer to it than columns are set
+    (`LONE_PIECE_GAP` of its line height, about a word space): a heading broken into two runs of text, not a column ("ΔfH" then "298 (kJ/mol)", on a real table,
+    which left the first as a column with nothing under it)."""
+    def held(band: list[float]) -> list[tuple]:
+        return [box for box in boxes if band[0] <= (box[0] + box[2]) / 2 <= band[1]]
+
+    out = [list(band) for band in bands]
+    k = 0
+    while k < len(out) - 1:
+        left, right = out[k], out[k + 1]
+        lone = held(left) if len(held(left)) == 1 else held(right) if len(held(right)) == 1 else []
+        other = right if len(held(left)) == 1 else left
+        if (lone and len(held(other)) >= 2
+                and right[0] - left[1] <= LONE_PIECE_GAP * (lone[0][3] - lone[0][1])):
+            out[k:k + 2] = [[left[0], max(left[1], right[1])]]
+        else:
+            k += 1
+    return [(band[0], band[1]) for band in out]
+
+
+def _shares_width(a, b) -> bool:
+    """Whether two x-ranges overlap by more than a sliver of the narrower: neighbouring columns
+    routinely touch by a point or two."""
+    shared = min(a[1], b[1]) - max(a[0], b[0])
+    return shared > COLUMN_OVERLAP_SHARE * max(min(a[1] - a[0], b[1] - b[0]), 1.0)
+
+
+def _columns_of(x0: float, x1: float, bands: list[tuple[float, float]]) -> tuple[int, int]:
+    """The first and last column a cell covers: every one it takes up most of, or failing that the
+    one it overlaps most."""
+    covered = [c for c, (left, right) in enumerate(bands)
+               if min(x1, right) - max(x0, left) >= COLUMN_COVER_SHARE * (right - left)]
+    if covered:
+        return covered[0], covered[-1]
+    best = max(range(len(bands)), key=lambda c: min(x1, bands[c][1]) - max(x0, bands[c][0]))
+    return best, best
+
+
+def _row_cells(boxes: list[tuple], bands: list[tuple[float, float]]) -> list[tuple[int, int, list[int]]]:
+    """One row's cells placed in the columns: `(first column, last column, indices of what is in
+    it)`, left to right. Whatever lands on the same columns shares a cell, rather than the later
+    ones being dropped -- dropping one would leave its content on the page owned by nothing."""
+    placed = sorted((*_columns_of(boxes[k][0], boxes[k][2], bands), k) for k in range(len(boxes)))
+    out: list[tuple[int, int, list[int]]] = []
+    for first, last, k in placed:
+        if out and first <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], last), out[-1][2] + [k])
+        else:
+            out.append((first, last, [k]))
+    return out
+
+
 def _tagged_table(pdf: pikepdf.Pdf, rows: list[tuple[str, list[tuple[int, TextLine]]]],
                   document_elem: pikepdf.Object, page_obj: pikepdf.Object, leaf,
                   row_tags: dict[str, str]) -> pikepdf.Object:
@@ -42,17 +146,12 @@ def _tagged_table(pdf: pikepdf.Pdf, rows: list[tuple[str, list[tuple[int, TextLi
     default -- a person can override any row's header/data status per row through the editor
     (`row_tags`, keyed by row id; see `ROW_TAG_KEYS`).
 
-    Cells are snapped to document-consistent column positions (their clustered left edges), so every
-    row emits one cell per column -- an empty cell where a value is missing -- making the grid
-    regular, which is what lets assistive technology read a data cell against its column header.
+    Cells are placed in the table's columns (`_column_bands`), so every row covers each column once
+    -- an empty cell where a value is missing, a /ColSpan where one cell runs over several -- making
+    the grid regular, which is what lets assistive technology read a data cell against its column
+    header.
     """
-    columns: list[float] = []
-    for x in sorted(line.bbox[0] for _row_id, row in rows for _mcid, line in row):
-        if not columns or x - columns[-1] > COLUMN_ALIGN_TOLERANCE_PT:
-            columns.append(x)
-
-    def column_of(line: TextLine) -> int:
-        return min(range(len(columns)), key=lambda c: abs(line.bbox[0] - columns[c]))
+    columns = _column_bands([line.bbox for _row_id, row in rows for _mcid, line in row])
 
     table = pdf.make_indirect(Dictionary(
         Type=Name.StructElem, S=Name.Table, P=document_elem, K=Array([])))
@@ -63,31 +162,30 @@ def _tagged_table(pdf: pikepdf.Pdf, rows: list[tuple[str, list[tuple[int, TextLi
         row_count += 1
         tr = pdf.make_indirect(Dictionary(
             Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
-        # Several of a row's cells can snap to one column -- their left edges sit within the
-        # tolerance of each other, which a noisy OCR'd grid produces constantly. They share the
-        # cell rather than the later ones being dropped: dropping one would leave its marked
-        # content on the page owned by nothing, which is untagged content, not a tidier table.
-        by_column: dict[int, list[tuple[int, TextLine]]] = {}
-        for mcid, line in row:
-            by_column.setdefault(column_of(line), []).append((mcid, line))
         # The default guess -- the first detected row is the header -- unless a person corrected
         # this specific row through the editor (Task 3's row sub-elements).
         override = row_tags.get(row_id)
         is_header = override == "TH" if override in ("TH", "TD") else row_index == 0
         cell_type = Name.TH if is_header else Name.TD
         row_cells: list[pikepdf.Object] = []
-        for c in range(len(columns)):
-            if c in by_column:
-                members = by_column[c]
-                extra = {"A": Dictionary(O=Name.Table, Scope=Name.Column)} if is_header else None
-                row_cells.append(leaf([mcid for mcid, _line in members], cell_type, tr, extra))
-                if is_header:
-                    header_texts.append(
-                        " ".join(line.text.strip() for _mcid, line in members).strip())
-            else:
-                # An empty cell keeps the grid regular; it holds no content, so no marked content.
-                row_cells.append(pdf.make_indirect(Dictionary(
-                    Type=Name.StructElem, S=cell_type, P=tr, K=Array([]))))
+
+        def empty_cells(count: int) -> None:
+            # An empty cell keeps the grid regular; it holds no content, so no marked content.
+            row_cells.extend(pdf.make_indirect(Dictionary(
+                Type=Name.StructElem, S=cell_type, P=tr, K=Array([]))) for _ in range(count))
+
+        next_column = 0
+        for first, last, held in _row_cells([line.bbox for _mcid, line in row], columns):
+            empty_cells(first - next_column)
+            members = [row[k] for k in held]
+            attributes = _cell_attributes(last - first + 1, Name.Column if is_header else None)
+            row_cells.append(leaf([mcid for mcid, _line in members], cell_type, tr,
+                                  {"A": attributes} if attributes else None))
+            if is_header:
+                header_texts.append(
+                    " ".join(line.text.strip() for _mcid, line in members).strip())
+            next_column = last + 1
+        empty_cells(len(columns) - next_column)
         tr.K = Array(row_cells)
         trs.append(tr)
     table.K = Array(trs)
@@ -127,21 +225,15 @@ def _cell_table(pdf: pikepdf.Pdf, cells: list[tuple[str, list[int]]], lines: lis
                 document_elem: pikepdf.Object, leaf) -> pikepdf.Object:
     """A `/Table` built around a run of elements a person marked as cells, `(TH|TD, line indices)`.
 
-    The grid is laid out from where the cells sit: rows by `_cell_rows`, columns by clustering left
-    edges exactly as `_tagged_table` does, and an empty cell wherever a row has nothing in a column,
-    so every row is the same width. A header cell is scoped to its column when its whole row is
+    The grid is laid out from where the cells sit: rows by `_cell_rows`, columns by `_column_bands`
+    exactly as `_tagged_table` does, and an empty cell wherever a row has nothing in a column, so
+    every row is the same width. A header cell is scoped to its column when its whole row is
     headers (the usual header row) and to its row otherwise (a label down the left-hand side).
     """
     boxes = [(min(lines[i].bbox[0] for i in indices), min(lines[i].bbox[1] for i in indices),
               max(lines[i].bbox[2] for i in indices), max(lines[i].bbox[3] for i in indices))
              for _kind, indices in cells]
-    columns: list[float] = []
-    for x in sorted(box[0] for box in boxes):
-        if not columns or x - columns[-1] > COLUMN_ALIGN_TOLERANCE_PT:
-            columns.append(x)
-
-    def column_of(k: int) -> int:
-        return min(range(len(columns)), key=lambda c: abs(boxes[k][0] - columns[c]))
+    columns = _column_bands(boxes)
 
     table = pdf.make_indirect(Dictionary(
         Type=Name.StructElem, S=Name.Table, P=document_elem, K=Array([])))
@@ -150,28 +242,28 @@ def _cell_table(pdf: pikepdf.Pdf, cells: list[tuple[str, list[int]]], lines: lis
     rows = _cell_rows(boxes)
     for row in rows:
         tr = pdf.make_indirect(Dictionary(Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
-        by_column: dict[int, list[int]] = {}
-        for k in row:
-            by_column.setdefault(column_of(k), []).append(k)
         header_row = all(cells[k][0] == "TH" for k in row)
         scope = Name.Column if header_row else Name.Row
         row_cells: list[pikepdf.Object] = []
-        for c in range(len(columns)):
-            members = by_column.get(c)
-            if not members:
-                row_cells.append(pdf.make_indirect(Dictionary(
-                    Type=Name.StructElem, S=Name.TH if header_row else Name.TD, P=tr,
-                    K=Array([]))))
-                continue
-            # Two cells snapped to one column share it, as in `_tagged_table`: dropping one would
-            # leave its content on the page owned by nothing.
+
+        def empty_cells(count: int) -> None:
+            row_cells.extend(pdf.make_indirect(Dictionary(
+                Type=Name.StructElem, S=Name.TH if header_row else Name.TD, P=tr,
+                K=Array([]))) for _ in range(count))
+
+        next_column = 0
+        for first, last, held in _row_cells([boxes[k] for k in row], columns):
+            empty_cells(first - next_column)
+            members = [row[position] for position in held]
             indices = [i for k in members for i in cells[k][1]]
-            if any(cells[k][0] == "TH" for k in members):
-                row_cells.append(leaf(indices, Name.TH, tr,
-                                      {"A": Dictionary(O=Name.Table, Scope=scope)}))
+            is_header = any(cells[k][0] == "TH" for k in members)
+            attributes = _cell_attributes(last - first + 1, scope if is_header else None)
+            row_cells.append(leaf(indices, Name.TH if is_header else Name.TD, tr,
+                                  {"A": attributes} if attributes else None))
+            if is_header:
                 header_texts.append(" ".join(lines[i].text.strip() for i in indices).strip())
-            else:
-                row_cells.append(leaf(indices, Name.TD, tr))
+            next_column = last + 1
+        empty_cells(len(columns) - next_column)
         tr.K = Array(row_cells)
         trs.append(tr)
     table.K = Array(trs)

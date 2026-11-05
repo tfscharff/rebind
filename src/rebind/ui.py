@@ -1007,13 +1007,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // between elements -- drag the bottom edge of a paragraph Rebind cut short down over the lines it
   // left behind, and they join it; pull it back up and they are given away. The rebuild decides
   // membership by which lines' centres the frame encloses. Only elements made of text lines have
-  // one, a detected table's rows among them (a cell the table missed is dragged into its row); a
-  // picture is decided by its region.
+  // one, a detected table's rows among them (a cell the table missed is dragged into its row). So
+  // does a picture, whose frame is simply its box: what it covers, and the labels it holds.
   var FRAME_STEP=0.5;     // percent of the page per arrow press -- under a line on any real page
 
   function frameable(e){
     // n: found by Rebind; a: inserted; o: lines a frame released, which can be gathered up again.
-    return kindOf(e)!=='Artifact' && /[nao]\d+x?(r\d+)?$/.test(e.id);
+    return kindOf(e)!=='Artifact' && (kindOf(e)==='Figure' || /[nao]\d+x?(r\d+)?$/.test(e.id));
   }
 
   // What is drawn: the frame a person set, where there is one, rather than the box around the lines

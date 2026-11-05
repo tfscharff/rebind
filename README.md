@@ -319,8 +319,15 @@ exactly the lines whose centres fall inside the frame — dragging a paragraph's
 lines it was split from merges them; pulling it back up gives them away as an element of their own.
 Lines a frame lets go of become an element of their own, with a frame of its own to gather them up
 again. A detected table's header and data rows have frames too: drag a row over a cell the table missed and
-it joins that row (and the table); shrink a row and the cells it lets go leave the table. A picture
-has no frame of its own.
+it joins that row (and the table); shrink a row and the cells it lets go leave the table. A picture's
+frame is its box: reshape it when Rebind's guess is off, and exactly the labels inside it are read
+as part of the picture.
+
+**Coming back to a document.** A description already in an uploaded PDF's tags is kept and shown,
+whether it was written in Rebind or in another tool; what you type replaces it. Uploading a file
+Rebind wrote reads it as the document it was before, not with its text doubled. So far only
+descriptions and picture boxes carry over: other corrections (retagged elements, reshaped frames,
+removed elements) have to be made again.
 
 `x` is an action, not a type: it marks content as an artifact rather than untagging it, since
 untagged content is a conformance failure. Page furniture and text inside figures are drawn hatched
@@ -345,7 +352,7 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.7.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.8.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:

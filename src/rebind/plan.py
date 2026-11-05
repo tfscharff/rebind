@@ -8,6 +8,7 @@ import re
 from dataclasses import replace
 
 from . import layout_model
+from .edits import READ_FIRST
 from .extract import TextLine
 from .geometry import _box
 from .layout import detect_table_lines
@@ -513,7 +514,11 @@ def _follow_anchors(items: list, key, after: dict[str, str]) -> list:
         placed = False
         for item in list(pending):
             ids = [key(x) for x in out]
-            if after[key(item)] in ids:
+            if after[key(item)] == READ_FIRST:
+                out.insert(0, item)
+                pending.remove(item)
+                placed = True
+            elif after[key(item)] in ids:
                 out.insert(ids.index(after[key(item)]) + 1, item)
                 pending.remove(item)
                 placed = True

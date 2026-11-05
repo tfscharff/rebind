@@ -36,12 +36,21 @@ from . import contrast, formula_reader, layout_model, recolor, review
 from .captions import _caption_groups, _document_captions
 from .document import _set_metadata, _strip_legacy_destinations, _strip_scripts
 from .edits import (
+    READ_FIRST,
     Edits,
     _element_records,
+    _is_figure_id,
     _place_figures,
     _record_box,
     _records_in_reading_order,
     _untagged_record,
+)
+from .existing import (
+    Described,
+    adopt_described_figures,
+    existing_descriptions,
+    formula_description,
+    original_of,
 )
 from .extract import TextLine, extract_pages
 from .figures import (
@@ -65,6 +74,8 @@ from .overlay import (
     _draw_line,
     _figure_xobject,
     _has_marked_content,
+    _has_unembedded_font,
+    _has_unmappable_glyphs,
     _invisible_text_pages,
     _pieces,
     _png,
@@ -117,10 +128,12 @@ class RemediationResult:
     page_images: dict = field(default_factory=dict)
 
 
-def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int,
-               profile) -> tuple[list[TextLine], bool, object, layout_model.PageHints]:
+def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int, profile,
+               known_pictures: tuple = ()) -> tuple[list[TextLine], bool, object,
+                                                     layout_model.PageHints]:
     """The page's text lines in reading order, whether OCR was used, the page's layout, and what
     the layout model saw on it (`layout_model.hints_for`; empty when there is no model).
+    `known_pictures` are boxes a person or the document itself has said hold a picture.
 
     Reading order comes from `layout.order_page`'s recursive XY-cut, NOT from a top-to-bottom sort.
     On a single-column page the two agree. On a two-column page they emphatically do not: a
@@ -152,7 +165,7 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int,
     boxes += [(fid, bbox) for fid, bbox, _cap in _vector_figures(page, lines, boxes)]
     regions = layout_model.page_regions(source, src_page.number, src_page.width,
                                         src_page.height, image)
-    layout = order_page(page, profile, tuple(bbox for _fid, bbox in boxes),
+    layout = order_page(page, profile, tuple(bbox for _fid, bbox in boxes) + known_pictures,
                         layout_model.hints_for(lines, regions))
     ordered = _merge_bare_markers([placed.line for placed in layout.lines])
     # Hints are keyed by line identity, and merging a bare bullet into its item makes a new line.
@@ -206,8 +219,10 @@ def _sort_lines(src_page, lines: list[TextLine], hints: layout_model.PageHints,
     # running head or a stray label is how it gets read, the same as tagging it. A line inside
     # a described picture stays the picture's.
     page_key = re.compile(rf"p{src_page.number}[a-z]")
+    # A picture's frame is its box, not a claim on the lines inside it (`_framed_pictures`).
     frames = {key: _frame_in_points(value, src_page.width, src_page.height)
-              for key, value in edits.frames.items() if page_key.match(key)}
+              for key, value in edits.frames.items()
+              if page_key.match(key) and not _is_figure_id(key)}
     for index, ln in enumerate(lines):
         if id(ln) in owner_figure:
             continue
@@ -232,8 +247,42 @@ def _sort_lines(src_page, lines: list[TextLine], hints: layout_model.PageHints,
                      is_artifact)
 
 
+def _framed_pictures(figs: PageFigures, frames: dict[str, tuple], src_page) -> None:
+    """Set each picture a person framed to that box. It is a picture's whole extent: what it crops
+    and what it holds, in place of the guess."""
+    for index, (fid, _bbox) in enumerate(figs.boxes):
+        if fid in frames:
+            figs.boxes[index] = (fid, _frame_in_points(frames[fid], src_page.width,
+                                                       src_page.height))
+            figs.framed.add(fid)
+
+
+def _read_after_pictures(after: dict[str, str], figs: PageFigures, lines: list[TextLine],
+                         content_lines: list[TextLine], plan: list[dict],
+                         owner_figure: dict[int, int]) -> dict[str, str]:
+    """Where each element inserted after a picture goes in the plan: after the element the picture
+    itself is read after (or `READ_FIRST`). The picture cannot be named as the place, because a
+    picture is not an element of the plan; named anyway, the inserted element went back to where its
+    lines sit on the page the moment the page was rebuilt."""
+    boxes = dict(figs.boxes)
+    described = [fid for fid, _bbox in figs.described]
+    position = {id(line): index for index, line in enumerate(content_lines)}
+    at = [position.get(id(line)) for line in lines]
+    resolved: dict[str, str] = {}
+    for inserted, anchor in after.items():
+        if anchor not in boxes:
+            continue
+        before = _figure_anchor(lines, at, described.index(anchor) if anchor in described else -1,
+                                owner_figure, boxes[anchor])
+        prior = [entry for entry in plan
+                 if before is None or entry["first"] < before]
+        resolved[inserted] = prior[-1]["id"] if prior else READ_FIRST
+    return resolved
+
+
 def _page_plan(src_page, lines: list[TextLine], page_roles: list[str],
-               hints: layout_model.PageHints, figs: PageFigures, sort: _LineSort, edits: Edits):
+               hints: layout_model.PageHints, figs: PageFigures, sort: _LineSort, edits: Edits,
+               described: list[Described] | tuple = ()):
     """The page's content lines in reading order, the source index of each, and the plan of
     elements over them -- the page's structural judgement, then the person's corrections on top.
     Also the table rows the person took out, listed so they can be put back."""
@@ -278,6 +327,13 @@ def _page_plan(src_page, lines: list[TextLine], page_roles: list[str],
         entry["id"] = f"p{src_page.number}n{content_source[entry['first']]}"
         entry["kind"] = edits.tags.get(entry["id"], entry["kind"])
         entry["alt"] = edits.alts.get(entry["id"], "")
+        if entry["kind"] == "Formula" and not entry["alt"]:
+            members = content_lines[entry["first"]:entry["last"] + 1]
+            entry["alt"] = formula_description(
+                (min(ln.bbox[0] for ln in members), min(ln.bbox[1] for ln in members),
+                 max(ln.bbox[2] for ln in members), max(ln.bbox[3] for ln in members)), described)
+    read_after = _read_after_pictures(edits.after, figs, lines, content_lines, plan,
+                                      sort.owner_figure)
     # Frames a person drew regroup the lines before anything is numbered. The content lines
     # are re-ordered along with the plan, so every later step still sees each element's lines
     # as one contiguous run.
@@ -293,9 +349,11 @@ def _page_plan(src_page, lines: list[TextLine], page_roles: list[str],
     order, plan = _apply_frames(
         plan, content_lines, sort.frames,
         lambda index: f"p{src_page.number}o{content_source[index]}", added, edits.removed,
-        edits.after)
+        {**edits.after, **read_after})
     for entry in plan:      # where each element stands in the page's own reading order
         entry["_order"] = content_source[entry.pop("_at", entry["first"])]
+        if entry["id"] in read_after:
+            entry["_read_after"] = read_after[entry["id"]]
     if order != list(range(len(content_lines))):
         content_lines = [content_lines[i] for i in order]
         content_source = [content_source[i] for i in order]
@@ -362,9 +420,10 @@ def _page_records(source: Path, src_page, lines: list[TextLine], content_lines: 
 
 def _draw_figures(pdf: pikepdf.Pdf, page_image, src_page, lines: list[TextLine],
                   mcids: list[int | None], figs: PageFigures, owner_figure: dict[int, int],
-                  first_mcid: int) -> tuple[bytes, dict, list[tuple]]:
+                  first_mcid: int, read_before: dict[str, int]) -> tuple[bytes, dict, list[tuple]]:
     """Draw each described figure (a crop of the rendered region) inside a tagged /Figure,
-    together with any text that belongs to it, all under the figure's single MCID.
+    together with any text that belongs to it, all under the figure's single MCID. `read_before`
+    is the content a person inserted straight after a figure, which settles where it is read.
 
     Returns the drawing, the image objects it uses, and each figure's
     `(mcid, alt, bbox, anchor mcid)` for the structure tree.
@@ -384,7 +443,8 @@ def _draw_figures(pdf: pikepdf.Pdf, page_image, src_page, lines: list[TextLine],
                 _draw_line(stream, line, "RebindF")
         stream.write(b"EMC\n")
         specs.append((mcid, figs.alt[fid], bbox,
-                      _figure_anchor(lines, mcids, k, owner_figure, bbox)))
+                      read_before[fid] if fid in read_before
+                      else _figure_anchor(lines, mcids, k, owner_figure, bbox)))
         mcid += 1
     return stream.getvalue(), xobjects, specs
 
@@ -428,6 +488,11 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     source, target = Path(source), Path(target)
     edits = edits or Edits()
     alt_texts = {**edits.alts, **(alt_texts or {})}
+    title = title or source.stem
+    # What the file's own tags already describe is read before anything else, because a file Rebind
+    # wrote is then read as what it was before: its own layer read back in would double every word.
+    described = existing_descriptions(source)
+    source = original_of(source)
     source_pages = list(extract_pages(source))
     profile = build_profile(source_pages)
 
@@ -441,7 +506,13 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     layouts: list[tuple] = []
     page_hints: list[layout_model.PageHints] = []
     for src_page in source_pages:
-        lines, used_ocr, layout, hints = _lines_for(source, src_page, engine, dpi, profile)
+        known = tuple(item.bbox for item in described.get(src_page.number, ())
+                      if item.kind == "Figure")
+        known += tuple(_frame_in_points(frame, src_page.width, src_page.height)
+                       for key, frame in edits.frames.items()
+                       if _is_figure_id(key) and key.startswith(f"p{src_page.number}")
+                       and not key[len(f"p{src_page.number}")].isdigit())
+        lines, used_ocr, layout, hints = _lines_for(source, src_page, engine, dpi, profile, known)
         layouts.append((src_page, layout))
         page_hints.append(hints)
         if used_ocr and lines:
@@ -510,13 +581,19 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         scanned = used_ocr or src_page.number in invisible_pages or _is_full_page_scan(src_page)
         figs = find_figures(source, render_source, src_page, lines, hints, scanned=scanned,
                             dpi=dpi, full_render=full_render)
-        describe_figures(figs, lines, alt_texts, document_captions, edits.removed)
-        rebuild = _has_marked_content(page)
+        on_page = described.get(src_page.number, [])
+        figs.boxes, carried = adopt_described_figures(figs.boxes, on_page, src_page.number)
+        _framed_pictures(figs, edits.frames, src_page)
+        # What a person typed here wins over what the document already said, and either over a
+        # caption found near the picture.
+        describe_figures(figs, lines, {**carried, **alt_texts}, document_captions, edits.removed)
+        rebuild = (_has_marked_content(page) or _has_unmappable_glyphs(lines)
+                   or _has_unembedded_font(page))
         page_image = full_render() if rebuild or figs.boxes else None
 
         sort = _sort_lines(src_page, lines, hints, figs, edits, profile, scanned)
         content_lines, content_source, plan, dropped_rows = _page_plan(
-            src_page, lines, page_roles, hints, figs, sort, edits)
+            src_page, lines, page_roles, hints, figs, sort, edits, on_page)
 
         # Marked-content ids, in reading order. A line an edit removed is drawn as an artifact. A
         # line with superscripts or subscripts takes one id per piece (`_pieces`), so each of them
@@ -545,8 +622,19 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         page_elements.extend(_page_records(source, src_page, lines, content_lines, content_source,
                                            plan, mcid_of, dropped_rows, sort, edits))
 
+        # The first element a person inserted after each picture, in the order the page is read.
+        followed_by: dict[str, str] = {}
+        read_before: dict[str, int] = {}
+        for entry in plan:
+            picture = edits.after.get(entry["id"])
+            if picture in dict(figs.boxes) and picture not in followed_by:
+                followed_by[picture] = entry["id"]
+                if mcid_of[entry["first"]] is not None:
+                    read_before[picture] = mcid_of[entry["first"]]
+
         figure_stream, extra_xobjects, figure_specs = _draw_figures(
-            pdf, page_image, src_page, lines, mcids, figs, sort.owner_figure, next_mcid)
+            pdf, page_image, src_page, lines, mcids, figs, sort.owner_figure, next_mcid,
+            read_before)
         overlay = _tagged_text_stream(lines, "RebindF", mcids, drawn_pieces) + figure_stream
         if rebuild:
             _rebuild_page(pdf, page, page_image, overlay, extra_xobjects, font,
@@ -571,7 +659,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         _place_figures(page_elements, src_page,
                        [(fid, figs.alt[fid], bbox) for fid, bbox in figs.described]
                        + [(fid, "", bbox) for fid, bbox in figs.undescribed],
-                       set(figs.music_of))
+                       set(figs.music_of), followed_by)
         page_images[src_page.number] = _editor_picture(source, render_source, src_page,
                                                        page_image, darken_contrast)
         for fid, bbox in figs.undescribed:
@@ -580,7 +668,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                 "thumb": _crop_data_uri(page_image, bbox, src_page.width, src_page.height)})
 
     tree.finish()
-    _set_metadata(pdf, title=title or source.stem, lang=lang)
+    _set_metadata(pdf, title=title, lang=lang)
     pdf.save(target, min_version="2.0")   # PDF/UA-2 requires a PDF 2.0 base (ISO 32000-2)
     pdf.close()
     self_check = self_check_pdf_ua2(target)

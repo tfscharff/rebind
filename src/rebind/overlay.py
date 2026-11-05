@@ -6,9 +6,19 @@ import io
 from pathlib import Path
 
 import pikepdf
+from pdfminer.fontmetrics import FONT_METRICS
 from pikepdf import Dictionary, Name
 
 from .extract import TextLine
+
+# Helvetica's own metrics, since that is what the invisible layer is drawn in: per 1000 of size.
+HELVETICA_WIDTHS: dict[str, int] = FONT_METRICS["Helvetica"][1]
+HELVETICA_DEFAULT_WIDTH = 556
+HELVETICA_DESCENT = 0.207
+# A typesetter's ligature is two or three letters drawn as one glyph. WinAnsi has none of them, and
+# replaced with '?' a screen reader said "ef?cient" on any page set in a font that uses them.
+LIGATURES = str.maketrans({"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi",
+                           "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"})
 
 
 def _crop_data_uri(page_image, bbox, page_width, page_height, max_side: int = 220) -> str:
@@ -80,16 +90,32 @@ def _encode_winansi(text: str) -> bytes:
     (confirmed on a real sample: a document with "II.\tImaging..."-style headings, 52 instances of
     exactly this) -- replaced with a space, which is what the tab visually was anyway.
     """
-    text = "".join(" " if ord(ch) < 0x20 else ch for ch in text)
+    text = "".join(" " if ord(ch) < 0x20 else ch for ch in text).translate(LIGATURES)
     return text.encode("cp1252", errors="replace")
+
+
+def _text_placement(line: TextLine) -> bytes:
+    """Set the text matrix and horizontal scale so the invisible line covers its printed one.
+
+    Drawn at its own natural width, Helvetica at the line's full box height runs well past the
+    print: selecting it highlights the wrong place, and a two-column page read back from it has
+    lines crossing the gutter. The baseline is lifted by the font's descent so its box sits there.
+    """
+    x0, y0, x1, y1 = line.bbox
+    size = max(y1 - y0, 1.0)
+    natural = sum(HELVETICA_WIDTHS.get(ch, HELVETICA_DEFAULT_WIDTH)
+                  for ch in _encode_winansi(line.text).decode("cp1252", errors="replace"))
+    scale = 100.0
+    if natural > 0 and x1 > x0:
+        scale = min(max(100.0 * (x1 - x0) / (natural * size / 1000.0), 1.0), 1000.0)
+    return (f"{size:.2f} 0 0 {size:.2f} {x0:.2f} {y0 + HELVETICA_DESCENT * size:.2f} Tm "
+            f"{scale:.2f} Tz ").encode("ascii")
 
 
 def _draw_line(out: io.BytesIO, line: TextLine, font_name: str) -> None:
     """The invisible (render mode 3) text for one line, with no marked-content wrapper of its own."""
-    x0, y0, x1, y1 = line.bbox
-    size = max(y1 - y0, 1.0)
     out.write(b"q BT 3 Tr /" + font_name.encode("ascii") + b" 1 Tf\n")
-    out.write(f"{size:.2f} 0 0 {size:.2f} {x0:.2f} {y0:.2f} Tm (".encode("ascii"))
+    out.write(_text_placement(line) + b"(")
     out.write(_encode_winansi(_escape(line.text)))
     out.write(b") Tj\nET Q\n")
 
@@ -143,10 +169,9 @@ def _draw_pieces(out: io.BytesIO, line: TextLine, font_name: str,
     """A line drawn piece by piece, each `(mcid, start, end, shift)` its own marked content, so a
     superscript or subscript can be its own element in the structure tree. Each is drawn raised or
     lowered by its own shift (text rise), as it is printed."""
-    x0, y0, _x1, y1 = line.bbox
-    size = max(y1 - y0, 1.0)
+    size = max(line.bbox[3] - line.bbox[1], 1.0)
     out.write(b"q BT 3 Tr /" + font_name.encode("ascii") + b" 1 Tf\n")
-    out.write(f"{size:.2f} 0 0 {size:.2f} {x0:.2f} {y0:.2f} Tm\n".encode("ascii"))
+    out.write(_text_placement(line) + b"\n")
     for mcid, start, end, shift in pieces:
         tag = "Span" if shift else "P"
         out.write(f"/{tag} <</MCID {mcid}>> BDC {shift / size:.3f} Ts (".encode("ascii"))
@@ -168,17 +193,66 @@ def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, font: pikepdf.Object, name: 
 
 
 def _has_marked_content(page: pikepdf.Page) -> bool:
-    """Whether the page's content already contains marked-content operators.
+    """Whether the page's content already holds tagged content: marked content with an MCID.
 
     Such a page cannot simply be wrapped in an artifact -- tagged content may not live inside an
     artifact (veraPDF 7.1-2) -- so it is rebuilt from a clean render instead of kept verbatim.
+
+    Marked content with no MCID is not tagged: nothing in a structure tree can refer to it. A real
+    journal's pages wrap their drawings in `/Document /MC0 BDC`, and taking any marker for a tag
+    flattened every page with a vector diagram on it into a JPEG.
     """
+    properties = (page.obj.get("/Resources") or Dictionary()).get("/Properties")
     try:
-        for _operands, operator in pikepdf.parse_content_stream(page):
-            if str(operator) in ("BDC", "BMC"):
+        for operands, operator in pikepdf.parse_content_stream(page):
+            if str(operator) != "BDC" or len(operands) < 2:
+                continue
+            props = operands[1]
+            if isinstance(props, Name) and properties is not None:
+                props = properties.get(str(props))
+            if isinstance(props, Dictionary) and "/MCID" in props:
                 return True
     except (pikepdf.PdfError, Exception):  # noqa: BLE001 -- unparseable content -> rebuild clean
         return True
+    return False
+
+
+def _has_unmappable_glyphs(lines: list[TextLine]) -> bool:
+    """Whether the page draws glyphs its own fonts give no real character for: pdfminer spells a
+    missing one `(cid:N)`, and a private-use value is no character anyone can read. PDF/UA-2 fails
+    either anywhere on the page (8.4.5.8, 8.4.3), even inside an artifact, so the page is drawn from
+    a render instead, where there are no glyphs left to fail."""
+    return any("(cid:" in line.text or any(0xE000 <= ord(ch) <= 0xF8FF for ch in line.text)
+               for line in lines)
+
+
+def _font_is_embedded(font) -> bool:
+    if font.get("/Subtype") == Name.Type3:
+        return True         # its glyphs are drawn by its own content, so nothing is missing
+    if font.get("/Subtype") == Name.Type0:
+        descendants = font.get("/DescendantFonts")
+        return bool(descendants) and all(_font_is_embedded(d) for d in descendants)
+    descriptor = font.get("/FontDescriptor")
+    return descriptor is not None and any(
+        key in descriptor for key in ("/FontFile", "/FontFile2", "/FontFile3"))
+
+
+def _has_unembedded_font(page: pikepdf.Page) -> bool:
+    """Whether the page, or a form drawn on it, has a font whose program is not in the file: clause
+    8.4.5.5.1 fails it wherever it is used, and only a render of the page leaves it behind."""
+    seen: set = set()
+    stack = [page.obj.get("/Resources")]
+    while stack:
+        resources = stack.pop()
+        if resources is None:
+            continue
+        for name, font in (resources.get("/Font") or Dictionary()).items():
+            if name != "/RebindF" and not _font_is_embedded(font):
+                return True
+        for xobject in (resources.get("/XObject") or Dictionary()).values():
+            if xobject.get("/Subtype") == Name.Form and xobject.objgen not in seen:
+                seen.add(xobject.objgen)
+                stack.append(xobject.get("/Resources"))
     return False
 
 
