@@ -563,16 +563,19 @@ def describe_figures(figs: PageFigures, lines: list[TextLine], alt_texts: dict[s
     # figure that no other figure has already claimed. Anything else leaves it undescribed and
     # asks the person, which is the honest outcome -- the wrong caption is a fabrication, and
     # worse than an empty box.
-    claimed = {text for text in figs.alt.values() if text}
+    #
+    # Looked for even when the picture already has a description (typed, or kept from the file):
+    # the caption beside it is a caption either way, and is tagged as one.
+    claimed = {text for text in captions.values() if text}
     for fid, bbox in figs.boxes:
         # Music is labelled beside its staves with a bare "Ex. 238.", never a sentence; a
         # "caption" found beside it is the next column's text.
-        if figs.alt[fid] or fid in figs.music_of:
+        if captions[fid] or fid in figs.music_of:
             continue
         beside = [(text, used) for text, used in _side_captions(lines, bbox)
                   if text not in claimed]
         if len(beside) == 1 and _caption_is_substantial(beside[0][0]):
-            figs.alt[fid] = beside[0][0]
+            figs.alt[fid] = figs.alt[fid] or beside[0][0]
             claimed.add(beside[0][0])
             if beside[0][1]:
                 figs.caption_blocks.append(beside[0][1])

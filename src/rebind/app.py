@@ -175,6 +175,12 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         source = job.workdir / "source.pdf"
         source.write_bytes(data)
         job.source_path = source
+        # A file Rebind wrote opens with the corrections it was saved with, in the editor too.
+        from rebind.existing import saved_corrections
+
+        saved = saved_corrections(source)
+        if saved and isinstance(saved.get("edits"), dict):
+            job.edits = saved["edits"]
         threading.Thread(target=_run_conversion, args=(job, source), daemon=True).start()
         return JSONResponse({"job_id": job.id})
 

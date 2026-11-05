@@ -292,6 +292,69 @@ def formula_description(box: tuple, described: list[Described]) -> str:
     return ""
 
 
+# Where a file Rebind wrote keeps what it needs to be opened again as it was left: the person's
+# corrections in the document's page-piece dictionary, and the original drawing of any page that had
+# to be redrawn from a picture in the page's own. A page-piece dictionary is the place ISO 32000
+# gives a producer for private data of its own; nothing else reads it.
+SAVED_KEY = "/Rebind"
+
+
+def _piece(data: Dictionary) -> Dictionary:
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("D:%Y%m%d%H%M%SZ")
+    return Dictionary(LastModified=pikepdf.String(stamp), Private=data)
+
+
+def save_corrections(pdf: pikepdf.Pdf, payload: dict) -> None:
+    """Keep the person's corrections (`Edits.to_payload`, descriptions included) in the file."""
+    import json
+
+    data = Dictionary(Corrections=pikepdf.String(json.dumps(payload, sort_keys=True)))
+    pdf.Root.PieceInfo = Dictionary({SAVED_KEY: _piece(data)})
+
+
+def page_drawing(page: pikepdf.Page) -> tuple:
+    """A page's content and a copy of its resources, as they stand: what `keep_original_drawing`
+    keeps. The resources are copied because changing a page changes them in place."""
+    resources = page.obj.get("/Resources") or Dictionary()
+    copy = Dictionary({key: Dictionary(dict(value.items())) if isinstance(value, Dictionary)
+                       else value for key, value in resources.items()})
+    return page.obj.get("/Contents"), copy
+
+
+def keep_original_drawing(pdf: pikepdf.Pdf, page: pikepdf.Page, drawing: tuple | None = None) -> None:
+    """Keep a page's own drawing (`page_drawing`, taken before it was changed) so the page can be
+    put back exactly when the file is opened again: one redrawn from a picture of it, or a scan
+    whose own invisible text layer was taken off."""
+    contents, resources = drawing or page_drawing(page)
+    original = Dictionary(Contents=contents, Resources=resources)
+    page.obj.PieceInfo = Dictionary({SAVED_KEY: _piece(Dictionary(Original=original))})
+    page.obj.LastModified = page.obj.PieceInfo[SAVED_KEY].LastModified
+
+
+def saved_corrections(source: Path) -> dict | None:
+    """The corrections a file Rebind wrote was saved with, or None."""
+    import json
+
+    try:
+        with pikepdf.open(source) as pdf:
+            piece = (pdf.Root.get("/PieceInfo") or Dictionary()).get(SAVED_KEY)
+            data = piece.get("/Private") if piece is not None else None
+            if data is None or "/Corrections" not in data:
+                return None
+            payload = json.loads(str(data.Corrections))
+    except Exception:  # noqa: BLE001 -- a payload that will not read is no payload
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _saved_original(page: pikepdf.Page):
+    piece = (page.obj.get("/PieceInfo") or Dictionary()).get(SAVED_KEY)
+    data = piece.get("/Private") if piece is not None else None
+    return data.get("/Original") if data is not None else None
+
+
 def _is_own_page(page: pikepdf.Page) -> bool:
     fonts = (page.obj.get("/Resources") or Dictionary()).get("/Font")
     return fonts is not None and OWN_FONT in fonts
@@ -361,13 +424,23 @@ def original_of(source: Path) -> Path:
     """
     stamp = file_key(source)
     with pikepdf.open(source) as pdf:
-        if not any(_is_own_page(page) for page in pdf.pages):
+        if not any(_is_own_page(page) or _saved_original(page) is not None
+                   for page in pdf.pages):
             return source
         digest = hashlib.sha256(repr(stamp or source).encode()).hexdigest()[:24]
         copy = Path(tempfile.gettempdir()) / "rebind-originals" / f"{digest}.pdf"
         if stamp is not None and copy.exists():
             return copy
         for page in pdf.pages:
+            original = _saved_original(page)
+            if original is not None:
+                # Redrawn from a picture last time: the page as it was is put back as it was.
+                page.obj.Contents = original.Contents
+                page.obj.Resources = original.Resources
+                for key in ("/PieceInfo", "/LastModified", "/StructParents"):
+                    if key in page.obj:
+                        del page.obj[key]
+                continue
             if not _is_own_page(page):
                 continue
             page.obj.Contents = pdf.make_stream(pikepdf.unparse_content_stream(
@@ -384,7 +457,7 @@ def original_of(source: Path) -> Path:
                         del members[name]
             if "/StructParents" in page.obj:
                 del page.obj["/StructParents"]
-        for key in ("/StructTreeRoot", "/Outlines", "/MarkInfo"):
+        for key in ("/StructTreeRoot", "/Outlines", "/MarkInfo", "/PieceInfo"):
             if key in pdf.Root:
                 del pdf.Root[key]
         copy.parent.mkdir(parents=True, exist_ok=True)

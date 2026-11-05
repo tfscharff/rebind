@@ -159,6 +159,55 @@ def test_uploading_a_result_does_not_double_its_text(tmp_path):
     assert words and [e["text"] for e in again.elements if e.get("text")] == words
 
 
+def test_every_correction_survives_uploading_the_result(tmp_path):
+    source = tmp_path / "source.pdf"
+    _picture_pdf(source)
+    plain = remediate(source, tmp_path / "probe.pdf")
+    picture = _figures(plain)[0]
+    paragraphs = [e for e in plain.elements if e["kind"] == "P"]
+    edits = Edits(tags={paragraphs[0]["id"]: "H2"}, removed={paragraphs[-1]["id"]},
+                  alts={picture["id"]: "Described."},
+                  frames={picture["id"]: (picture["left"], picture["top"], picture["width"],
+                                          picture["height"] + 1.0)})
+    first = remediate(source, tmp_path / "saved.pdf", edits=edits)
+    again = remediate(tmp_path / "saved.pdf", tmp_path / "again.pdf")
+
+    def view(result):
+        return [(e["id"], e["kind"], e.get("alt", ""), e.get("text", "")) for e in result.elements]
+
+    assert view(again) == view(first)
+    from rebind.existing import saved_corrections
+
+    assert saved_corrections(tmp_path / "again.pdf")["edits"]["tags"] == edits.tags
+
+
+def test_a_page_redrawn_from_a_picture_comes_back_as_it_was(tmp_path, verapdf_exe):
+    from rebind.validate import validate_pdf_ua
+
+    source = tmp_path / "tagged.pdf"
+    _tagged_by_someone_else(source, "A red square.")      # tagged content: redrawn from a picture
+    out = remediate(source, tmp_path / "out.pdf")
+    with pikepdf.open(tmp_path / "out.pdf") as pdf:
+        assert "/Im0" in pdf.pages[0].obj.Resources.XObject
+    report = validate_pdf_ua(tmp_path / "out.pdf", verapdf_exe=verapdf_exe)
+    assert report.compliant, report.summary()
+    with pikepdf.open(original_of(tmp_path / "out.pdf")) as pdf, pikepdf.open(source) as was:
+        assert (pdf.pages[0].obj.Contents.read_bytes()
+                == was.pages[0].obj.Contents.read_bytes())
+    again = remediate(tmp_path / "out.pdf", tmp_path / "again.pdf")
+    assert [e["alt"] for e in _figures(again)] == [e["alt"] for e in _figures(out)]
+
+
+def test_a_scans_own_text_layer_comes_back_on_upload(tmp_path):
+    from tests.fixtures import pdf_scan_with_ocr_layer
+
+    source = pdf_scan_with_ocr_layer(tmp_path / "scan.pdf", text="words a scanner recognised")
+    remediate(source, tmp_path / "out.pdf")
+    with pikepdf.open(original_of(tmp_path / "out.pdf")) as pdf, pikepdf.open(source) as was:
+        assert (pikepdf.unparse_content_stream(pikepdf.parse_content_stream(pdf.pages[0]))
+                == pikepdf.unparse_content_stream(pikepdf.parse_content_stream(was.pages[0])))
+
+
 def test_a_results_own_layer_comes_back_off(tmp_path):
     source = tmp_path / "source.pdf"
     _picture_pdf(source)

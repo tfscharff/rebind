@@ -100,6 +100,12 @@ class Edits:
             after={str(k): str(v) for k, v in (payload.get("after") or {}).items()},
         )
 
+    def to_payload(self) -> dict:
+        """The editor's form of these corrections, which `from_payload` reads back."""
+        return {"tags": dict(self.tags), "removed": sorted(self.removed), "alts": dict(self.alts),
+                "frames": {k: list(v) for k, v in self.frames.items()},
+                "after": dict(self.after)}
+
 
 # What a person may retag an element as, and how each has to be built. ISO 32005 Table 5 governs
 # what may appear directly under the document element, and veraPDF enforces it strictly -- every

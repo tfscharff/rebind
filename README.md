@@ -331,11 +331,12 @@ is read as unknown (U+FFFD) rather than guessed. The report lists the pages this
 describing the formulas there is what makes them readable. The font's map is repaired too, so
 the page itself stays as it was.
 
-**Coming back to a document.** A description already in an uploaded PDF's tags is kept and shown,
-whether it was written in Rebind or in another tool; what you type replaces it. Uploading a file
-Rebind wrote reads it as the document it was before, not with its text doubled. So far only
-descriptions and picture boxes carry over: other corrections (retagged elements, reshaped frames,
-removed elements) have to be made again.
+**Coming back to a document.** A file Rebind wrote can be uploaded again and the work carries on
+where it was left: every correction (types, frames, removed and inserted elements, descriptions)
+is saved inside the file, and the editor opens with all of it. Rebind reads the file as the
+document it was before, not with its text doubled; a page it had to redraw from a picture keeps
+its own drawing too, and is put back exactly. A description already in another tool's tags is
+kept and shown as well; what you type replaces it.
 
 `x` is an action, not a type: it marks content as an artifact rather than untagging it, since
 untagged content is a conformance failure. Page furniture and text inside figures are drawn hatched
@@ -360,7 +361,7 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.8.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.9.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:

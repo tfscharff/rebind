@@ -65,7 +65,11 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
   `adopt_described_figures` matches them to the pictures found (a person's typed text beats them,
   and they beat a caption). `original_of` takes Rebind's own layer back off a file Rebind wrote, so
   re-uploading a result does not double every word; the copy lives in the temp dir under a name
-  from the file's identity, so rebuilds keep their page caches.
+  from the file's identity, so rebuilds keep their page caches. Rebind's output carries the
+  person's corrections in `/Root /PieceInfo /Rebind` (`save_corrections`, read back by
+  `saved_corrections` in `remediate` when no edits are passed and in the app at upload), and a page
+  redrawn from a picture keeps its own drawing in its `/PieceInfo /Rebind` (`keep_original_drawing`),
+  which `original_of` puts back.
 - `glyphs.py` — fonts that misreport their own glyphs (a journal's plus sign labelled "þ", its
   Greek labelled as Latin letters). Every glyph a simple embedded font draws is rendered and
   compared with the character it claims, drawn in bundled DejaVu (`data/fonts/`); a font whose

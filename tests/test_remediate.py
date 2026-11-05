@@ -275,6 +275,7 @@ def _mcid_text(pdf_path: Path, page_index: int = 0) -> dict[int, str]:
     """
     out: dict[int, str] = {}
     with pikepdf.open(pdf_path) as pdf:
+        decode = _overlay_decoder(pdf.pages[page_index])
         stack: list[int | None] = []
         for operands, op in pikepdf.parse_content_stream(pdf.pages[page_index]):
             token = str(op)
@@ -287,9 +288,22 @@ def _mcid_text(pdf_path: Path, page_index: int = 0) -> dict[int, str]:
             elif token == "EMC" and stack:
                 stack.pop()
             elif token == "Tj" and operands and stack and stack[-1] is not None:
-                text = bytes(operands[0]).decode("cp1252", "replace")
+                text = decode(bytes(operands[0]))
                 out[stack[-1]] = (out.get(stack[-1], "") + " " + text).strip()
     return out
+
+
+def _overlay_decoder(page):
+    """Read Rebind's invisible text: two bytes a character, through its font's ToUnicode map."""
+    import re
+
+    font = (page.obj.get("/Resources") or pikepdf.Dictionary()).get("/Font", {}).get("/RebindF")
+    table: dict[bytes, str] = {}
+    if font is not None and "/ToUnicode" in font:
+        for code, value in re.findall(rb"<([0-9A-F]{4})> <([0-9A-F]+)>",
+                                      font.ToUnicode.read_bytes()):
+            table[bytes.fromhex(code.decode())] = bytes.fromhex(value.decode()).decode("utf-16-be")
+    return lambda raw: "".join(table.get(raw[k:k + 2], "?") for k in range(0, len(raw), 2))
 
 
 def _tagged_text_in_order(pdf_path: Path) -> list[str]:

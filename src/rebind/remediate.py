@@ -50,7 +50,11 @@ from .existing import (
     adopt_described_figures,
     existing_descriptions,
     formula_description,
+    keep_original_drawing,
     original_of,
+    page_drawing,
+    save_corrections,
+    saved_corrections,
 )
 from .extract import TextLine, extract_pages
 from .glyphs import repair_fonts
@@ -489,7 +493,10 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     bytes. Pass False to measure and report without correcting.
     """
     source, target = Path(source), Path(target)
-    edits = edits or Edits()
+    # With no corrections given, a file Rebind wrote is opened with the ones it was saved with.
+    if edits is None:
+        saved = saved_corrections(source)
+        edits = Edits.from_payload(saved.get("edits") if saved else None)
     alt_texts = {**edits.alts, **(alt_texts or {})}
     title = title or source.stem
     # What the file's own tags already describe is read before anything else, because a file Rebind
@@ -509,8 +516,10 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     layouts: list[tuple] = []
     page_hints: list[layout_model.PageHints] = []
     for src_page in source_pages:
+        # Another tool's pictures, which Rebind may not find itself. Rebind's own are found again
+        # as they were, and a box the person drew comes back with their frames, below.
         known = tuple(item.bbox for item in described.get(src_page.number, ())
-                      if item.kind == "Figure")
+                      if item.kind == "Figure" and not item.exact)
         known += tuple(_frame_in_points(frame, src_page.width, src_page.height)
                        for key, frame in edits.frames.items()
                        if _is_figure_id(key) and key.startswith(f"p{src_page.number}")
@@ -642,12 +651,16 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             read_before, font)
         overlay = _tagged_text_stream(lines, font, mcids, drawn_pieces) + figure_stream
         if rebuild:
+            keep_original_drawing(pdf, page)
             _rebuild_page(pdf, page, page_image, overlay, extra_xobjects, font,
                           src_page.width, src_page.height)
         else:
             # Before the page is wrapped as an artifact: a scan that arrived already OCR'd carries
             # its own invisible text layer, which Rebind is about to duplicate with a tagged one.
-            _strip_invisible_text(pdf, page)
+            # The page as it was is kept, so opening the file again reads that layer, not Rebind's.
+            drawing = page_drawing(page)
+            if _strip_invisible_text(pdf, page):
+                keep_original_drawing(pdf, page, drawing)
             page.contents_add(pdf.make_stream(b"/Artifact BMC\n"), prepend=True)
             page.contents_add(pdf.make_stream(b"EMC\n" + overlay), prepend=False)
             _add_font(pdf, page, font)
@@ -675,6 +688,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     tree.finish()
     font.finish()
     _set_metadata(pdf, title=title, lang=lang)
+    # So the file can be opened in Rebind again and carry on where the person left off.
+    save_corrections(pdf, {"version": 1, "edits": {**edits.to_payload(), "alts": alt_texts}})
     pdf.save(target, min_version="2.0")   # PDF/UA-2 requires a PDF 2.0 base (ISO 32000-2)
     pdf.close()
     self_check = self_check_pdf_ua2(target)
