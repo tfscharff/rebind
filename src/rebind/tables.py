@@ -15,6 +15,8 @@ COLUMN_COVER_SHARE = 0.5
 COLUMN_TOUCH_PT = 2.0
 # How near a one-cell column must sit to its neighbour, in its own line heights, to be part of it.
 LONE_PIECE_GAP = 0.5
+# A second row of labels under a row of group labels fills at least this share of the columns.
+SECOND_HEADER_FILL = 0.8
 
 
 def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextLine]]]:
@@ -39,6 +41,57 @@ def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextL
     if current:
         rows.append(current)
     return [sorted(row, key=lambda cl: cl[1].bbox[0]) for row in rows]
+
+
+def _layout(rows: list[list[TextLine]]):
+    """A table's columns, each row's cells placed in them, and the top row spread over the columns
+    it heads when it is a row of group labels (`_grouped_heading`; None otherwise)."""
+    columns = _column_bands([line.bbox for row in rows for line in row])
+    placed = [_row_cells([line.bbox for line in row], columns) for row in rows]
+    texts = [[" ".join(row[k].text for k in held) for _first, _last, held in cells]
+             for row, cells in zip(rows, placed)]
+    return columns, placed, _grouped_heading(placed, texts, len(columns))
+
+
+def default_header_rows(rows: list[list[TextLine]]) -> set[int]:
+    """Which rows of a detected table are header rows unless a person says otherwise."""
+    return {0, 1} if _layout(rows)[2] else {0}
+
+
+def _is_numeric(text: str) -> bool:
+    """A value rather than a label: mostly digits among its letters and digits."""
+    alnum = [ch for ch in text if ch.isalnum()]
+    return bool(alnum) and sum(ch.isdigit() for ch in alnum) * 2 >= len(alnum)
+
+
+def _grouped_heading(placed: list[list[tuple[int, int, list[int]]]], texts: list[list[str]],
+                     column_count: int) -> list[tuple[int, int, list[int]]] | None:
+    """The top row's cells spread over the columns they head, when the table opens with a row of
+    group labels over a row of column labels ("Sleep latency" over Scores, Frequency, Percent).
+
+    That is: a top row with gaps in it, a second row of labels in nearly every column, and values
+    below them. A group label is left-aligned over its group, so it covers only the first of its
+    columns; it is taken to run on to the next label. Without this the second row, which is the
+    one that names each column, was tagged as data, and its columns had no header at all.
+    """
+    if len(placed) < 3 or column_count < 3:
+        return None
+    top, second = placed[0], placed[1]
+    covered = sum(last - first + 1 for first, last, _held in top)
+    if covered >= column_count or len(top) < 2:
+        return None
+    if sum(last - first + 1 for first, last, _held in second) < SECOND_HEADER_FILL * column_count:
+        return None
+    if any(_is_numeric(text) for text in texts[1]) or not texts[1]:
+        return None
+    values = [text for row in texts[2:] for text in row]
+    if sum(_is_numeric(text) for text in values) * 2 < len(values):
+        return None
+    spread = []
+    for k, (first, _last, held) in enumerate(top):
+        end = top[k + 1][0] - 1 if k + 1 < len(top) else column_count - 1
+        spread.append((first, end, held))
+    return spread
 
 
 def _cell_attributes(span: int, scope) -> Dictionary | None:
@@ -151,7 +204,8 @@ def _tagged_table(pdf: pikepdf.Pdf, rows: list[tuple[str, list[tuple[int, TextLi
     the grid regular, which is what lets assistive technology read a data cell against its column
     header.
     """
-    columns = _column_bands([line.bbox for _row_id, row in rows for _mcid, line in row])
+    columns, placed, groups = _layout([[line for _mcid, line in row] for _row_id, row in rows])
+    defaults = {0, 1} if groups else {0}
 
     table = pdf.make_indirect(Dictionary(
         Type=Name.StructElem, S=Name.Table, P=document_elem, K=Array([])))
@@ -162,10 +216,10 @@ def _tagged_table(pdf: pikepdf.Pdf, rows: list[tuple[str, list[tuple[int, TextLi
         row_count += 1
         tr = pdf.make_indirect(Dictionary(
             Type=Name.StructElem, S=Name.TR, P=table, K=Array([])))
-        # The default guess -- the first detected row is the header -- unless a person corrected
-        # this specific row through the editor (Task 3's row sub-elements).
+        # The default guess -- the first detected row is the header, and the second too under a row
+        # of group labels -- unless a person corrected this row through the editor.
         override = row_tags.get(row_id)
-        is_header = override == "TH" if override in ("TH", "TD") else row_index == 0
+        is_header = override == "TH" if override in ("TH", "TD") else row_index in defaults
         cell_type = Name.TH if is_header else Name.TD
         row_cells: list[pikepdf.Object] = []
 
@@ -174,8 +228,11 @@ def _tagged_table(pdf: pikepdf.Pdf, rows: list[tuple[str, list[tuple[int, TextLi
             row_cells.extend(pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=cell_type, P=tr, K=Array([]))) for _ in range(count))
 
+        cells = placed[row_index]
+        if row_index == 0 and groups and is_header:
+            cells = groups
         next_column = 0
-        for first, last, held in _row_cells([line.bbox for _mcid, line in row], columns):
+        for first, last, held in cells:
             empty_cells(first - next_column)
             members = [row[k] for k in held]
             attributes = _cell_attributes(last - first + 1, Name.Column if is_header else None)

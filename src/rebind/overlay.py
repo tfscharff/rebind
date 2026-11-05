@@ -72,9 +72,12 @@ def _overlay_text(text: str) -> str:
     C0 control characters (tab, newline, ...) become spaces: a real born-digital source carried a
     literal tab used for visual alignment ("II.\tImaging...", 52 instances), and a control
     character is no character to read -- it maps to nothing a checker accepts (8.4.5.8). A
-    typesetter's ligature is spelled out, so a reader meets "efficient", not one glyph for "fi".
+    typesetter's ligature is spelled out, so a reader meets "efficient", not one glyph for "fi". A
+    private-use character (an icon font's glyph) means nothing to anyone but its font, and PDF/UA
+    fails it without an /ActualText (8.4.3), so it is read as unknown, U+FFFD.
     """
-    return "".join(" " if ord(ch) < 0x20 else ch for ch in text).translate(LIGATURES)
+    return "".join(" " if ord(ch) < 0x20 else "�" if 0xE000 <= ord(ch) <= 0xF8FF else ch
+                   for ch in text).translate(LIGATURES)
 
 
 class OverlayFont:

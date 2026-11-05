@@ -299,6 +299,10 @@ def test_a_ligature_is_spelled_out_in_the_invisible_text():
     assert _overlay_text("efﬁcient ﬂow") == "efficient flow"
 
 
+def test_a_private_use_character_is_read_as_unknown():
+    assert _overlay_text("icon  here") == "icon � here"
+
+
 def test_a_font_left_out_of_the_file_is_noticed_even_inside_a_form():
     pdf = pikepdf.new()
     page = pdf.add_blank_page(page_size=(100, 100))

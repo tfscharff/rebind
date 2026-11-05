@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass, field
 
 from .extract import TextLine
-from .tables import _table_row_groups
+from .tables import _table_row_groups, default_header_rows
 
 
 # Stands in for an element's id where something inserted after a picture is read first on its page,
@@ -236,11 +236,13 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
             "editable": True,
         })
         if entry["kind"] == "Table":
-            for row_index, (row_id, row) in enumerate(_table_row_groups(entry, lines)):
+            groups = _table_row_groups(entry, lines)
+            headers = default_header_rows([[lines[i] for i in row] for _row_id, row in groups])
+            for row_index, (row_id, row) in enumerate(groups):
                 row_lines = [lines[i] for i in row]
                 rbox = (min(ln.bbox[0] for ln in row_lines), min(ln.bbox[1] for ln in row_lines),
                         max(ln.bbox[2] for ln in row_lines), max(ln.bbox[3] for ln in row_lines))
-                default_kind = "TH" if row_index == 0 else "TD"
+                default_kind = "TH" if row_index in headers else "TD"
                 out.append({
                     "id": row_id,
                     "_order": order_of[entry["id"]],

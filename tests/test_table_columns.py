@@ -52,6 +52,37 @@ def test_a_heading_broken_into_two_runs_is_not_two_columns():
     assert len(_column_bands(boxes)) == 1
 
 
+def _row(*cells, y=0.0):
+    from rebind.extract import TextLine
+
+    return [TextLine(text=text, page=1, bbox=(x0, y, x1, y + 10.0), font="F", size=10.0,
+                     bold=False, italic=False) for text, x0, x1 in cells]
+
+
+def test_a_row_of_group_labels_makes_the_next_row_a_header_too():
+    from rebind.tables import _layout, default_header_rows
+
+    rows = [_row(("Sleep latency", 50, 96), ("Sleep difficulty", 200, 250), y=60),
+            _row(("Scores", 50, 80), ("Frequency", 100, 140), ("Percent", 150, 180),
+                 ("Scores", 200, 230), ("Frequency", 250, 290), ("Percent", 300, 330), y=40),
+            _row(("0", 50, 55), ("141", 100, 112), ("27", 150, 158),
+                 ("0", 200, 205), ("28", 250, 258), ("5", 300, 305), y=20),
+            _row(("1", 50, 55), ("195", 100, 112), ("37", 150, 158),
+                 ("1", 200, 205), ("379", 250, 262), ("72", 300, 308), y=0)]
+    assert default_header_rows(rows) == {0, 1}
+    _columns, _placed, groups = _layout(rows)
+    assert [(first, last) for first, last, _held in groups] == [(0, 2), (3, 5)]
+
+
+def test_an_ordinary_table_has_one_header_row():
+    from rebind.tables import default_header_rows
+
+    rows = [_row(("Name", 50, 90), ("Count", 100, 140), ("Share", 150, 190), y=40),
+            _row(("Apples", 50, 85), ("12", 100, 110), ("40", 150, 160), y=20),
+            _row(("Pears", 50, 80), ("18", 100, 110), ("60", 150, 160), y=0)]
+    assert default_header_rows(rows) == {0}
+
+
 def test_a_missing_value_leaves_a_gap_rather_than_shifting_the_row():
     bands = [(50.0, 90.0), (100.0, 140.0), (150.0, 190.0)]
     assert _row_cells([_box(50, 90), _box(150, 190)], bands) == [(0, 0, [0]), (2, 2, [1])]
