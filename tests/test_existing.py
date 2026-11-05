@@ -21,10 +21,10 @@ from rebind.extract import Page, TextLine, extract_pages
 from rebind.figures import _vector_figures
 from rebind.layout import _band_under_columns
 from rebind.overlay import (
-    _encode_winansi,
     _has_marked_content,
     _has_unembedded_font,
     _has_unmappable_glyphs,
+    _overlay_text,
 )
 from rebind.plan import _follow_anchors
 from rebind.remediate import remediate
@@ -296,7 +296,7 @@ def test_marked_content_without_an_id_is_not_tagged_content(tmp_path):
 
 
 def test_a_ligature_is_spelled_out_in_the_invisible_text():
-    assert _encode_winansi("efﬁcient ﬂow") == b"efficient flow"
+    assert _overlay_text("efﬁcient ﬂow") == "efficient flow"
 
 
 def test_a_font_left_out_of_the_file_is_noticed_even_inside_a_form():

@@ -9,7 +9,7 @@ import pypdfium2 as pdfium
 import pytest
 
 from rebind.edits import EDITABLE_TAGS
-from rebind.overlay import _encode_winansi
+from rebind.overlay import _overlay_text
 from rebind.remediate import remediate
 from tests.fixtures import born_digital_pdf, pdf_image_only_scan
 
@@ -996,8 +996,40 @@ def test_control_characters_become_spaces_not_invalid_glyphs():
     # instances). WinAnsiEncoding's own glyph table assigns no name to any C0 control character
     # (PDF spec Annex D), so drawing one as a literal glyph always encodes to Unicode 0 regardless
     # of the encoding used -- fails PDF/UA-2 8.4.5.8/.9. A tab is whitespace; encode it as one.
-    assert _encode_winansi("II.\tImaging") == b"II. Imaging"
-    assert _encode_winansi("a\nb\rc") == b"a b c"
+    assert _overlay_text("II.\tImaging") == "II. Imaging"
+    assert _overlay_text("a\nb\rc") == "a b c"
+
+
+def test_characters_outside_windows_1252_survive_in_the_text_layer(tmp_path: Path,
+                                                                   verapdf_exe: Path):
+    # The layer was Helvetica in WinAnsi, and every Greek letter, arrow and minus sign became "?".
+    from rebind.validate import validate_pdf_ua
+
+    import io
+
+    from rebind.extract import TextLine
+    from rebind.overlay import OverlayFont, _draw_line
+
+    words = "ΔG = −32 kJ, α → β, H₂O ⇌ H⁺ + OH⁻"
+    # The layer on its own, on an empty page, so the page's own visible text cannot answer for it.
+    pdf = pikepdf.new()
+    page = pdf.add_blank_page(page_size=(400, 100))
+    font = OverlayFont(pdf)
+    stream = io.BytesIO()
+    _draw_line(stream, TextLine(text=words, page=1, bbox=(20, 40, 380, 52), font="F", size=12,
+                                bold=False, italic=False), font)
+    page.obj.Contents = pdf.make_stream(stream.getvalue())
+    page.obj.Resources = pikepdf.Dictionary(Font=pikepdf.Dictionary(RebindF=font.font))
+    font.finish()
+    alone = tmp_path / "layer.pdf"
+    pdf.save(alone)
+    assert _selectable_text(alone).strip() == words
+
+    source = born_digital_pdf(f"<p>{words}.</p>", tmp_path / "in.pdf")
+    out = tmp_path / "out.pdf"
+    remediate(source, out, title="T")
+    result = validate_pdf_ua(out, verapdf_exe=verapdf_exe)
+    assert result.compliant, result.summary()
 
 
 def test_scanned_page_gets_an_invisible_text_layer(tmp_path: Path):

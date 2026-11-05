@@ -30,7 +30,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pikepdf
-from pikepdf import Dictionary, Name
+from pikepdf import Name
 
 from . import contrast, formula_reader, layout_model, recolor, review
 from .captions import _caption_groups, _document_captions
@@ -68,6 +68,7 @@ from .headings import _structure_roles
 from .layout import order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
 from .overlay import (
+    OverlayFont,
     _add_font,
     _add_xobject,
     _crop_data_uri,
@@ -420,7 +421,8 @@ def _page_records(source: Path, src_page, lines: list[TextLine], content_lines: 
 
 def _draw_figures(pdf: pikepdf.Pdf, page_image, src_page, lines: list[TextLine],
                   mcids: list[int | None], figs: PageFigures, owner_figure: dict[int, int],
-                  first_mcid: int, read_before: dict[str, int]) -> tuple[bytes, dict, list[tuple]]:
+                  first_mcid: int, read_before: dict[str, int],
+                  font: OverlayFont) -> tuple[bytes, dict, list[tuple]]:
     """Draw each described figure (a crop of the rendered region) inside a tagged /Figure,
     together with any text that belongs to it, all under the figure's single MCID. `read_before`
     is the content a person inserted straight after a figure, which settles where it is read.
@@ -440,7 +442,7 @@ def _draw_figures(pdf: pikepdf.Pdf, page_image, src_page, lines: list[TextLine],
                      f"{x0:.2f} {y0:.2f} cm /Fig{k} Do Q\n".encode())
         for line in lines:
             if owner_figure.get(id(line)) == k:
-                _draw_line(stream, line, "RebindF")
+                _draw_line(stream, line, font)
         stream.write(b"EMC\n")
         specs.append((mcid, figs.alt[fid], bbox,
                       read_before[fid] if fid in read_before
@@ -556,8 +558,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             pdf.save(render_source)
 
     tree = StructTree(pdf, len(source_pages))
-    font = pdf.make_indirect(Dictionary(
-        Type=Name.Font, Subtype=Name.Type1, BaseFont=Name.Helvetica, Encoding=Name.WinAnsiEncoding))
+    font = OverlayFont(pdf)
     undescribed_figures: list[dict] = []
     page_elements: list[dict] = []
     page_images: dict[int, bytes] = {}
@@ -634,8 +635,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
 
         figure_stream, extra_xobjects, figure_specs = _draw_figures(
             pdf, page_image, src_page, lines, mcids, figs, sort.owner_figure, next_mcid,
-            read_before)
-        overlay = _tagged_text_stream(lines, "RebindF", mcids, drawn_pieces) + figure_stream
+            read_before, font)
+        overlay = _tagged_text_stream(lines, font, mcids, drawn_pieces) + figure_stream
         if rebuild:
             _rebuild_page(pdf, page, page_image, overlay, extra_xobjects, font,
                           src_page.width, src_page.height)
@@ -645,7 +646,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             _strip_invisible_text(pdf, page)
             page.contents_add(pdf.make_stream(b"/Artifact BMC\n"), prepend=True)
             page.contents_add(pdf.make_stream(b"EMC\n" + overlay), prepend=False)
-            _add_font(pdf, page, font, "RebindF")
+            _add_font(pdf, page, font)
             for name, obj in extra_xobjects.items():
                 _add_xobject(pdf, page, obj, name)
         page.obj.StructParents = struct_parent
@@ -668,6 +669,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                 "thumb": _crop_data_uri(page_image, bbox, src_page.width, src_page.height)})
 
     tree.finish()
+    font.finish()
     _set_metadata(pdf, title=title, lang=lang)
     pdf.save(target, min_version="2.0")   # PDF/UA-2 requires a PDF 2.0 base (ISO 32000-2)
     pdf.close()

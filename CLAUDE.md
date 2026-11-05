@@ -186,10 +186,11 @@ ebind.iss`.
   wrong value (`http://iso.org/pdf/ssn`, no "2") produces an error message that ambiguously echoes
   back whatever you set, easy to misread as confirmation. Get this wrong and every structure
   element silently fails clause 8.2.5.2. See ADR 0006.
-- **The invisible overlay text must be encoded `cp1252`, not Python's UTF-8 default** — the font
-  declares `/WinAnsiEncoding`; a mismatch silently corrupts any non-ASCII character. C0 control
-  characters (a literal tab in extracted text is real, not hypothetical) have no WinAnsi glyph name
-  at all and must be normalized to spaces first. Both handled in `_encode_winansi`.
+- **The invisible overlay font is `overlay.OverlayFont`**: Type0, Identity-H, two bytes per
+  character, a ToUnicode map written once the document is drawn (`finish`), and no font program
+  (rendering mode 3 is exempt from embedding). It replaced Helvetica/WinAnsi, which turned every
+  Greek letter, arrow and minus sign into `?`. C0 control characters become spaces and ligatures are
+  spelled out (`_overlay_text`): a control character maps to nothing a checker accepts.
 - **A source PDF's own internal navigation (outline, Link annotations with a GoTo/Dest) fails
   PDF/UA-2 clause 8.8** unless it uses structure destinations, which nothing before PDF 2.0 could
   produce. `_strip_legacy_destinations` drops it rather than ship a false PDF/UA-2 claim — real

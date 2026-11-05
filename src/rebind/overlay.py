@@ -6,15 +6,14 @@ import io
 from pathlib import Path
 
 import pikepdf
-from pdfminer.fontmetrics import FONT_METRICS
-from pikepdf import Dictionary, Name
+from pikepdf import Array, Dictionary, Name, String
 
 from .extract import TextLine
 
-# Helvetica's own metrics, since that is what the invisible layer is drawn in: per 1000 of size.
-HELVETICA_WIDTHS: dict[str, int] = FONT_METRICS["Helvetica"][1]
-HELVETICA_DEFAULT_WIDTH = 556
-HELVETICA_DESCENT = 0.207
+# The invisible font's metrics, per 1000 of its size: every character the same width, and a descent
+# under the baseline. Neither is ever seen; they place the text over the print (`_text_placement`).
+OVERLAY_WIDTH = 500
+OVERLAY_DESCENT = 200
 # A typesetter's ligature is two or three letters drawn as one glyph. WinAnsi has none of them, and
 # replaced with '?' a screen reader said "ef?cient" on any page set in a font that uses them.
 LIGATURES = str.maketrans({"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi",
@@ -67,60 +66,99 @@ def _figure_xobject(pdf: pikepdf.Pdf, page_image, bbox, page_width, page_height)
     return image_obj
 
 
-def _escape(text: str) -> str:
-    return text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+def _overlay_text(text: str) -> str:
+    """Text as the invisible layer draws it.
 
-
-def _encode_winansi(text: str) -> bytes:
-    """Encode text for the invisible overlay font (Type1 Helvetica, /Encoding /WinAnsiEncoding).
-
-    The overlay font's declared encoding is WinAnsi (cp1252), so the string bytes must be cp1252,
-    not the Python default of UTF-8 -- encoding non-ASCII text (accents, curly quotes, ligatures,
-    all routine in real scanned/academic text) as UTF-8 into a WinAnsi string silently corrupts it:
-    each UTF-8 byte is reinterpreted as its own WinAnsi codepoint, and some land on one of cp1252's
-    five undefined byte values (0x81/0x8D/0x8F/0x90/0x9D) -- an invalid Unicode mapping that fails
-    PDF/UA-2 8.4.5.8/8.4.5.9. A character with no cp1252 representation at all (Greek, CJK, ...) is
-    replaced with '?' -- a real loss for that one character, but confined to the invisible text
-    layer, and an honest substitution beats a silently wrong glyph.
-
-    C0 control characters (0x00-0x1F: tab, newline, ...) get the same treatment even though most
-    have a defined *codepoint* -- WinAnsiEncoding's own glyph table (PDF spec Annex D) assigns no
-    glyph name to any of them, so they encode to Unicode 0 regardless, the same failure. A real
-    born-digital source's own extracted text can carry a literal tab used for visual alignment
-    (confirmed on a real sample: a document with "II.\tImaging..."-style headings, 52 instances of
-    exactly this) -- replaced with a space, which is what the tab visually was anyway.
+    C0 control characters (tab, newline, ...) become spaces: a real born-digital source carried a
+    literal tab used for visual alignment ("II.\tImaging...", 52 instances), and a control
+    character is no character to read -- it maps to nothing a checker accepts (8.4.5.8). A
+    typesetter's ligature is spelled out, so a reader meets "efficient", not one glyph for "fi".
     """
-    text = "".join(" " if ord(ch) < 0x20 else ch for ch in text).translate(LIGATURES)
-    return text.encode("cp1252", errors="replace")
+    return "".join(" " if ord(ch) < 0x20 else ch for ch in text).translate(LIGATURES)
+
+
+class OverlayFont:
+    """The font the invisible text layer is drawn in: one code per character the document uses,
+    and a ToUnicode map from each code to its character, so any character survives.
+
+    It used to be Helvetica in WinAnsi, which holds about 220 characters. Everything else -- Greek
+    letters, arrows, the minus sign, every subscript digit -- became "?", which is what a screen
+    reader then read out of a chemistry paper. A font drawn in rendering mode 3 is never rendered,
+    so it needs no font program: only a width (`OVERLAY_WIDTH`, the same for every code, which
+    `_text_placement` scales to the print) and the map. `finish` writes the map once the whole
+    document has been drawn.
+    """
+
+    name = "RebindF"
+
+    def __init__(self, pdf: pikepdf.Pdf):
+        self._codes: dict[str, int] = {}
+        descriptor = pdf.make_indirect(Dictionary(
+            Type=Name.FontDescriptor, FontName=Name.RebindUnicode, Flags=4,
+            FontBBox=Array([0, -OVERLAY_DESCENT, 1000, 1000 - OVERLAY_DESCENT]), ItalicAngle=0,
+            Ascent=1000 - OVERLAY_DESCENT, Descent=-OVERLAY_DESCENT, CapHeight=700, StemV=80))
+        glyphs = pdf.make_indirect(Dictionary(
+            Type=Name.Font, Subtype=Name.CIDFontType2, BaseFont=Name.RebindUnicode,
+            CIDSystemInfo=Dictionary(Registry=String("Adobe"), Ordering=String("Identity"),
+                                     Supplement=0),
+            FontDescriptor=descriptor, DW=OVERLAY_WIDTH))
+        self.font = pdf.make_indirect(Dictionary(
+            Type=Name.Font, Subtype=Name.Type0, BaseFont=Name.RebindUnicode,
+            Encoding=Name("/Identity-H"), DescendantFonts=Array([glyphs])))
+        self._pdf = pdf
+
+    def encode(self, text: str) -> bytes:
+        """`text` as a hex string operand: two bytes per character."""
+        codes = []
+        for ch in _overlay_text(text):
+            if ch not in self._codes:
+                self._codes[ch] = len(self._codes) + 1      # code 0 is left unused
+            codes.append(self._codes[ch])
+        return b"<" + "".join(f"{code:04X}" for code in codes).encode("ascii") + b">"
+
+    def finish(self) -> None:
+        entries = sorted((code, ch) for ch, code in self._codes.items())
+        chunks = [entries[k:k + 100] for k in range(0, len(entries), 100)]
+        cmap = ["/CIDInit /ProcSet findresource begin", "12 dict begin", "begincmap",
+                "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def",
+                "/CMapName /Adobe-Identity-UCS def", "/CMapType 2 def",
+                "1 begincodespacerange", "<0000> <FFFF>", "endcodespacerange"]
+        for chunk in chunks:
+            cmap.append(f"{len(chunk)} beginbfchar")
+            cmap.extend(f"<{code:04X}> <{ch.encode('utf-16-be').hex().upper()}>"
+                        for code, ch in chunk)
+            cmap.append("endbfchar")
+        cmap += ["endcmap", "CMapName currentdict /CMap defineresource pop", "end", "end"]
+        self.font.ToUnicode = self._pdf.make_stream("\n".join(cmap).encode("ascii"))
 
 
 def _text_placement(line: TextLine) -> bytes:
     """Set the text matrix and horizontal scale so the invisible line covers its printed one.
 
-    Drawn at its own natural width, Helvetica at the line's full box height runs well past the
-    print: selecting it highlights the wrong place, and a two-column page read back from it has
-    lines crossing the gutter. The baseline is lifted by the font's descent so its box sits there.
+    Drawn at its own natural width, the text at the line's full box height runs well past the print
+    or falls short of it: selecting it highlights the wrong place, and a two-column page read back
+    from it has lines crossing the gutter. The baseline is lifted by the font's descent so its box
+    sits where the printed line's does.
     """
     x0, y0, x1, y1 = line.bbox
     size = max(y1 - y0, 1.0)
-    natural = sum(HELVETICA_WIDTHS.get(ch, HELVETICA_DEFAULT_WIDTH)
-                  for ch in _encode_winansi(line.text).decode("cp1252", errors="replace"))
+    natural = len(_overlay_text(line.text)) * OVERLAY_WIDTH
     scale = 100.0
     if natural > 0 and x1 > x0:
         scale = min(max(100.0 * (x1 - x0) / (natural * size / 1000.0), 1.0), 1000.0)
-    return (f"{size:.2f} 0 0 {size:.2f} {x0:.2f} {y0 + HELVETICA_DESCENT * size:.2f} Tm "
+    return (f"{size:.2f} 0 0 {size:.2f} {x0:.2f} {y0 + OVERLAY_DESCENT / 1000 * size:.2f} Tm "
             f"{scale:.2f} Tz ").encode("ascii")
 
 
-def _draw_line(out: io.BytesIO, line: TextLine, font_name: str) -> None:
+def _draw_line(out: io.BytesIO, line: TextLine, font: OverlayFont) -> None:
     """The invisible (render mode 3) text for one line, with no marked-content wrapper of its own."""
-    out.write(b"q BT 3 Tr /" + font_name.encode("ascii") + b" 1 Tf\n")
-    out.write(_text_placement(line) + b"(")
-    out.write(_encode_winansi(_escape(line.text)))
-    out.write(b") Tj\nET Q\n")
+    out.write(b"q BT 3 Tr /" + font.name.encode("ascii") + b" 1 Tf\n")
+    out.write(_text_placement(line))
+    out.write(font.encode(line.text))
+    out.write(b" Tj\nET Q\n")
 
 
-def _tagged_text_stream(lines: list[TextLine], font_name: str, mcids: list[int | None],
+def _tagged_text_stream(lines: list[TextLine], font: OverlayFont, mcids: list[int | None],
                         pieces: dict[int, list] | None = None) -> bytes:
     """Invisible text (render mode 3), one marked-content sequence per line.
 
@@ -137,11 +175,11 @@ def _tagged_text_stream(lines: list[TextLine], font_name: str, mcids: list[int |
     out = io.BytesIO()
     for index, (line, mcid) in enumerate(zip(lines, mcids)):
         if pieces and index in pieces:
-            _draw_pieces(out, line, font_name, pieces[index])
+            _draw_pieces(out, line, font, pieces[index])
             continue
         out.write(b"/Artifact BMC\n" if mcid is None
                   else f"/P <</MCID {mcid}>> BDC\n".encode("ascii"))
-        _draw_line(out, line, font_name)
+        _draw_line(out, line, font)
         out.write(b"EMC\n")
     return out.getvalue()
 
@@ -164,23 +202,24 @@ def _pieces(line: TextLine) -> list[tuple[int, int, float]]:
     return out
 
 
-def _draw_pieces(out: io.BytesIO, line: TextLine, font_name: str,
+def _draw_pieces(out: io.BytesIO, line: TextLine, font: OverlayFont,
                  pieces: list[tuple[int, int, int, float]]) -> None:
     """A line drawn piece by piece, each `(mcid, start, end, shift)` its own marked content, so a
     superscript or subscript can be its own element in the structure tree. Each is drawn raised or
     lowered by its own shift (text rise), as it is printed."""
     size = max(line.bbox[3] - line.bbox[1], 1.0)
-    out.write(b"q BT 3 Tr /" + font_name.encode("ascii") + b" 1 Tf\n")
+    out.write(b"q BT 3 Tr /" + font.name.encode("ascii") + b" 1 Tf\n")
     out.write(_text_placement(line) + b"\n")
     for mcid, start, end, shift in pieces:
         tag = "Span" if shift else "P"
-        out.write(f"/{tag} <</MCID {mcid}>> BDC {shift / size:.3f} Ts (".encode("ascii"))
-        out.write(_encode_winansi(_escape(line.text[start:end])))
-        out.write(b") Tj EMC\n")
+        out.write(f"/{tag} <</MCID {mcid}>> BDC {shift / size:.3f} Ts ".encode("ascii"))
+        out.write(font.encode(line.text[start:end]))
+        out.write(b" Tj EMC\n")
     out.write(b"ET Q\n")
 
 
-def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, font: pikepdf.Object, name: str) -> None:
+def _add_font(pdf: pikepdf.Pdf, page: pikepdf.Page, overlay_font: OverlayFont) -> None:
+    font, name = overlay_font.font, overlay_font.name
     resources = page.obj.get("/Resources")
     if resources is None:
         resources = pdf.make_indirect(Dictionary())
@@ -387,7 +426,7 @@ def _add_xobject(pdf: pikepdf.Pdf, page: pikepdf.Page, xobject: pikepdf.Object, 
 
 
 def _rebuild_page(pdf: pikepdf.Pdf, page: pikepdf.Page, page_image, overlay: bytes,
-                  extra_xobjects: dict, font: pikepdf.Object,
+                  extra_xobjects: dict, font: OverlayFont,
                   width_pt: float, height_pt: float) -> None:
     """Replace the page's content with the rendered page image (artifact) + the tagged overlay --
     a clean slate that discards any pre-existing marked content while looking identical."""
@@ -412,4 +451,4 @@ def _rebuild_page(pdf: pikepdf.Pdf, page: pikepdf.Page, page_image, overlay: byt
     xobjects = Dictionary(Im0=image_obj)
     for name, obj in extra_xobjects.items():
         xobjects[Name("/" + name)] = obj
-    page.obj.Resources = Dictionary(XObject=xobjects, Font=Dictionary(RebindF=font))
+    page.obj.Resources = Dictionary(XObject=xobjects, Font=Dictionary(RebindF=font.font))
