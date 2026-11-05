@@ -306,7 +306,6 @@ def repair_fonts(pdf, source: Path) -> int:
 
     Only the map is written; the font's glyphs and the page's drawing are untouched. Returns how
     many fonts were repaired."""
-    import pikepdf
 
     found = _analyse(source)
     if not found:
