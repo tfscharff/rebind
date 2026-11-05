@@ -66,6 +66,14 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
   and they beat a caption). `original_of` takes Rebind's own layer back off a file Rebind wrote, so
   re-uploading a result does not double every word; the copy lives in the temp dir under a name
   from the file's identity, so rebuilds keep their page caches.
+- `glyphs.py` — fonts that misreport their own glyphs (a journal's plus sign labelled "þ", its
+  Greek labelled as Latin letters). Every glyph a simple embedded font draws is rendered and
+  compared with the character it claims, drawn in bundled DejaVu (`data/fonts/`); a font whose
+  glyphs mostly do not look like their claims is lying. In a lying font a glyph keeps an honest
+  claim, takes a character only on an unmistakable match (`IDENTIFIED`, `IDENTIFIED_MARGIN`), and
+  is otherwise U+FFFD -- never a guess (arrows were not separable from their reverses). Applied in
+  `extract._raw_line`; `repair_fonts` writes the same answers into the font's ToUnicode so the page
+  stays vector. The checklist's "Unreadable symbols" lists the pages with U+FFFD in them.
 - A picture's frame is its box (`remediate._framed_pictures`), not a claim on lines; `after` can name
   a picture, resolved to the element the picture is read after (`_read_after_pictures`).
 - `validate.py` — runs veraPDF and parses its report. `ui.py` — the inline browser app.

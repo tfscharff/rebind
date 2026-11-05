@@ -48,6 +48,10 @@ if not ensure_weights():
     raise SystemExit("the models could not all be fetched into models/ -- see above")
 for _name in WEIGHTS:
     datas.append((str(model_dir() / _name), os.path.dirname(os.path.join("models", _name))))
+# The reference typefaces `rebind.glyphs` compares a font's glyphs against, beside the module.
+_FONTS = os.path.join(os.path.dirname(os.path.abspath(SPEC)), "..", "src", "rebind", "data", "fonts")
+for _font in sorted(os.listdir(_FONTS)):
+    datas.append((os.path.join(_FONTS, _font), os.path.join("rebind", "data", "fonts")))
 
 _EXCLUDES = [
     "weasyprint", "pydyf", "cssselect2", "tinycss2", "cairocffi", "cairosvg", "pyphen",

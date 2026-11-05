@@ -18,6 +18,7 @@ Four verdicts:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -311,6 +312,18 @@ def _page_content_checks(pdf: pikepdf.Pdf, tree: _Tree) -> list[Check]:
                                                   "cannot be repaired from outside it. Re-export "
                                                   "the original with fonts embedded properly."))
 
+    unknown = _pages_with_unknown_symbols(pdf)
+    out.append(Check(PAGE_CONTENT, "Unreadable symbols", PASS if not unknown else NEEDS_YOU,
+                     "Every character read out is one the document's fonts could vouch for."
+                     if not unknown else
+                     f"On {len(unknown)} pages, fonts label their symbols as other characters (a "
+                     "plus sign as 'þ', an arrow as '/'). Rebind read what it could from their "
+                     "shapes and marked the rest unknown rather than guess.",
+                     need="" if not unknown else "Give each formula on these pages a description, "
+                                                 "so a screen reader can say what the symbols are.",
+                     action="" if not unknown else "goto",
+                     locations=tuple({"page": p} for p in unknown)))
+
     for title, subtypes in (("Tagged multimedia", ("/Movie", "/Screen", "/Sound", "/RichMedia")),):
         present = [a for a in _annotations(pdf) if str(a.get("/Subtype")) in subtypes]
         out.append(Check(PAGE_CONTENT, title,
@@ -345,6 +358,31 @@ def _page_content_checks(pdf: pikepdf.Pdf, tree: _Tree) -> list[Check]:
                          f"All {len(links)} links are tagged and lead somewhere a reader can "
                          "follow."))
     return out
+
+
+def _pages_with_unknown_symbols(pdf: pikepdf.Pdf) -> list[int]:
+    """The pages whose invisible text has a character Rebind marked unknown (U+FFFD,
+    `glyphs.UNKNOWN`): a glyph whose font misreports it and whose shape did not settle it."""
+    pages: list[int] = []
+    for number, page in enumerate(pdf.pages, start=1):
+        font = ((page.obj.get("/Resources") or pikepdf.Dictionary()).get("/Font")
+                or pikepdf.Dictionary()).get("/RebindF")
+        if font is None or "/ToUnicode" not in font:
+            continue
+        found = re.search(rb"<([0-9A-F]{4})> <FFFD>", font.ToUnicode.read_bytes())
+        if found is None:
+            continue
+        code = bytes.fromhex(found.group(1).decode())
+        try:
+            for ins in pikepdf.parse_content_stream(page):
+                if str(ins.operator) == "Tj" and ins.operands:
+                    drawn = bytes(ins.operands[0])
+                    if any(drawn[k:k + 2] == code for k in range(0, len(drawn), 2)):
+                        pages.append(number)
+                        break
+        except Exception:  # noqa: BLE001 -- an unreadable page is reported by other checks
+            continue
+    return pages
 
 
 def _number_tree_values(node) -> list:

@@ -30,6 +30,8 @@ from pdfminer.layout import (
 from pdfminer.pdfdocument import PDFEncryptionError
 from pdfminer.pdfparser import PDFSyntaxError
 
+from .glyphs import corrections as glyph_corrections
+
 
 class ExtractionError(RuntimeError):
     """The source PDF cannot be read at all -- missing, malformed, or encrypted."""
@@ -196,12 +198,15 @@ class _Raw:
     turn: int = 0
 
 
-def _raw_line(container) -> _Raw | None:
+def _raw_line(container, corrected: dict | None = None) -> _Raw | None:
+    """`corrected` is what to read instead of a glyph its font misreports (`glyphs.corrections`),
+    by (font name, claimed text)."""
     text = ""
     chars: list[tuple[int, int, LTChar]] = []
     for obj in container:
         piece = obj.get_text()
         if isinstance(obj, LTChar):
+            piece = (corrected or {}).get((obj.fontname, piece), piece)
             chars.append((len(text), len(text) + len(piece), obj))
         text += piece
     lead = len(text) - len(text.lstrip())
@@ -406,7 +411,7 @@ def _join_rotated(lines: list[TextLine], turns: dict[int, int]) -> list[TextLine
 
 def _collect_figure(
     figure: LTFigure, page_number: int, lines: list[_Raw], images: list[ImageRegion],
-    drawings: list[ImageRegion],
+    drawings: list[ImageRegion], corrected: dict | None = None,
 ) -> tuple[bool, bool]:
     """Recurse into a Form XObject, contributing its text lines and embedded images separately.
 
@@ -433,7 +438,7 @@ def _collect_figure(
     for child in figure:
         if isinstance(child, LTTextContainer):
             for container in _text_lines(child):
-                line = _raw_line(container)
+                line = _raw_line(container, corrected)
                 if line is not None:
                     lines.append(line)
                     found_text = True
@@ -444,7 +449,7 @@ def _collect_figure(
             found_image = True
         elif isinstance(child, LTFigure):
             nested_text, nested_image = _collect_figure(
-                child, page_number, lines, images, drawings)
+                child, page_number, lines, images, drawings, corrected)
             found_text = found_text or nested_text
             found_image = found_image or nested_image
         elif isinstance(child, LTCurve):
@@ -471,6 +476,10 @@ def extract_pages(source: Path) -> Iterator[Page]:
         # cannot turn into `TextLine`s, and real text is misreported as an unrecoverable image
         # region -- a false provenance claim this project's invariants forbid.
         layouts = _pdfminer_pages(str(source), laparams=LAParams(all_texts=True))
+        try:
+            corrected = glyph_corrections(source)
+        except Exception:  # noqa: BLE001 -- a check of the fonts failing must not stop the reading:
+            corrected = {}  # an encrypted file, say, is reported below by pdfminer as it always was
         for index, layout in enumerate(layouts, start=1):
             raws: list[_Raw] = []
             images: list[ImageRegion] = []
@@ -478,11 +487,11 @@ def extract_pages(source: Path) -> Iterator[Page]:
             for element in layout:
                 if isinstance(element, LTTextContainer):
                     for container in _text_lines(element):
-                        line = _raw_line(container)
+                        line = _raw_line(container, corrected)
                         if line is not None:
                             raws.append(line)
                 elif isinstance(element, LTFigure):
-                    _collect_figure(element, index, raws, images, drawings)
+                    _collect_figure(element, index, raws, images, drawings, corrected)
                 elif isinstance(element, LTImage):
                     images.append(
                         ImageRegion(

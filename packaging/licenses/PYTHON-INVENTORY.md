@@ -49,4 +49,5 @@ Covers the 35 runtime Python distributions frozen into the bundle, plus the bund
 | PP-OCRv4 detection / recognition / classification models (PaddleOCR) | Apache-2.0 | shipped inside rapidocr_onnxruntime/models/*.onnx |
 | PP-DocLayoutV3 page-layout model (PaddleOCR, ONNX export by RapidAI/RapidLayout) | Apache-2.0 | models/pp_doc_layoutv3.onnx |
 | LaTeX-OCR (pix2tex) equation reader, Copyright (c) 2021 Lukas Blecher; ONNX export and the inference code adapted in rebind/formula_reader.py, Copyright (c) 2023 RapidAI | MIT | models/latex_ocr/*; texts in LICENSE-LaTeX-OCR.txt and LICENSE-RapidLaTeXOCR.txt |
+| DejaVu Sans, DejaVu Serif and DejaVu Serif Italic typefaces (reference glyphs for rebind/glyphs.py), (c) Bitstream; DejaVu changes public domain | Bitstream-Vera | rebind/data/fonts/*.ttf; text in LICENSE-DejaVu.txt |
 

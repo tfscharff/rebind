@@ -323,6 +323,14 @@ it joins that row (and the table); shrink a row and the cells it lets go leave t
 frame is its box: reshape it when Rebind's guess is off, and exactly the labels inside it are read
 as part of the picture.
 
+**Symbols a font misreports.** Some journals set their plus signs, arrows and Greek letters in
+fonts that label those glyphs as ordinary letters, so the file says "þ" where the page shows "+".
+Rebind compares each glyph's shape with the character its font claims, and in a font that is
+mostly wrong about itself it reads a symbol only when the shape leaves no doubt. Every other glyph
+is read as unknown (U+FFFD) rather than guessed. The report lists the pages this happened on:
+describing the formulas there is what makes them readable. The font's map is repaired too, so
+the page itself stays as it was.
+
 **Coming back to a document.** A description already in an uploaded PDF's tags is kept and shown,
 whether it was written in Rebind or in another tool; what you type replaces it. Uploading a file
 Rebind wrote reads it as the document it was before, not with its text doubled. So far only

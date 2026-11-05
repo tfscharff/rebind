@@ -53,6 +53,7 @@ from .existing import (
     original_of,
 )
 from .extract import TextLine, extract_pages
+from .glyphs import repair_fonts
 from .figures import (
     PageFigures,
     _figure_anchor,
@@ -535,6 +536,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     _strip_legacy_destinations(pdf)
     if strip_scripts:
         _strip_scripts(pdf)
+    # A font that misreports its glyphs gets a map saying what they are (`glyphs`), so its page can
+    # stay as it is rather than be redrawn from a picture to get rid of glyphs with no character.
+    repair_fonts(pdf, source)
 
     # Contrast is measured first and corrected from that measurement -- each failing colour against
     # the paper actually sampled behind it, rather than against an assumed white page. A human eye

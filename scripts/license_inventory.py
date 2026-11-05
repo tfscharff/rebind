@@ -57,6 +57,9 @@ BUNDLED_MODELS: list[tuple[str, str, str]] = [
     ("LaTeX-OCR (pix2tex) equation reader, Copyright (c) 2021 Lukas Blecher; ONNX export and the "
      "inference code adapted in rebind/formula_reader.py, Copyright (c) 2023 RapidAI",
      "MIT", "models/latex_ocr/*; texts in LICENSE-LaTeX-OCR.txt and LICENSE-RapidLaTeXOCR.txt"),
+    ("DejaVu Sans, DejaVu Serif and DejaVu Serif Italic typefaces (reference glyphs for "
+     "rebind/glyphs.py), (c) Bitstream; DejaVu changes public domain",
+     "Bitstream-Vera", "rebind/data/fonts/*.ttf; text in LICENSE-DejaVu.txt"),
 ]
 
 
