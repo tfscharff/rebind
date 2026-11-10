@@ -8,7 +8,8 @@ Three terminals:
     uv run --with websockets python scripts/screenshots.py docs/img light \
         '{"editor-heading": "Heading 2, item", "editor-figure": "Figure"}'
 
-The last argument maps each picture's name to the start of the label of the element to select.
+The third argument maps each picture's name to the start of the label of the element to select.
+A fourth, optional, is the window's size, to see the page in a smaller one: `1500,845`.
 """
 
 from __future__ import annotations
@@ -91,11 +92,12 @@ async def capture(out: Path, scheme: str, shots: dict[str, str]) -> None:
 
 def main() -> None:
     out, scheme, shots = Path(sys.argv[1]), sys.argv[2], json.loads(sys.argv[3])
+    size = sys.argv[4] if len(sys.argv) > 4 else "1500,1130"
     out.mkdir(parents=True, exist_ok=True)
     profile = tempfile.mkdtemp(prefix="rebind-shot-")
     chrome = subprocess.Popen([
         CHROME, "--headless=new", f"--remote-debugging-port={DEBUG_PORT}",
-        f"--user-data-dir={profile}", "--window-size=1500,1130", "--hide-scrollbars",
+        f"--user-data-dir={profile}", f"--window-size={size}", "--hide-scrollbars",
         "--force-device-scale-factor=1.5", APP])
     try:
         asyncio.run(capture(out, scheme, shots))

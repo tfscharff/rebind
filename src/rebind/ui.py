@@ -137,11 +137,15 @@ body.wide .panel{margin-top:0}
   .col-report{display:none} }
 .col-report,.col-todo,.col-stage{min-height:0;height:100%;display:flex;flex-direction:column}
 .col-report>.panel{flex:1;min-height:0;overflow-y:auto}
-/* The right column stacks three blocks: why you are walking, what you have landed on, and what
-   you can press. Only the middle one grows, so the keys stay visible at the bottom. */
+/* The right column stacks what you have landed on, what you can press, and the way out. The first
+   takes the room to spare. In a short window it is the list of keys that gives way and scrolls,
+   not the element: its Insert and Delete buttons were pushed out of sight, and every key is a
+   press of ? away. Only once the keys are down to a few lines does the element scroll too. */
 .col-todo{gap:.6rem}
 .col-todo>.panel{flex:none}
-.col-todo>.typebar{flex:1;min-height:8rem;overflow-y:auto}
+.col-todo>.typebar{flex:1 1 auto;min-height:8rem;overflow-y:auto}
+.col-todo>.keys{flex:0 1000 auto;min-height:4.5rem;overflow-y:auto}
+.col-todo>.keys.folded{min-height:0}
 .walkhead{display:flex;align-items:baseline;justify-content:space-between;gap:.6rem;
   border-bottom:1px solid var(--line);padding-bottom:.35rem;margin-bottom:.5rem}
 .walkhead h2{margin:0;font-size:1rem}

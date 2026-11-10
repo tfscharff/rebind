@@ -1,0 +1,68 @@
+# Runs the checks on GitHub's own Windows machine on every push and pull request, so a change
+# that only works on one person's computer is caught. Windows because that is what Rebind ships on.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      # Without veraPDF every PDF/UA test would skip and the run would be green having checked
+      # nothing. This turns a missing veraPDF into a failure.
+      REBIND_REQUIRE_VERAPDF: "1"
+      REBIND_VERAPDF: C:\veraPDF\verapdf.bat
+      # WeasyPrint draws the made-up PDFs the tests read, and needs Pango to do it.
+      WEASYPRINT_DLL_DIRECTORIES: C:\msys64\mingw64\bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install veraPDF 1.30.2
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://software.verapdf.org/releases/1.30/verapdf-greenfield-1.30.2-installer.zip -OutFile verapdf.zip
+          Expand-Archive verapdf.zip -DestinationPath verapdf-installer
+          $jar = Get-ChildItem verapdf-installer -Recurse -Filter "verapdf-izpack-installer-*.jar" | Select-Object -First 1
+          java -jar $jar.FullName .github\verapdf\auto-install.xml
+          & C:\veraPDF\verapdf.bat --version
+
+      - name: Install Pango (for WeasyPrint, used only by the tests)
+        shell: pwsh
+        run: C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-pango
+
+      - name: Keep the downloaded models between runs
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: models-${{ hashFiles('src/rebind/weights.py') }}
+
+      - run: uv sync --all-extras
+
+      - run: uv run ruff check .
+
+      # The two deselected tests stand in for the app quitting itself; their watchdog threads
+      # outlive them and end the whole test run.
+      - run: >
+          uv run pytest -q
+          --deselect tests/test_app.py::test_a_reload_does_not_shut_the_server_down
+          --deselect tests/test_app.py::test_a_closed_last_tab_does_shut_the_server_down

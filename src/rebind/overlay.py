@@ -426,10 +426,15 @@ def _strip_invisible_text(pdf: pikepdf.Pdf, page: pikepdf.Page) -> bool:
     # Fonts nothing draws with any more go too -- leaving one behind would keep failing 8.4.5.8.
     used = {str(ins.operands[0]) for ins in out
             if str(getattr(ins, "operator", "")) == "Tf" and ins.operands}
-    fonts = (page.obj.get("/Resources") or Dictionary()).get("/Font")
-    if fonts is not None:
-        for key in [str(k) for k in fonts.keys() if str(k) not in used]:
-            del fonts[key]
+    # The page gets resources of its own first. Pages commonly share one dictionary, and taking a
+    # font out of that takes it from every page that shares it, their visible text included.
+    resources = page.obj.get("/Resources")
+    fonts = resources.get("/Font") if resources is not None else None
+    if fonts is not None and any(str(key) not in used for key in fonts.keys()):
+        own = Dictionary({str(key): value for key, value in resources.items()})
+        own["/Font"] = Dictionary({str(key): value for key, value in fonts.items()
+                                   if str(key) in used})
+        page.obj["/Resources"] = own
     return True
 
 

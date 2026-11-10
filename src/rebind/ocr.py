@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import re
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
 from .extract import Script, TextLine
+from .pagecache import file_key
 
 
 class OcrEngine:
@@ -56,21 +58,68 @@ class OcrEngine:
         return result or []
 
 
+# pdfium is not safe to call from two threads at once, whichever documents they hold.
+_render_lock = threading.RLock()
+# The document this thread is rendering from, while `rendering_kept_open` is in force.
+_kept = threading.local()
+
+
+def close_rendered() -> None:
+    """Close the document this thread has open for rendering, releasing its hold on the file.
+    Windows will not delete or replace a file that is open, so call this before doing either."""
+    held = getattr(_kept, "held", None)
+    _kept.held = None
+    if held is not None:
+        with _render_lock:
+            held[1].close()
+
+
+@contextmanager
+def rendering_kept_open():
+    """While this is in force, `render_page_to_image` leaves the file it last rendered from open,
+    so a run of pages from one document parses it once and not once a page. Outside it every call
+    opens and closes the file, and nothing is held."""
+    _kept.depth = getattr(_kept, "depth", 0) + 1
+    try:
+        yield
+    finally:
+        _kept.depth -= 1
+        if not _kept.depth:
+            close_rendered()
+
+
+def _render_document(source: Path):
+    """`(document, whether the caller must close it)`."""
+    import pypdfium2 as pdfium
+
+    key = file_key(source) if getattr(_kept, "depth", 0) else None
+    if key is None:
+        return pdfium.PdfDocument(str(source)), True
+    held = getattr(_kept, "held", None)
+    if held is None or held[0] != key:
+        close_rendered()
+        held = _kept.held = (key, pdfium.PdfDocument(str(source)))
+    return held[1], False
+
+
 def render_page_to_image(source: Path, page_number: int, *, dpi: int = 200) -> np.ndarray:
     """Rasterize one page (1-based) of `source` to an RGB array at `dpi`.
 
     A scanned page is not always a single extractable image stream (CCITT G4, JBIG2 and tiled
     strips are common), so the whole page is rendered rather than one image XObject pulled out.
     """
-    import pypdfium2 as pdfium
-
-    document = pdfium.PdfDocument(str(source))
-    try:
-        page = document[page_number - 1]
-        bitmap = page.render(scale=dpi / 72.0)
-        return np.asarray(bitmap.to_pil().convert("RGB"))
-    finally:
-        document.close()
+    with _render_lock:
+        document, ours = _render_document(source)
+        try:
+            page = document[page_number - 1]
+            try:
+                bitmap = page.render(scale=dpi / 72.0)
+                return np.asarray(bitmap.to_pil().convert("RGB"))
+            finally:
+                page.close()
+        finally:
+            if ours:
+                document.close()
 
 
 def recognize(

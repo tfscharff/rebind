@@ -1359,6 +1359,29 @@ def test_a_scans_own_invisible_ocr_layer_is_removed_and_visible_marks_are_kept()
     assert "/Shown" in fonts and "/Hidden" not in fonts, "the unusable font must go with its text"
 
 
+def test_stripping_one_pages_ocr_layer_leaves_the_fonts_another_page_draws_with():
+    # Pages often share one resource dictionary. Taking the unused fonts out of it in place took
+    # them from every page that shares it: a later page's visible text lost its font.
+    from rebind.overlay import _strip_invisible_text
+
+    pdf = pikepdf.new()
+    font = pdf.make_indirect(pikepdf.Dictionary(
+        Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Helvetica))
+    shared = pdf.make_indirect(pikepdf.Dictionary(
+        Font=pdf.make_indirect(pikepdf.Dictionary(Hidden=font, Shown=font))))
+    scan = pdf.add_blank_page(page_size=(200, 200))
+    scan.obj.Resources = shared
+    scan.obj.Contents = pdf.make_stream(b"BT 3 Tr /Hidden 12 Tf 20 100 Td (scanned) Tj ET")
+    typed = pdf.add_blank_page(page_size=(200, 200))
+    typed.obj.Resources = shared
+    typed.obj.Contents = pdf.make_stream(b"BT /Shown 12 Tf 20 100 Td (typed) Tj ET")
+
+    assert _strip_invisible_text(pdf, pikepdf.Page(scan.obj)) is True
+
+    assert "/Hidden" not in scan.obj.Resources.Font
+    assert "/Shown" in typed.obj.Resources.Font, "another page's font was taken away"
+
+
 def test_invisible_mode_restored_by_Q_does_not_delete_visible_text():
     # The text rendering mode is part of the graphics state, so `Q` restores it. A stripper that
     # tracked `Tr` but not `q`/`Q` would still believe the mode was 3 after the restore and delete

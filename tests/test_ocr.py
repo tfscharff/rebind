@@ -78,3 +78,28 @@ def test_pieces_of_a_row_with_nothing_small_are_left_apart():
     left = _Read((100, 100, 200, 130), "Cell one", 0.9, tight=(100, 100, 200, 130))
     right = _Read((215, 100, 320, 130), "Cell two", 0.9, tight=(215, 100, 320, 130))
     assert [read.text for read in _join_rows([left, right])] == ["Cell one", "Cell two"]
+
+
+def test_a_document_is_opened_once_for_a_run_of_pages_and_let_go_after(tmp_path, monkeypatch):
+    import pypdfium2 as pdfium
+
+    from rebind.ocr import close_rendered, rendering_kept_open
+
+    source = pdf_image_only_scan("<p>One line.</p>", tmp_path / "scan.pdf")
+    opened = []
+    real = pdfium.PdfDocument
+    monkeypatch.setattr(pdfium, "PdfDocument", lambda *a, **k: opened.append(a) or real(*a, **k))
+
+    with rendering_kept_open():
+        first = render_page_to_image(source, 1, dpi=50)
+        second = render_page_to_image(source, 1, dpi=50)
+        assert len(opened) == 1 and (first == second).all()
+        close_rendered()
+        source.replace(tmp_path / "moved.pdf")      # Windows refuses this while the file is open
+        (tmp_path / "moved.pdf").replace(source)
+        render_page_to_image(source, 1, dpi=50)
+    source.unlink()                                 # and nothing holds it once the run is over
+
+    again = pdf_image_only_scan("<p>One line.</p>", tmp_path / "scan.pdf")
+    render_page_to_image(again, 1, dpi=50)          # outside a run nothing is kept
+    again.unlink()

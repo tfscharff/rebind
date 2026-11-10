@@ -72,7 +72,13 @@ from .figures import (
 from .glyphs import repair_fonts, same_fonts
 from .headings import _structure_roles
 from .layout import order_page
-from .ocr import OcrEngine, recognize, render_page_to_image
+from .ocr import (
+    OcrEngine,
+    close_rendered,
+    recognize,
+    render_page_to_image,
+    rendering_kept_open,
+)
 from .overlay import (
     OverlayFont,
     _add_font,
@@ -536,9 +542,10 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     for corrected colours is removed: a failure used to leave both behind, the open file locked."""
     held: list = []
     try:
-        return _remediate(source, target, held, title=title, lang=lang, dpi=dpi,
-                          alt_texts=alt_texts, darken_contrast=darken_contrast,
-                          strip_scripts=strip_scripts, edits=edits)
+        with rendering_kept_open():
+            return _remediate(source, target, held, title=title, lang=lang, dpi=dpi,
+                              alt_texts=alt_texts, darken_contrast=darken_contrast,
+                              strip_scripts=strip_scripts, edits=edits)
     finally:
         for thing in held:
             try:
@@ -800,6 +807,7 @@ def _remediate(source: Path, target: Path, held: list, *, title: str | None, lan
     measured = contrast.measure(render_source, measured_pages, figures=figure_boxes,
                                 skip_pages=invisible_pages)
     if render_source != source:
+        close_rendered()        # the working copy is the file last rendered from
         render_source.unlink(missing_ok=True)
 
     return RemediationResult(
