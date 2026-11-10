@@ -124,14 +124,18 @@ class Edits:
 # what the entry points at -- and Rebind cannot know which heading a line of a contents list refers
 # to without guessing. So it is not offered: a table of contents that names the wrong targets is
 # worse than one tagged as ordinary paragraphs.
-CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "Formula", "Form",
-                "Note")
+CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Formula", "Note")
 # The containers (/Part, /Div, /Sect, /Art, /Index, /NonStruct) are not offered. Each groups other
 # elements and has no behaviour of its own: a screen reader announces it as nothing at all, and the
 # editor retags one element at a time, so all it could make was a container holding one paragraph,
 # which reads exactly as the paragraph. They were things to choose between for no gain to a
 # reader. One saved by an earlier version is read back as the paragraph it always sounded like.
-RETIRED_TAGS = {"Div": "P", "Sect": "P", "Art": "P", "Index": "P", "NonStruct": "P"}
+#
+# /Code and /Form went the same way. A screen reader reads code as the paragraph it is. A /Form
+# belongs around a field a reader can fill in, which a retagged run of printed text is not, and
+# the report then asked for a description of it that the editor had nowhere to take.
+RETIRED_TAGS = {"Div": "P", "Sect": "P", "Art": "P", "Index": "P", "NonStruct": "P",
+                "Code": "P", "Form": "P"}
 SPECIAL_TAGS = ("Figure", "Table", "L", "Caption")
 # A cell is never tagged where it stands -- a /TH or /TD is only legal inside a /TR inside a /Table.
 # A run of elements marked as cells is gathered into one table around them (`_cell_table`), which
@@ -169,8 +173,6 @@ TAG_KEYS = (
                                    "marked one after another are built into one table."),
     ("l", "L", "List", "A bulleted or numbered list."),
     ("m", "Formula", "Formula (maths)", "A mathematical or chemical expression."),
-    ("e", "Code", "Code", "Program code or other text where the exact characters matter."),
-    ("o", "Form", "Form field", "An interactive field a reader fills in."),
     ("v", "Note", "Footnote", "A footnote or endnote — read separately from the body text it "
                               "annotates, not in the middle of it."),
 )

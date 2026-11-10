@@ -885,7 +885,7 @@ def test_a_container_saved_by_an_earlier_version_reads_as_a_paragraph():
     # /Sect holding a paragraph always sounded like the paragraph. A file saved with one opens.
     from rebind.edits import EDITABLE_TAGS, Edits
 
-    retired = ("Div", "Sect", "Art", "Index", "NonStruct")
+    retired = ("Div", "Sect", "Art", "Index", "NonStruct", "Code", "Form")
     assert not set(retired) & set(EDITABLE_TAGS)
     assert Edits.from_payload({"tags": {f"p1n{n}": tag for n, tag in enumerate(retired)}}).tags == {
         f"p1n{n}": "P" for n in range(len(retired))}

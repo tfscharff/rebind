@@ -42,9 +42,8 @@ figure out of the reading order; other type keys type instead.
 |---|---|---|---|---|---|
 | `p` | Paragraph | `q` | Block quote | `l` | List |
 | `1`–`6` | Heading 1–6 | `c` | Caption | `m` | Formula |
-| `f` | Figure | `t` | Table | `e` | Code |
-| `h` | Table header cell | `d` | Table data cell | `o` | Form field |
-| `v` | Footnote | `x` | Not read | | |
+| `f` | Figure | `t` | Table | `v` | Footnote |
+| `h` | Table header cell | `d` | Table data cell | `x` | Not read |
 | `PgUp` `PgDn` | Previous / next page (`[` and `]` work too) | | | | |
 
 `Insert` adds a new element right after the one you are on in the reading order: an empty frame

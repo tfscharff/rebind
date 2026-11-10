@@ -4,6 +4,13 @@ What changed in each release, newest first. Each entry is a summary; the full no
 [releases page](https://github.com/tfscharff/rebind/releases). Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.12.1 (2026-11-10)
+
+- Code and Form field are no longer offered as types. A screen reader reads code as a paragraph.
+  A form field has to be a field a reader can fill in, and marking printed text as one made the
+  report ask for a description there was nowhere to type. A file saved with either opens with
+  a paragraph in its place.
+
 ## 1.12.0 (2026-11-10)
 
 - **Page Up** and **Page Down** turn the page. `[` and `]` still do.
