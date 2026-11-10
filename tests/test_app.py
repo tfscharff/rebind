@@ -161,19 +161,14 @@ def test_a_reload_does_not_shut_the_server_down():
     """
     import rebind.app as app_module
 
-    client = TestClient(create_app(exit_when_idle=True))
     exits: list[int] = []
-    monkey = app_module.os._exit
-    app_module.os._exit = exits.append
-    try:
-        client.get("/heartbeat")            # the page arrives and arms the watchdog
-        client.post("/shutdown")            # ...then reloads: pagehide fires
-        client.get("/heartbeat")            # ...and the new page checks in inside the grace period
-        # Give the watchdog several ticks to make its call.
-        time.sleep(app_module.WATCHDOG_TICK_SECONDS * 3 + app_module.CLOSING_GRACE_SECONDS)
-        assert exits == [], "a reload must not take the server with it"
-    finally:
-        app_module.os._exit = monkey
+    client = TestClient(create_app(exit_when_idle=True, leave=exits.append))
+    client.get("/heartbeat")            # the page arrives and arms the watchdog
+    client.post("/shutdown")            # ...then reloads: pagehide fires
+    client.get("/heartbeat")            # ...and the new page checks in inside the grace period
+    # Give the watchdog several ticks to make its call.
+    time.sleep(app_module.WATCHDOG_TICK_SECONDS * 3 + app_module.CLOSING_GRACE_SECONDS)
+    assert exits == [], "a reload must not take the server with it"
 
 
 def test_a_closed_last_tab_does_shut_the_server_down():
@@ -181,23 +176,17 @@ def test_a_closed_last_tab_does_shut_the_server_down():
     nothing checks in after the beacon, the process really does have to go."""
     import rebind.app as app_module
 
-    client = TestClient(create_app(exit_when_idle=True))
     exits: list[int] = []
-    monkey = app_module.os._exit
-    app_module.os._exit = exits.append
-    try:
-        client.get("/heartbeat")
-        client.post("/shutdown")
-        time.sleep(app_module.WATCHDOG_TICK_SECONDS * 2 + app_module.CLOSING_GRACE_SECONDS)
-        assert exits, "a closed last tab must still quit the app"
-    finally:
-        app_module.os._exit = monkey
+    client = TestClient(create_app(exit_when_idle=True, leave=exits.append))
+    client.get("/heartbeat")
+    client.post("/shutdown")
+    time.sleep(app_module.WATCHDOG_TICK_SECONDS * 2 + app_module.CLOSING_GRACE_SECONDS)
+    assert exits, "a closed last tab must still quit the app"
 
 
-def test_a_finished_job_reports_the_two_manual_check_findings(tmp_path: Path):
-    # Adobe's checker always defers "Logical Reading Order" and "Colour contrast" to a human. The
-    # app has to hand that human the evidence, so a finished job must carry both -- with a real
-    # contrast failure surfaced rather than quietly passed.
+def test_a_finished_job_reports_what_was_measured_for_contrast(tmp_path: Path):
+    # Adobe's checker always defers "Colour contrast" to a human. A finished job carries what was
+    # measured, with a real contrast failure surfaced rather than quietly passed.
     source = born_digital_pdf(
         "<h1>Title</h1><p>Ordinary black body text.</p>"
         "<p style='color:#a8a8a8'>Pale grey small print that fails contrast.</p>",
@@ -213,7 +202,6 @@ def test_a_finished_job_reports_the_two_manual_check_findings(tmp_path: Path):
         time.sleep(0.5)
     assert status["status"] == "done", status.get("error")
 
-    assert status["reading_order"]["checked"] == 1
     # Contrast is corrected as part of remediation now, not offered as homework: the pale grey
     # paragraph is darkened, and the verdict is a re-measurement of the corrected document rather
     # than a claim that the correction worked.

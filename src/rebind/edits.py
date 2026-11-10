@@ -113,10 +113,8 @@ class Edits:
 # entry below was checked by producing a document that uses it and validating the result, because
 # guessing got it wrong twice (/Caption and /Quote both look reasonable and are both illegal there).
 #
-# Three shapes, because "legal under Document" is not the same as "may hold content directly":
+# Two shapes, because "legal under Document" is not the same as "may hold content directly":
 #   * CONTENT -- takes the page's marked content as its own children. The ordinary case.
-#   * GROUPING -- a container that may only hold block-level children, so the content is wrapped
-#     in a /P inside it. Tagging one of these directly over content fails; wrapping is the fix.
 #   * built specially -- /Figure needs an /Alt, /Table needs rows and cells, /L needs list items,
 #     /Caption must sit inside the figure or table it captions rather than beside it.
 #
@@ -128,18 +126,18 @@ class Edits:
 # worse than one tagged as ordinary paragraphs.
 CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "Formula", "Form",
                 "Note")
-# /Part and /Div are not offered: each is a container with no behaviour of its own, which a screen
-# reader announces as nothing at all -- a /Div holding a paragraph reads exactly as the paragraph.
-# They were one more thing to choose between for no gain to a reader. A /Div saved by an earlier
-# version is read back as the paragraph it always sounded like (`RETIRED_TAGS`).
-GROUPING_TAGS = ("Sect", "Art", "Index", "NonStruct")
-RETIRED_TAGS = {"Div": "P"}
+# The containers (/Part, /Div, /Sect, /Art, /Index, /NonStruct) are not offered. Each groups other
+# elements and has no behaviour of its own: a screen reader announces it as nothing at all, and the
+# editor retags one element at a time, so all it could make was a container holding one paragraph,
+# which reads exactly as the paragraph. They were things to choose between for no gain to a
+# reader. One saved by an earlier version is read back as the paragraph it always sounded like.
+RETIRED_TAGS = {"Div": "P", "Sect": "P", "Art": "P", "Index": "P", "NonStruct": "P"}
 SPECIAL_TAGS = ("Figure", "Table", "L", "Caption")
 # A cell is never tagged where it stands -- a /TH or /TD is only legal inside a /TR inside a /Table.
 # A run of elements marked as cells is gathered into one table around them (`_cell_table`), which
 # is how a table Rebind did not detect is built by hand.
 CELL_TAGS = ("TH", "TD")
-EDITABLE_TAGS = CONTENT_TAGS + GROUPING_TAGS + SPECIAL_TAGS + CELL_TAGS
+EDITABLE_TAGS = CONTENT_TAGS + SPECIAL_TAGS + CELL_TAGS
 
 # One keystroke per type, so retagging is Tab-and-press rather than Tab-and-open-a-menu. Chosen for
 # the first letter of the thing wherever it is free, and the digits for heading levels. Defined
@@ -170,10 +168,6 @@ TAG_KEYS = (
     ("d", "TD", "Table data cell", "An ordinary cell of a table, read against its header. Cells "
                                    "marked one after another are built into one table."),
     ("l", "L", "List", "A bulleted or numbered list."),
-    ("s", "Sect", "Section", "A container grouping related content together."),
-    ("a", "Art", "Article", "A self-contained piece of writing within the document."),
-    ("i", "Index", "Index", "An index of terms and where they appear."),
-    ("n", "NonStruct", "No structure", "Content that carries no structural meaning of its own."),
     ("m", "Formula", "Formula (maths)", "A mathematical or chemical expression."),
     ("e", "Code", "Code", "Program code or other text where the exact characters matter."),
     ("o", "Form", "Form field", "An interactive field a reader fills in."),

@@ -12,38 +12,6 @@ requests) so it works offline and needs nothing extra bundled into the frozen bu
 from __future__ import annotations
 
 
-def build_review(*, page_count: int, ocr_pages: tuple[int, ...],
-                 empty_pages: tuple[int, ...]) -> dict:
-    """A short, honest account of what remediation did and what -- if anything -- needs a human.
-
-    Remediation preserves the original and only adds accessibility, so there is little to review.
-    We report a one-line summary of what happened, and flag only genuine problems (pages where no
-    text could be recovered at all). Returns `{summary, items, clean}` where each item is
-    `{kind, title, detail, pages}`.
-    """
-    scanned = len(ocr_pages)
-    if scanned and empty_pages:
-        summary = (f"{page_count} pages. Text was recognized on {scanned} scanned "
-                   f"page{'s' if scanned != 1 else ''}.")
-    elif scanned:
-        summary = (f"{page_count} pages. {scanned} scanned page"
-                   f"{'s were' if scanned != 1 else ' was'} recognized; the rest already had text.")
-    else:
-        summary = f"{page_count} pages. The document already had text; nothing needed recognizing."
-
-    items: list[dict] = []
-    if empty_pages:
-        items.append({
-            "kind": "no-text",
-            "title": "Pages with no readable text",
-            "detail": ("These pages are images that no text could be recovered from -- they may be "
-                       "blank, or photos/figures with no words. They are kept exactly as they were, "
-                       "but they carry no readable text."),
-            "pages": sorted(empty_pages),
-        })
-    return {"summary": summary, "items": items, "clean": not items}
-
-
 def index_html() -> str:
     """The single-page app, fully self-contained (no external requests)."""
     return _PAGE
@@ -979,7 +947,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var sub='<b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
         '<b>Ins</b> new element below (or put back one not read) · '+
         '<b>Del</b> delete, next · <b>Backspace</b> delete, previous · '+
-        '<b>[</b> <b>]</b> turn the page · '+
+        '<b>PgUp</b> <b>PgDn</b> turn the page · '+
         '<b>Enter</b> lists every type';
     if(row) sub+='<br>On a table row, <b>h</b> and <b>d</b> set the row, <b>Ins</b> adds a row '+
         'below it and <b>Del</b> takes the row out. Every other type key applies to the whole '+
@@ -1335,9 +1303,14 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
     if(key==='Tab'){
       if(turnPage(ev.shiftKey? -1 : 1, ev.shiftKey)) ev.preventDefault();
-    }else if(key==='['||key===']'){
-      ev.preventDefault(); turnPage(key===']'?1:-1);
+    }else if(pageKey(key)){
+      ev.preventDefault(); turnPage(pageKey(key));
     }
+  }
+
+  // Page Up and Page Down turn the page; [ and ] do too, for a keyboard without them.
+  function pageKey(key){
+    return key==='PageDown'||key===']'? 1 : key==='PageUp'||key==='['? -1 : 0;
   }
 
   function turnPage(step, landOnLast){
@@ -1422,7 +1395,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         openAltPrompt(e.id, true);
         return;
       }
-      if(key==='['||key===']'){ ev.preventDefault(); turnPage(key===']'?1:-1); return; }
+      if(pageKey(key)){ ev.preventDefault(); turnPage(pageKey(key)); return; }
       // The two edits that are not "what is this?", on the obvious pair of keys. On a table row,
       // removing is the table's (setKind).
       if(key==='+'||key==='='){ ev.preventDefault(); addElement(e.id); return; }

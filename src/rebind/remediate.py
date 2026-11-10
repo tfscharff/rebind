@@ -33,7 +33,7 @@ from pathlib import Path
 import pikepdf
 from pikepdf import Name
 
-from . import contrast, formula_reader, layout_model, recolor, review
+from . import contrast, formula_reader, layout_model, recolor
 from .captions import _caption_groups, _document_captions
 from .document import _set_metadata, _strip_legacy_destinations, _strip_scripts
 from .edits import (
@@ -145,11 +145,8 @@ class RemediationResult:
     # honest "PDF/UA-2 tagged" badge without a JVM runtime dependency.
     structure_ok: bool = True
     structure_issues: tuple[str, ...] = ()
-    # Evidence for the two checks Adobe's checker always leaves to a human (see `review`). Rebind
-    # cannot make either pass -- no tool can -- but it can show its work: `reading_order` is the
-    # order it chose, with the pages where that was a real decision flagged for an eye;
-    # `contrast` is a measurement of the rendered page, not a claim about it.
-    reading_order: dict = field(default_factory=dict)
+    # Colour contrast is a check Adobe's checker always leaves to a human. This is a measurement
+    # of the rendered page, not a claim about it.
     contrast: dict = field(default_factory=dict)
     # Every tagged element, in reading order, for the app's page editor: {id, page, kind, text,
     # left/top/width/height as percentages of the page}. A figure additionally carries "alt".
@@ -171,8 +168,7 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int, profile,
     On a single-column page the two agree. On a two-column page they emphatically do not: a
     top-to-bottom sort interleaves the columns line by line, so a screen reader reads "left line 1,
     right line 1, left line 2, ..." -- word salad, and precisely the failure Adobe's "Logical
-    Reading Order" check exists to catch. The cut was written and tested long before this, but the
-    pipeline was still sorting by y; that gap is what `review.page_order` now reports on.
+    Reading Order" check exists to catch.
     """
     image = None
 
@@ -605,7 +601,6 @@ def _remediate(source: Path, target: Path, held: list, *, title: str | None, lan
 
     # Pass one: recover each page's text lines (from its text layer or OCR) in reading order.
     per_page: list[tuple] = []
-    layouts: list[tuple] = []
     page_hints: list[layout_model.PageHints] = []
     for src_page in source_pages:
         # Another tool's pictures, which Rebind may not find itself. Rebind's own are found again
@@ -618,7 +613,6 @@ def _remediate(source: Path, target: Path, held: list, *, title: str | None, lan
                        and not key[len(f"p{src_page.number}")].isdigit())
         lines, used_ocr, layout, hints = _lines_for(source, src_page, engine, dpi, profile, known,
                                                     reread=src_page.number in invisible_pages)
-        layouts.append((src_page, layout))
         page_hints.append(hints)
         if used_ocr and lines:
             ocr_pages.append(src_page.number)
@@ -795,11 +789,7 @@ def _remediate(source: Path, target: Path, held: list, *, title: str | None, lan
     pdf.close()
     self_check = self_check_pdf_ua2(target)
 
-    # Evidence for the two checks a machine may never sign off on. Both read the SOURCE: contrast
-    # is a property of the page a reader sees, which remediation deliberately leaves untouched, and
-    # the reading order is the one just built above.
-    orders = [review.page_order(src_page, layout, figure_boxes.get(src_page.number, ()))
-              for src_page, layout in layouts]
+    # Contrast is a property of the page a reader sees, so it is measured on the pages as drawn.
     # After recolouring, the pages extracted at the top of this function still carry the *old*
     # declared ink colours, and the ink is what `contrast` trusts the declaration for. Re-read them
     # from the corrected document so the report describes what was actually produced.
@@ -815,7 +805,6 @@ def _remediate(source: Path, target: Path, held: list, *, title: str | None, lan
         ocr_pages=tuple(ocr_pages), empty_pages=tuple(empty_pages), added_text_layer=added_layer,
         figures=tuple(undescribed_figures),
         structure_ok=self_check.ok, structure_issues=self_check.issues,
-        reading_order=review.summarize(orders),
         contrast=contrast.summarize(measured, darkened=recoloured),
         elements=tuple(page_elements), page_images=page_images,
     )

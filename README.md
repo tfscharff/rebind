@@ -43,19 +43,18 @@ Press `?` on any element to see the keys that work on it.
 
 | Key | Type | Key | Type | Key | Type |
 |---|---|---|---|---|---|
-| `p` | Paragraph | `q` | Block quote | `s` | Section |
-| `1` to `6` | Heading 1 to 6 | `c` | Caption | `a` | Article |
-| `f` | Figure | `t` | Table | `i` | Index |
-| `l` | List | `m` | Formula | `n` | No structure |
-| `e` | Code | `o` | Form field | `v` | Footnote |
-| `h` | Table header cell | `d` | Table data cell | `x` | Not read |
+| `p` | Paragraph | `q` | Block quote | `l` | List |
+| `1` to `6` | Heading 1 to 6 | `c` | Caption | `m` | Formula |
+| `f` | Figure | `t` | Table | `e` | Code |
+| `h` | Table header cell | `d` | Table data cell | `o` | Form field |
+| `v` | Footnote | `x` | Not read | | |
 
 | Key | Action |
 |---|---|
 | `Tab`, `Shift`+`Tab` | Next element, previous element |
 | `Insert` | Add an element |
 | `Delete` | Remove an element |
-| `[`, `]` | Previous page, next page |
+| `PgUp`, `PgDn` | Previous page, next page |
 | `Enter` | On a picture or formula, write its description. Elsewhere, list every type. |
 
 You can also drag an element's box to change which lines it holds, and build a table by hand. See
@@ -161,7 +160,7 @@ Rebind is not on PyPI. For tests and the installer build, see [CONTRIBUTING.md](
 
 ## Status
 
-The current version is **1.11.2**. Scanned and born-digital PDFs both work from start to finish,
+The current version is **1.12.0**. Scanned and born-digital PDFs both work from start to finish,
 and the output validates as PDF/UA-2 with zero failures. [CHANGELOG.md](CHANGELOG.md) lists what
 changed in each release.
 

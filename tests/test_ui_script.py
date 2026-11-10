@@ -343,3 +343,10 @@ def test_a_formula_offers_its_drafted_description_and_says_to_check_it():
     prompt = script[script.index("function openAltPrompt("):script.index("function closeAltPrompt(")]
     assert "check it against the equation" in prompt
     assert "Tab moves on without it" in prompt
+
+
+def test_page_up_and_page_down_turn_the_page():
+    script = _script()
+    assert "key==='PageDown'||key===']'? 1 : key==='PageUp'||key==='['? -1 : 0" in script
+    assert script.count("turnPage(pageKey(key))") == 2, "on an element, and on an empty page"
+    assert "<b>PgUp</b> <b>PgDn</b> turn the page" in script

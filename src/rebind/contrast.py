@@ -245,7 +245,7 @@ def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI,
 
 
 def summarize(report: ContrastReport, *, darkened: int = 0) -> dict:
-    """The contrast section of the review: the measurement, and what failed it.
+    """The contrast section of the report: the measurement, and what failed it.
 
     `darkened` is how many text colours were corrected on this run (0 when correcting is off), so
     the app can say what it changed rather than silently showing a document that now passes.

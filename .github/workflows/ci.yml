@@ -71,9 +71,4 @@ jobs:
           $env:PYTHONPATH = "."
           uv run python scripts/fixture_fonts.py
 
-      # The two deselected tests stand in for the app quitting itself; their watchdog threads
-      # outlive them and end the whole test run.
-      - run: >
-          uv run pytest -q
-          --deselect tests/test_app.py::test_a_reload_does_not_shut_the_server_down
-          --deselect tests/test_app.py::test_a_closed_last_tab_does_shut_the_server_down
+      - run: uv run pytest -q

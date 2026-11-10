@@ -18,7 +18,7 @@ when you turn to a page (the pages either side are decoded ahead), not re-sent w
 **Tab order:** each failing check in the report, then element 1 of the document, with nothing in
 between. A page with nothing to read on it still has one Tab stop, saying so, so Tab carries on
 to the next page instead of leaving the document. Other controls are out of the natural order and
-reached from what they belong to — a fix field from its `!` row, the pager from `[` and `]`. **Download PDF** and **Do another document**
+reached from what they belong to — a fix field from its `!` row, the pager from `PgUp` and `PgDn`. **Download PDF** and **Do another document**
 are the last two stops.
 
 **Left.** Adobe's rule list in Adobe's groups. A rule with nothing to test is *not applicable*, not
@@ -40,13 +40,12 @@ figure out of the reading order; other type keys type instead.
 
 | key | | key | | key | |
 |---|---|---|---|---|---|
-| `p` | Paragraph | `q` | Block quote | `s` | Section |
-| `1`–`6` | Heading 1–6 | `c` | Caption | `a` | Article |
-| `f` | Figure | `t` | Table | `i` | Index |
-| `l` | List | `m` | Formula | `n` | No structure |
-| `e` | Code | `o` | Form field | `v` | Footnote |
-| `x` | Not read | `[` `]` | Previous / next page | | |
-| `h` | Table header cell | `d` | Table data cell | | |
+| `p` | Paragraph | `q` | Block quote | `l` | List |
+| `1`–`6` | Heading 1–6 | `c` | Caption | `m` | Formula |
+| `f` | Figure | `t` | Table | `e` | Code |
+| `h` | Table header cell | `d` | Table data cell | `o` | Form field |
+| `v` | Footnote | `x` | Not read | | |
+| `PgUp` `PgDn` | Previous / next page (`[` and `]` work too) | | | | |
 
 `Insert` adds a new element right after the one you are on in the reading order: an empty frame
 just below it, which becomes whatever

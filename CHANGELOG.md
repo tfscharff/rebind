@@ -4,6 +4,16 @@ What changed in each release, newest first. Each entry is a summary; the full no
 [releases page](https://github.com/tfscharff/rebind/releases). Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.12.0 (2026-11-10)
+
+- **Page Up** and **Page Down** turn the page. `[` and `]` still do.
+- Section, Article, Index and No structure are no longer offered as types. Each is a container
+  a screen reader announces as nothing, so one holding a paragraph read exactly as the
+  paragraph. A file saved with one opens with a paragraph in its place.
+- Removed what the page stopped using: the separate endpoint for picture descriptions, and the
+  reading-order evidence worked out on every conversion.
+- The two tests of the app quitting itself no longer end the test run, and run with the rest.
+
 ## 1.11.2 (2026-11-10)
 
 - In a short window the list of keys scrolls, and the element's **Insert** and **Delete** buttons

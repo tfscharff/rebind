@@ -42,14 +42,11 @@ class _Job:
     stage: str = "Reading the document..."
     started: float = field(default_factory=time.monotonic)
     workdir: Path | None = None
-    source_path: Path | None = None   # kept so descriptions can re-run remediation
+    source_path: Path | None = None   # kept so a correction can re-run remediation
     pdf_path: Path | None = None
-    review: dict | None = None
-    # Evidence for the two checks Adobe always leaves to a human (see rebind.review/rebind.contrast)
-    reading_order: dict = field(default_factory=dict)
+    # What was measured for colour contrast, which the checklist reports (see rebind.contrast)
     contrast: dict = field(default_factory=dict)
     figures: list = field(default_factory=list)   # figures still needing a description
-    alt_texts: dict = field(default_factory=dict)  # descriptions the user has supplied so far
     # Fixes the user has asked for from the report, each kept so it survives every later re-run.
     title_override: str | None = None
     lang: str = "en"
@@ -93,24 +90,18 @@ def _run_conversion(job: _Job, source: Path) -> None:
     from rebind.extract import ExtractionError
     from rebind.edits import Edits
     from rebind.remediate import remediate
-    from rebind.ui import build_review
 
     try:
         job.stage = "Making it accessible (scanned pages are read page by page)..."
         stem = Path(job.filename).stem
         result = remediate(source, job.workdir / (stem + ".accessible.pdf"),
                            title=job.title_override or stem, lang=job.lang,
-                           alt_texts=job.alt_texts, strip_scripts=job.strip_scripts,
+                           strip_scripts=job.strip_scripts,
                            edits=Edits.from_payload(job.edits))
         job.pdf_path = result.pdf_path
         job.figures = list(result.figures)
         job.structure_ok = result.structure_ok
         job.structure_issues = result.structure_issues
-        job.review = build_review(
-            page_count=result.page_count, ocr_pages=result.ocr_pages,
-            empty_pages=result.empty_pages,
-        )
-        job.reading_order = result.reading_order
         job.contrast = result.contrast
         job.elements = list(result.elements)
         job.page_images = result.page_images
@@ -142,7 +133,7 @@ CLOSING_GRACE_SECONDS = 4.0
 WATCHDOG_TICK_SECONDS = 1.0
 
 
-def create_app(*, exit_when_idle: bool = False) -> Starlette:
+def create_app(*, exit_when_idle: bool = False, leave=os._exit) -> Starlette:
     """The Rebind ASGI app. Starlette (not FastAPI): the routes take raw bodies and return plain
     dicts, so FastAPI's pydantic layer bought nothing and only added weight to the bundle.
 
@@ -151,7 +142,8 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
     "quit" gesture a user has, and without this the server stayed running invisibly -- discovered
     the hard way, as an instance that had to be killed by hand before an upgrade could install.
     Off by default so `TestClient` and a developer's `rebind serve` are never killed by a heartbeat
-    that no one is sending.
+    that no one is sending. `leave` is how it exits; a test passes its own, so that no thread of
+    a test's app can ever end the process the tests run in.
     """
     jobs = _JobStore()
     watching = {"last_seen": time.monotonic(), "armed": False, "closing": 0.0}
@@ -189,34 +181,14 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         body: dict = {"status": job.status, "stage": job.stage,
                       "elapsed": round(time.monotonic() - job.started, 1)}
         if job.status == "done":
-            body["review"] = job.review
             body["figures"] = job.figures
             body["structure_ok"] = job.structure_ok
             body["structure_issues"] = list(job.structure_issues)
-            body["reading_order"] = job.reading_order
             body["contrast"] = job.contrast
             body["checklist"] = job.checklist
         if job.status == "error":
             body["error"] = job.error
         return JSONResponse(body)
-
-    async def job_describe(request: Request) -> JSONResponse:
-        """Accept {alts: {figure_id: description}} and re-run remediation so each described figure
-        becomes a tagged /Figure with that alt text."""
-        job = jobs.get(request.path_params["job_id"])
-        if job is None or job.source_path is None:
-            return JSONResponse({"error": "No such job."}, status_code=404)
-        payload = await request.json()
-        alts = {str(k): str(v).strip() for k, v in (payload.get("alts") or {}).items()
-                if str(v).strip()}
-        if not alts:
-            return JSONResponse({"error": "No descriptions were provided."}, status_code=400)
-        job.alt_texts.update(alts)
-        job.status = "running"
-        job.stage = "Applying your descriptions..."
-        job.started = time.monotonic()
-        threading.Thread(target=_run_conversion, args=(job, job.source_path), daemon=True).start()
-        return JSONResponse({"job_id": job.id})
 
     async def job_elements(request: Request) -> JSONResponse:
         """Every tagged element with its page picture -- what the page editor draws and edits.
@@ -363,9 +335,9 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
                 continue
             closing = watching["closing"]
             if closing and last <= float(closing) and now - float(closing) > CLOSING_GRACE_SECONDS:
-                os._exit(0)     # asked to go, and nothing spoke up in the meantime
+                return leave(0)     # asked to go, and nothing spoke up in the meantime
             if now - last > IDLE_SHUTDOWN_SECONDS:
-                os._exit(0)     # nobody has been watching for a long time
+                return leave(0)     # nobody has been watching for a long time
 
     if exit_when_idle:
         threading.Thread(target=_watchdog, daemon=True).start()
@@ -413,7 +385,6 @@ def create_app(*, exit_when_idle: bool = False) -> Starlette:
         Route("/", index),
         Route("/convert", convert_endpoint, methods=["POST"]),
         Route("/jobs/{job_id}", job_status),
-        Route("/jobs/{job_id}/describe", job_describe, methods=["POST"]),
         Route("/jobs/{job_id}/fix", job_fix, methods=["POST"]),
         Route("/jobs/{job_id}/elements", job_elements),
         Route("/jobs/{job_id}/edits", job_edits, methods=["POST"]),

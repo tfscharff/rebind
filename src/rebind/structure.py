@@ -5,7 +5,7 @@ from __future__ import annotations
 import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
-from .edits import CELL_TAGS, GROUPING_TAGS, Edits
+from .edits import CELL_TAGS, Edits
 from .extract import TextLine
 from .overlay import readable
 from .tables import _cell_table, _table_row_groups, _tagged_table
@@ -133,13 +133,6 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
                 items.append(li)
             lst.K = Array(items)
             tops.append(lst)
-        elif kind in GROUPING_TAGS:
-            # A grouping element may only hold block-level children, never content of its own --
-            # tagging one straight over the text fails validation, so the text goes in a /P inside.
-            group = pdf.make_indirect(Dictionary(
-                Type=Name.StructElem, S=Name("/" + kind), P=document_elem, K=Array([])))
-            group.K = Array([spanning("P", group, indices)])
-            tops.append(group)
         elif kind == "Figure":
             figure = spanning("Figure", document_elem, indices)
             # Never fabricated: a figure made out of text is described by that text unless the

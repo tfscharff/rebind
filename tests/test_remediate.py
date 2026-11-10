@@ -880,14 +880,15 @@ def test_edits_accepts_only_well_formed_frames():
     assert edits.frames == {"p1n0": (10.0, 20.0, 30.0, 5.0)}
 
 
-def test_a_division_saved_by_an_earlier_version_reads_as_a_paragraph():
-    # /Div is no longer offered: a screen reader announces it as nothing, so a /Div holding a
-    # paragraph always sounded like the paragraph. A file saved with one still opens.
+def test_a_container_saved_by_an_earlier_version_reads_as_a_paragraph():
+    # Containers are no longer offered: a screen reader announces one as nothing, so a /Div or a
+    # /Sect holding a paragraph always sounded like the paragraph. A file saved with one opens.
     from rebind.edits import EDITABLE_TAGS, Edits
 
-    assert "Div" not in EDITABLE_TAGS
-    assert Edits.from_payload({"tags": {"p1n0": "Div", "p1n1": "Sect"}}).tags == {
-        "p1n0": "P", "p1n1": "Sect"}
+    retired = ("Div", "Sect", "Art", "Index", "NonStruct")
+    assert not set(retired) & set(EDITABLE_TAGS)
+    assert Edits.from_payload({"tags": {f"p1n{n}": tag for n, tag in enumerate(retired)}}).tags == {
+        f"p1n{n}": "P" for n in range(len(retired))}
 
 
 def test_a_running_footer_is_an_artifact_not_content(tmp_path: Path):

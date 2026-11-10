@@ -428,8 +428,7 @@ def _splice_tables(placed: list[PlacedLine], table_line_ids: set[int],
     for index, item in enumerate(placed):
         group = anchored.get(index)
         if group is not None:
-            # One column for the whole table: a grid split across two of the cut's columns is one
-            # block to `review._group_blocks`, not two.
+            # One column for the whole table, even where the cut split its grid across two.
             out.extend(PlacedLine(line=ln, column=item.column) for ln in group)
         elif id(item.line) not in moved:
             out.append(item)
@@ -445,8 +444,7 @@ def _splice_artifacts(placed: list[PlacedLine], artifacts: list[TextLine]) -> li
     own -- but they used to be *appended* after the cut as well, which is a different decision and
     a worse one. A running head is the first thing on the page and came out as the last stop in
     the editor's walk, after the whole body; the folio came after that. Nothing downstream was
-    wrong (furniture is an `/Artifact` either way, announced by no screen reader, and
-    `review.page_order` filters `column == -1` out of its numbered blocks), but the librarian
+    wrong (furniture is an `/Artifact` either way, announced by no screen reader), but the librarian
     correcting the page was handed the page's top edge at the bottom of the list.
 
     Position only, never grouping: each artifact goes before the first line that starts below it,

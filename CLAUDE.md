@@ -109,8 +109,8 @@ PDF 2.0 header and updated XMP (`pdfuaid:part=2`).
   header cells scoped to their column, empty cells filling gaps. A sparse row (subtotal / empty
   cell) is kept, not dropped (`MAX_INTERNAL_TABLE_GAP`).
 - Figures `/Figure` with `/Alt`. Decorative artifacts by default (compliant); the app shows each
-  with a thumbnail and the user's typed description promotes it (`POST /jobs/{id}/describe`
-  re-runs remediation with `alt_texts`).
+  with a thumbnail and the user's typed description promotes it (sent with every other
+  correction, `POST /jobs/{id}/edits`).
 
 ## Invariants — reject changes that violate these
 
@@ -226,8 +226,9 @@ ebind.iss`.
 - **CI** (`.github/workflows/ci.yml`) runs ruff and the suite on `windows-latest` with veraPDF
   (installed from `.github/verapdf/auto-install.xml`), MSYS2 Pango for WeasyPrint, and DejaVu
   copied into `C:\Windows\Fonts` -- the fixtures are set in DejaVu Serif and line-specific tests
-  fail in a substitute font (`scripts/fixture_fonts.py` shows which font is in use). It deselects
-  the two `os._exit` watchdog tests in `tests/test_app.py`; do the same in a full local run.
+  fail in a substitute font (`scripts/fixture_fonts.py` shows which font is in use).
+- **The idle watchdog exits through `create_app(leave=...)`**, `os._exit` by default. A test of
+  it passes its own `leave`; patching `os._exit` let the thread outlive the test and end pytest.
 - **`ocr.render_page_to_image` keeps the document open only inside `rendering_kept_open()`**
   (`remediate` enters it), per thread. Windows will not delete or replace an open file: call
   `close_rendered()` before unlinking or rewriting a file that has been rendered from.
