@@ -101,17 +101,22 @@ def ensure_model(report=print) -> Path | None:
 _engine = None
 _engine_lock = threading.Lock()
 _engine_failed = False
+_engine_missing = False
 _cache = PageCache()
 
 
 def _get_engine():
-    global _engine, _engine_failed
+    global _engine, _engine_failed, _engine_missing
     with _engine_lock:
         if _engine is None and not _engine_failed:
             path = model_path()
             if path is None:
-                log.warning("layout model %s not found; using geometric rules only", MODEL_FILE)
-                _engine_failed = True
+                # Said once, but looked for again next time: a model fetched later in the same
+                # run is used, where a failure remembered here kept it switched off.
+                if not _engine_missing:
+                    log.warning("layout model %s not found; using geometric rules only",
+                                MODEL_FILE)
+                _engine_missing = True
                 return None
             # rapid-layout announces every step at INFO on a console handler of its own, which
             # it re-arms each time one of its classes is built.

@@ -50,6 +50,7 @@ _MEAN, _STD = 0.7931 * 255, 0.1738 * 255
 
 _reader = None
 _reader_failed = False
+_reader_missing = False
 _lock = threading.Lock()
 _drafts = PageCache()
 
@@ -189,12 +190,14 @@ class _Reader:
 
 
 def _get_reader() -> _Reader | None:
-    global _reader, _reader_failed
+    global _reader, _reader_failed, _reader_missing
     with _lock:
         if _reader is None and not _reader_failed:
             if any(weights.weight_path(name) is None for name in FILES):
-                log.warning("equation reader not found; formulas get no drafted description")
-                _reader_failed = True
+                # Said once, but looked for again next time (see `layout_model._get_engine`).
+                if not _reader_missing:
+                    log.warning("equation reader not found; formulas get no drafted description")
+                _reader_missing = True
                 return None
             try:
                 _reader = _Reader(weights.model_dir() / "latex_ocr")

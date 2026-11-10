@@ -46,9 +46,11 @@ jobs:
           java -jar $jar.FullName .github\verapdf\auto-install.xml
           & C:\veraPDF\verapdf.bat --version
 
-      - name: Install Pango (for WeasyPrint, used only by the tests)
+      # The made-up PDFs are set in DejaVu Serif. In another font the lines break elsewhere and
+      # the tests about particular lines fail.
+      - name: Install Pango and the DejaVu fonts (for WeasyPrint, used only by the tests)
         shell: pwsh
-        run: C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-pango
+        run: C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-pango mingw-w64-x86_64-ttf-dejavu
 
       - name: Keep the downloaded models between runs
         uses: actions/cache@v4
