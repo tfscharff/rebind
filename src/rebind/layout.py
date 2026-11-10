@@ -31,7 +31,12 @@ COVERAGE_TOLERANCE_FRACTION = 0.05
 # rejected every real newspaper gutter.
 GUTTER_MIN_WIDTH_PT = 4.0           # a valley narrower than this is not a column boundary
 GUTTER_MARGINAL_WIDTH_PT = 6.0      # a gutter narrower than this (but >= MIN) is a marginal cut
-GUTTER_MIN_HEIGHT_FRACTION = 0.5    # text on both sides must each span this much of the height
+GUTTER_MIN_HEIGHT_FRACTION = 0.5
+# A line starting where a gutter ends is beside it. Its edge and the gutter's are the same number
+# arrived at by different arithmetic, and on a real title page the journal's box of details,
+# starting at 277.00149999999996 against a gutter ending at 277.0015, was read as straddling it,
+# so the title was read a line at a time interleaved with the box.
+EDGE_SLACK_PT = 0.01    # text on both sides must each span this much of the height
 # Both sides of a column cut must hold at least this many lines. Without it, XY-cut over-segments:
 # a heading gap isolates a line or two, and a coverage valley then splits those one-line fragments
 # into spurious "columns". A real column is many lines; two lines each side is the floor.
@@ -119,8 +124,8 @@ def _gutter_spans_height(lines: list[TextLine], gap_left: float, gap_right: floa
     the margins order_page passes in) would reject every genuine gutter and silently disable
     column detection on real pages.
     """
-    left_lines = [ln for ln in lines if ln.bbox[2] <= gap_left]
-    right_lines = [ln for ln in lines if ln.bbox[0] >= gap_right]
+    left_lines = [ln for ln in lines if ln.bbox[2] <= gap_left + EDGE_SLACK_PT]
+    right_lines = [ln for ln in lines if ln.bbox[0] >= gap_right - EDGE_SLACK_PT]
     if not left_lines or not right_lines:
         return False
 
@@ -179,8 +184,8 @@ def _widest_vertical_gutter(lines: list[TextLine], bbox: BBox) -> tuple[float, f
         width = b - a
         if width < GUTTER_MIN_WIDTH_PT or not _gutter_spans_height(lines, a, b):
             continue
-        left_count = sum(1 for ln in lines if ln.bbox[2] <= a)
-        right_count = sum(1 for ln in lines if ln.bbox[0] >= b)
+        left_count = sum(1 for ln in lines if ln.bbox[2] <= a + EDGE_SLACK_PT)
+        right_count = sum(1 for ln in lines if ln.bbox[0] >= b - EDGE_SLACK_PT)
         if left_count < COLUMN_MIN_LINES or right_count < COLUMN_MIN_LINES:
             continue
         # Widest wins; ties break to the smaller left coordinate for determinism.

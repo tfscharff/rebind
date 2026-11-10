@@ -568,8 +568,9 @@ def test_a_framed_table_row_regroups_the_cells_it_encloses():
     # Dragging the last row down over the stray line pulls it into that row and the table.
     order, out = _apply_frames(plan, lines, {"Tr2": (60, 635, 280, 675)}, lambda i: f"o{i}")
     assert [e["id"] for e in out] == ["T"]
+    # A row's cells come printed line by printed line, so a cell's wrapped lines keep their order.
     assert rows(order, out) == [("Tr0", ["h1", "h2"]), ("Tr1", ["a1", "a2"]),
-                                ("Tr2", ["b1", "c1", "b2"])]
+                                ("Tr2", ["b1", "b2", "c1"])]
 
     # Shrinking a row's frame gives a cell up: it leaves the table as an element of its own.
     order, out = _apply_frames(plan, lines, {"Tr1": (60, 675, 140, 695)}, lambda i: f"o{i}")
@@ -877,6 +878,16 @@ def test_edits_accepts_only_well_formed_frames():
     edits = Edits.from_payload({"frames": {"p1n0": [10, 20, 30, 5], "p1n1": [1, 2, 3],
                                            "p1n2": [1, 2, -3, 4], "p1n3": ["x", 1, 1, 1]}})
     assert edits.frames == {"p1n0": (10.0, 20.0, 30.0, 5.0)}
+
+
+def test_a_division_saved_by_an_earlier_version_reads_as_a_paragraph():
+    # /Div is no longer offered: a screen reader announces it as nothing, so a /Div holding a
+    # paragraph always sounded like the paragraph. A file saved with one still opens.
+    from rebind.edits import EDITABLE_TAGS, Edits
+
+    assert "Div" not in EDITABLE_TAGS
+    assert Edits.from_payload({"tags": {"p1n0": "Div", "p1n1": "Sect"}}).tags == {
+        "p1n0": "P", "p1n1": "Sect"}
 
 
 def test_a_running_footer_is_an_artifact_not_content(tmp_path: Path):

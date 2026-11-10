@@ -350,3 +350,16 @@ def test_two_separate_tables_on_one_page_stay_separate():
     walk = [p.line.text for p in order_page(page, profile).lines]
     assert walk[:16] == [f"a{col}r{row}" for row in range(4) for col in range(4)], walk[:16]
     assert walk[16:] == [f"b{col}r{row}" for row in range(4) for col in range(4)], walk[16:]
+
+
+def test_a_column_starting_exactly_where_the_gutter_ends_is_beside_it():
+    # On a real title page the journal's box of details started at 277.00149999999996 against a
+    # gutter ending at 277.0015, was counted as straddling it, and the title was read a line at a
+    # time interleaved with the box.
+    from rebind.layout import _xy_cut
+
+    title = [_line(46, 545 - 19 * k, 258, 561 - 19 * k, f"Title line {k}") for k in range(5)]
+    box = [_line(277.0015 if k == 0 else 277.00149999999996, 566 - 8.5 * k, 386, 575 - 8.5 * k,
+                 f"box {k}") for k in range(7)]
+    region = _xy_cut(title + box, (0, 400, 432, 648))
+    assert region.kind == "columns"

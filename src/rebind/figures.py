@@ -62,6 +62,9 @@ PARAGRAPH_LEADING_GAP = 1.0
 MUSIC_REPLACES_AREA = 2.0
 # A speck on a scan (`_is_speck`): a line of up to this many marks with no letter or digit in it...
 SPECK_MAX_MARKS = 3
+# A picture found from a scan's pixels, with no caption, is kept when it covers this much of the
+# page (`describe_figures`).
+SCAN_FIGURE_KEEP_SHARE = 0.05
 # ...or a line this short that the layout model found outside any region of words.
 SPECK_MAX_CHARS = 2
 
@@ -238,8 +241,9 @@ def _holds_table(lines: list[TextLine], hints: layout_model.PageHints, bbox: tup
 
 def _margin_furniture(lines: list[TextLine], width: float, height: float) -> list[TextLine]:
     """Sideways text standing clear of the page's other text, lines made only of icon glyphs
-    (private-use characters: an envelope, a globe, a tick) that have nothing to read out, and text
-    set off the page entirely, which nobody sees."""
+    (private-use characters: an envelope, a globe, a tick) that have nothing to read out, a rule
+    typed out as a row of one mark ("------", which was read as a heading), and text set off the
+    page entirely, which nobody sees."""
     upright = [ln for ln in lines if not ln.rotated]
     out = []
     for line in lines:
@@ -254,7 +258,14 @@ def _margin_furniture(lines: list[TextLine], width: float, height: float) -> lis
             out.append(line)
         elif text and all("" <= ch <= "" or ch.isspace() for ch in text):
             out.append(line)
+        elif len(text) >= RULE_MIN_MARKS and len(set(text.replace(" ", ""))) == 1 and not any(
+                ch.isalnum() for ch in text):
+            out.append(line)
     return out
+
+
+# A row of this many of one mark, and nothing else, is a rule drawn with the keyboard.
+RULE_MIN_MARKS = 5
 
 
 def _figure_text_strict(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
@@ -271,9 +282,21 @@ def _figure_text_strict(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
     outcome available here, so a guessed box gets no benefit of the doubt.
     """
     # Text turned sideways inside a picture is lettering on it (a plan's room labels), not prose.
-    return [line for line in lines
-            if _center_in_box(line.bbox, bbox)
-            and (line.rotated or len(line.text.split()) <= FIGURE_LABEL_MAX_WORDS)]
+    # Lines stacked one over another are a block of words -- a speech balloon, a caption box on a
+    # comic's panel -- however short each one is: they are read, not held out as labels.
+    inside = [line for line in lines if _center_in_box(line.bbox, bbox)]
+    return [line for line in inside
+            if line.rotated or (len(line.text.split()) <= FIGURE_LABEL_MAX_WORDS
+                                and not any(_stacked(line, other) for other in inside))]
+
+
+def _stacked(line: TextLine, other: TextLine) -> bool:
+    """Whether two lines are set one under the other at a paragraph's leading."""
+    if other is line or not _horizontally_overlaps(line.bbox, other.bbox):
+        return False
+    gap = max(other.bbox[1] - line.bbox[3], line.bbox[1] - other.bbox[3])
+    return gap <= PARAGRAPH_LEADING_GAP * max(line.bbox[3] - line.bbox[1],
+                                              other.bbox[3] - other.bbox[1])
 
 
 def _music_text(lines: list[TextLine], example) -> list[TextLine]:
@@ -514,7 +537,8 @@ def find_figures(source: Path, render_source: Path, src_page, lines: list[TextLi
 
 
 def describe_figures(figs: PageFigures, lines: list[TextLine], alt_texts: dict[str, str],
-                     document_captions: dict[str, str], removed) -> None:
+                     document_captions: dict[str, str], removed,
+                     page_area: float = 0.0) -> None:
     """Give each picture its description, and drop the pictures nothing vouches for.
 
     A figure sitting directly under (or, less commonly, above) a "Fig. N ..." caption needs no
@@ -593,5 +617,11 @@ def describe_figures(figs: PageFigures, lines: list[TextLine], alt_texts: dict[s
     # And a figure the person has taken out stays out. Figures live outside the plan, so the
     # edit that removes an element never reached them: pressing "x" on a picture did nothing at
     # all, which on a page with two wrongly-found ones is a wall the walk cannot get past.
+    #
+    # Except a big one. A scatter of hatching is small pieces; a region covering a good part of the
+    # page is a picture whether or not anything captions it -- a graphic novel's panels, none of
+    # them captioned, all vanished, and with them every picture on the page.
     figs.boxes = [(fid, bbox) for fid, bbox in figs.boxes
-                  if (figs.alt[fid] or fid not in figs.scan_regions) and fid not in removed]
+                  if (figs.alt[fid] or fid not in figs.scan_regions
+                      or _area(bbox) >= SCAN_FIGURE_KEEP_SHARE * page_area)
+                  and fid not in removed]

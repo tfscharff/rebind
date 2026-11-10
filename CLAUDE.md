@@ -80,6 +80,11 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
   stays vector. The checklist's "Unreadable symbols" lists the pages with U+FFFD in them.
 - A picture's frame is its box (`remediate._framed_pictures`), not a claim on lines; `after` can name
   a picture, resolved to the element the picture is read after (`_read_after_pictures`).
+- `turn.py` — `upright` reads every page that is sideways (`Page.turn`, most of its characters
+  turned), has its own `/Rotate`, or whose shown box is not at the origin (JSTOR: media box from
+  y=-8) from a temp copy with that page turned upright and moved to the origin; `restore_turns`
+  gives the output page the `/Rotate` that shows it as it was. Everything downstream, the editor
+  included, works in the upright frame. Existing descriptions' boxes are moved with `move_box`.
 - `validate.py` — runs veraPDF and parses its report. `ui.py` — the inline browser app.
 
 Per page: a born-digital page is kept **verbatim** (crisp vector). It is rebuilt from a 300-DPI

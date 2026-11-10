@@ -91,3 +91,47 @@ def test_a_missing_value_leaves_a_gap_rather_than_shifting_the_row():
 def test_two_cells_in_one_column_share_it():
     bands = [(50.0, 90.0), (100.0, 140.0)]
     assert _row_cells([_box(50, 60), _box(70, 90)], bands) == [(0, 0, [0, 1])]
+
+
+def _cell(text: str, x0: float, x1: float, top: float, height: float = 9.0):
+    from rebind.extract import TextLine
+    return TextLine(text=text, page=1, bbox=(x0, top - height, x1, top), font="F", size=height,
+                    bold=False, italic=False)
+
+
+def _texts(rows) -> list[list[str]]:
+    return [[line.text for _key, line in row] for row in rows]
+
+
+def test_a_row_whose_cells_wrap_is_one_row():
+    # A journal's summary of studies, no rules between rows: each row's cells run down as many
+    # lines as each needs, and the first column's wrapped lines hang under its first.
+    from rebind.tables import _table_rows
+
+    printed = [
+        ("First author,", 10, 0, 100), ("Design", 80, 1, 100), ("Participants", 150, 2, 100),
+        ("year", 10, 3, 91),
+        ("Campbell et al.,", 10, 4, 80), ("Randomized", 80, 5, 80), ("Mothers: 494", 150, 6, 80),
+        ("2007 (United", 16, 7, 71), ("trial", 80, 8, 71), ("pregnant women", 150, 9, 71),
+        ("States)", 16, 10, 62), ("with a friend", 150, 11, 62),
+        ("Edwards et al.,", 10, 12, 50), ("Cohort", 80, 13, 50), ("Mothers: 248", 150, 14, 50),
+        ("2013 (Canada)", 16, 15, 41), ("low-income", 150, 16, 41),
+    ]
+    cells = [(key, _cell(text, x, x + 55, top)) for text, x, key, top in printed]
+    assert _texts(_table_rows(cells)) == [
+        ["First author,", "Design", "Participants", "year"],
+        ["Campbell et al.,", "Randomized", "Mothers: 494", "2007 (United", "trial",
+         "pregnant women", "States)", "with a friend"],
+        ["Edwards et al.,", "Cohort", "Mothers: 248", "2013 (Canada)", "low-income"],
+    ]
+
+
+def test_a_table_of_one_line_rows_keeps_every_row():
+    from rebind.tables import _table_rows
+
+    rows = [("Region", "Sales", "Growth"), ("North", "120", "8"), ("", "95", "3"),
+            ("East", "140", "12")]
+    cells = [(k, _cell(text, 10 + 70 * c, 60 + 70 * c, 100 - 12 * r))
+             for r, row in enumerate(rows) for c, text in enumerate(row) if text
+             for k in [r * 3 + c]]
+    assert len(_table_rows(cells)) == 4

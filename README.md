@@ -46,7 +46,21 @@ uv run rebind convert in.pdf out.pdf     # no app
 - **No recoverable text** (blank, or an image with no words) — kept as is, and reported.
 
 A scan that already carries another tool's invisible OCR layer has it removed first, so the output
-holds one copy of each word. Visible marks are untouched and the page is not re-rendered.
+holds one copy of each word. Visible marks are untouched and the page is not re-rendered. That layer
+is kept as the page's text, but the page is recognised again too, and any line it missed (a graphic
+novel's came without a single speech balloon) is added, when read with confidence.
+
+**Sideways and offset pages.** A page whose text is mostly turned (a landscape table printed on a
+portrait page), a page with a `/Rotate` of its own, and a page whose box does not start at the
+origin or is cropped (every JSTOR download: its media box starts 8 points below) are read from a
+copy with that page turned upright and its shown area moved to the origin. Every stage downstream
+sees an ordinary page, the editor shows it the right way up, and the page written out is given the
+`/Rotate` that shows it exactly as the original was. Without this a sideways table was read as a
+scatter of fragments, and on a JSTOR file every frame, and the text layer, sat 8 points too high.
+
+**Drop caps.** A paragraph's large first letter is joined to the word it begins ("Breastfeeding", not
+"B reastfeeding"), wherever pdfminer had grouped it. "A" and "I" are joined too, unless the page uses
+the rest ("study") as a word of its own.
 
 Text is never fabricated. Every text node traces to recognizer output with a confidence score;
 below threshold it becomes `[text not recoverable from source scan, p. 214]`.
@@ -126,7 +140,9 @@ it never supplies text, so a wrong box can only group wrongly, which the editor 
 - **Lists** `/L` → `/LI` → `/LBody`.
 - **Tables** `/Table` → `/TR` → `/TD` as a regular grid. Top row is `/TH` scoped to its column,
   empty cells fill gaps, and the table carries an `/Alt` summary of column/row count and header
-  text.
+  text. In a table without rules between its rows, where cells wrap onto several lines, a row
+  starts where the first column starts a new entry (its wrapped lines hang indented, or carry on
+  mid-phrase), and the other lines join the row above, so "2007 (United / States)" is one cell.
 - **Formulas** `/Formula` — displayed equations, found by the layout model or marked with `m`.
   Undescribed, a screen reader reads the formula's own text; the editor takes a description in
   words exactly as it does for a picture (Enter or Space on the formula), which becomes its `/Alt`.
@@ -162,8 +178,10 @@ Found five ways:
 
 A picture the model boxed is kept whether or not anything captions it: an uncaptioned one goes to
 the editor to be described. A pixel region is a guess — on a page of plans it is mostly hatching —
-so it is kept only if the document captions it somewhere; uncaptioned, it is treated as part of the
-page and can be marked by hand with `f`. Declared images are always kept.
+so it is kept only if the document captions it somewhere, or if it covers at least 5% of the page
+(a comic's panels are captioned by nothing). Smaller and uncaptioned, it is treated as part of the
+page and can be marked by hand with `f`. Declared images are always kept. Lines stacked inside a
+guessed picture (a speech balloon, a caption box) are read as text, not held out as its labels.
 
 Alt text comes from the document's own caption, including when the caption is split across a page
 break. Captions are recognised by a wide label set (`Fig.`, `Figure`, `Plate`, `Chart`, `Diagram`,
@@ -217,8 +235,8 @@ worse than none. The draft is only a start; what the music is — the piece, the
 shows — is the person's to add.
 
 **Not read.** Text turned sideways in a margin (a download stamp, an archive identifier — rejoined
-first, since it arrives one character per line), lines made only of icon glyphs, and text set off
-the page entirely are page furniture.
+first, since it arrives one character per line), lines made only of icon glyphs, a rule typed out
+as a row of one mark ("------"), and text set off the page entirely are page furniture.
 
 **Specks.** On a scanned page, a line the recogniser read out of dirt is not read and not listed in
 the editor: a line of nothing but marks ("|", "~", "."), or one or two characters the layout model
@@ -268,7 +286,8 @@ beside it is left alone unless that element itself changed. Page pictures are fe
 when you turn to a page (the pages either side are decoded ahead), not re-sent with every save.
 
 **Tab order:** each failing check in the report, then element 1 of the document, with nothing in
-between. Other controls are out of the natural order and reached from what they belong to — a fix
+between. A page with nothing to read on it still has one Tab stop, saying so, so Tab carries on
+to the next page instead of leaving the document. Other controls are out of the natural order and reached from what they belong to — a fix
 field from its `!` row, the pager from `[` and `]`. **Download PDF** and **Do another document**
 are the last two stops.
 
@@ -292,23 +311,23 @@ figure out of the reading order; other type keys type instead.
 | key | | key | | key | |
 |---|---|---|---|---|---|
 | `p` | Paragraph | `q` | Block quote | `s` | Section |
-| `1`–`6` | Heading 1–6 | `c` | Caption | `d` | Division |
-| `f` | Figure | `t` | Table | `a` | Article |
-| `l` | List | `m` | Formula | `i` | Index |
-| `e` | Code | `o` | Form field | `n` | No structure |
-| `v` | Footnote | `x` | Not read | `[` `]` | Previous / next page |
-| `h` | Table header cell | `b` | Table data cell | | |
+| `1`–`6` | Heading 1–6 | `c` | Caption | `a` | Article |
+| `f` | Figure | `t` | Table | `i` | Index |
+| `l` | List | `m` | Formula | `n` | No structure |
+| `e` | Code | `o` | Form field | `v` | Footnote |
+| `x` | Not read | `[` `]` | Previous / next page | | |
+| `h` | Table header cell | `d` | Table data cell | | |
 
 `Insert` adds a new element right after the one you are on in the reading order: an empty frame
 just below it, which becomes whatever
 lines you drag it (or `Shift`+arrow it) over — including lines Rebind set aside as page furniture.
 On something marked not read, `Insert` puts it back instead. `Delete` deletes the element (marks it
 not read) and moves on; `Backspace` does the same and steps back, for clearing a run of junk
-upwards. Deleting an element you inserted just removes its frame. On a table row, `h`/`b` set the
+upwards. Deleting an element you inserted just removes its frame. On a table row, `h`/`d` set the
 row, `Insert` adds a new row below it, `Delete` takes that row out of the table, and every other
 type key retypes the whole table. (`+` and `−` still work as `Insert` and `Delete`.)
 
-**Building a table by hand.** Mark each cell with `h` or `b`. A run of consecutive cells becomes one
+**Building a table by hand.** Mark each cell with `h` or `d`. A run of consecutive cells becomes one
 `/Table`: rows from vertical overlap (so a wrapped cell stays in its row), columns from clustered left
 edges, empty cells to keep the grid regular. A header cell is scoped to its column when its whole row
 is headers, otherwise to its row.
@@ -343,7 +362,7 @@ kept and shown as well; what you type replaces it.
 untagged content is a conformance failure. Page furniture and text inside figures are drawn hatched
 as "not read"; giving one a type puts it back into the reading order.
 
-On a detected table's row, only `h` (Header cell) and `b` (Data cell) are offered, letting you correct which
+On a detected table's row, only `h` (Header cell) and `d` (Data cell) are offered, letting you correct which
 rows are headers without retagging the whole table. The key legend is the element's own, not the
 document's: land on a row and it lists those two and nothing else, because nothing else answers
 there.
@@ -362,7 +381,7 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.9.1.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.10.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:

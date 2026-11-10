@@ -7,6 +7,7 @@ from pikepdf import Array, Dictionary, Name, String
 
 from .edits import CELL_TAGS, GROUPING_TAGS, Edits
 from .extract import TextLine
+from .overlay import readable
 from .tables import _cell_table, _table_row_groups, _tagged_table
 
 
@@ -143,7 +144,7 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
             figure = spanning("Figure", document_elem, indices)
             # Never fabricated: a figure made out of text is described by that text unless the
             # person typed something better, which is what the editor's description box is for.
-            figure.Alt = String(entry.get("alt")
+            figure.Alt = readable(entry.get("alt")
                                 or " ".join(lines[i].text.strip() for i in indices).strip()
                                 or "Figure")
             tops.append(figure)
@@ -158,7 +159,7 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
             # A formula's description in words, where the person gave one. Without it a screen
             # reader reads the formula's own text, which is all Rebind knows of it.
             if kind == "Formula" and entry.get("alt"):
-                elem.Alt = String(entry["alt"])
+                elem.Alt = readable(entry["alt"])
             tops.append(elem)
     close_cells()
 
@@ -270,7 +271,7 @@ def _build_outline(pdf: pikepdf.Pdf, heading_entries: list[tuple[int, pikepdf.Ob
             stack.pop()
         parent = stack[-1][1] if stack else outlines
         item = pdf.make_indirect(Dictionary(
-            Title=String(title), Parent=parent,
+            Title=readable(title), Parent=parent,
             Dest=Array([Dictionary(S=Name.XYZ, SD=elem)]),
         ))
         append_child(parent, item)
@@ -340,7 +341,7 @@ class StructTree:
         figure_elems = [
             pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.Figure, P=self.document, Pg=page.obj, K=fmcid,
-                Alt=String(alt),
+                Alt=readable(alt),
                 A=Dictionary(O=Name.Layout, BBox=Array([round(v, 2) for v in bbox]))))
             for fmcid, alt, bbox, _anchor in figure_specs
         ]
@@ -393,11 +394,11 @@ class StructTree:
             link_elem = self.pdf.make_indirect(Dictionary(
                 Type=Name.StructElem, S=Name.Link, P=self.document,
                 K=Array([Dictionary(Type=Name.OBJR, Obj=annot, Pg=page.obj)]),
-                Alt=String(link_description),
+                Alt=readable(link_description),
             ))
             # Also set directly on the annotation's own /Contents -- a real sample kept failing
             # Adobe Acrobat's "Tagged annotations" check with /Alt on the struct element alone.
-            annot.Contents = String(link_description)
+            annot.Contents = readable(link_description)
             annot.StructParent = self.next_parent_key
             self.parent_tree.append(self.next_parent_key)
             self.parent_tree.append(link_elem)

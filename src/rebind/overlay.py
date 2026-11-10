@@ -80,6 +80,12 @@ def _overlay_text(text: str) -> str:
                    for ch in text).translate(LIGATURES)
 
 
+def readable(text: str) -> String:
+    """A string a person reads (a description, a bookmark's title), made as the text layer's text
+    is (`_overlay_text`): PDF/UA-2 fails a private-use character in one too (8.6)."""
+    return String(_overlay_text(text))
+
+
 class OverlayFont:
     """The font the invisible text layer is drawn in: one code per character the document uses,
     and a ToUnicode map from each code to its character, so any character survives.

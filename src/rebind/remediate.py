@@ -57,7 +57,6 @@ from .existing import (
     saved_corrections,
 )
 from .extract import TextLine, extract_pages
-from .glyphs import repair_fonts
 from .figures import (
     PageFigures,
     _figure_anchor,
@@ -69,6 +68,7 @@ from .figures import (
     describe_figures,
     find_figures,
 )
+from .glyphs import repair_fonts
 from .headings import _structure_roles
 from .layout import order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
@@ -93,6 +93,7 @@ from .pagecache import PageCache, file_key
 from .plan import _apply_frames, _frame_in_points, _merge_bare_markers, plan_page
 from .profile import build_profile
 from .structure import StructTree
+from .turn import move_box, restore_turns, upright
 from .validate import self_check_pdf_ua2
 
 # The page editor shows each page as a picture -- elements are selected on it and their text read
@@ -135,11 +136,13 @@ class RemediationResult:
 
 
 def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int, profile,
-               known_pictures: tuple = ()) -> tuple[list[TextLine], bool, object,
-                                                     layout_model.PageHints]:
+               known_pictures: tuple = (), reread: bool = False,
+               ) -> tuple[list[TextLine], bool, object, layout_model.PageHints]:
     """The page's text lines in reading order, whether OCR was used, the page's layout, and what
     the layout model saw on it (`layout_model.hints_for`; empty when there is no model).
     `known_pictures` are boxes a person or the document itself has said hold a picture.
+    `reread` is for a scan that came with an OCR layer of its own: it is recognised again, and what
+    that layer missed is added to it (`_missed_by`).
 
     Reading order comes from `layout.order_page`'s recursive XY-cut, NOT from a top-to-bottom sort.
     On a single-column page the two agree. On a two-column page they emphatically do not: a
@@ -149,20 +152,29 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int, profile,
     pipeline was still sorting by y; that gap is what `review.page_order` now reports on.
     """
     image = None
+
+    def recognised() -> list[TextLine]:
+        # Recognised once per page: a rebuild for a saved correction reads the same scan again.
+        nonlocal image
+        stamp = file_key(source)
+        key = stamp and stamp + (src_page.number, dpi)
+        found = _recognised.get(key)
+        if found is None:
+            image = render_page_to_image(source, src_page.number, dpi=dpi)
+            found = _recognised.put(key, recognize(
+                image, page_number=src_page.number, page_width=src_page.width,
+                page_height=src_page.height, engine=engine))
+        return list(found)
+
     if src_page.has_text_layer:
         lines = list(src_page.lines)
         used_ocr = False
+        if reread:
+            missed = _missed_by(lines, recognised())
+            lines += missed
+            used_ocr = bool(missed)
     else:
-        # Recognised once per page: a rebuild for a saved correction reads the same scan again.
-        stamp = file_key(source)
-        key = stamp and stamp + (src_page.number, dpi)
-        lines = _recognised.get(key)
-        if lines is None:
-            image = render_page_to_image(source, src_page.number, dpi=dpi)
-            lines = _recognised.put(key, recognize(
-                image, page_number=src_page.number, page_width=src_page.width,
-                page_height=src_page.height, engine=engine))
-        lines = list(lines)
+        lines = recognised()
         used_ocr = True
     page = replace(src_page, lines=tuple(lines))
     # Figure regions are found before ordering, not after, so a diagram's callout labels can be
@@ -176,6 +188,34 @@ def _lines_for(source: Path, src_page, engine: OcrEngine, dpi: int, profile,
     ordered = _merge_bare_markers([placed.line for placed in layout.lines])
     # Hints are keyed by line identity, and merging a bare bullet into its item makes a new line.
     return ordered, used_ocr, layout, layout_model.hints_for(ordered, regions)
+
+
+# A recognised line is already in a scan's own OCR layer when a line of that layer covers this much
+# of it (or it of the layer's line).
+ALREADY_READ_SHARE = 0.3
+MISSED_MIN_CONFIDENCE = 0.8
+
+
+def _missed_by(layer: list[TextLine], recognised: list[TextLine]) -> list[TextLine]:
+    """The lines Rebind's recogniser found on a scan that the scan's own OCR layer does not have.
+
+    An OCR layer that arrives with a scan is kept, since it may well be better than Rebind's. But
+    it is not always whole: a graphic novel's came with every caption box and not one speech
+    balloon drawn over the artwork, and trusting it left the balloons unread."""
+    def shared(a, b) -> float:
+        w = min(a[2], b[2]) - max(a[0], b[0])
+        h = min(a[3], b[3]) - max(a[1], b[1])
+        if w <= 0 or h <= 0:
+            return 0.0
+        smaller = min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1]))
+        return w * h / smaller if smaller > 0 else 0.0
+
+    # Only what was read with confidence and says something: on artwork the layer rightly left
+    # alone, the recogniser also finds hatching it reads as "~ .!.".
+    return [line for line in recognised
+            if (line.ocr_confidence or 0.0) >= MISSED_MIN_CONFIDENCE
+            and sum(ch.isalnum() for ch in line.text) >= 2
+            and not any(shared(line.bbox, have.bbox) > ALREADY_READ_SHARE for have in layer)]
 
 
 @dataclass
@@ -504,12 +544,21 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     described = existing_descriptions(source)
     source = original_of(source)
     source_pages = list(extract_pages(source))
+    # A page printed sideways is read, drawn over and shown in the editor turned upright, and
+    # written turned back (`turn`).
+    source, source_pages, turns, moved = upright(source, source_pages)
+    described = {number: [replace(item, bbox=move_box(moved[number], item.bbox))
+                          for item in items] if number in moved else items
+                 for number, items in described.items()}
     profile = build_profile(source_pages)
 
     engine = OcrEngine()
     ocr_pages: list[int] = []
     empty_pages: list[int] = []
     added_layer = False
+
+    # A scan that arrived with an OCR layer of its own.
+    invisible_pages = _invisible_text_pages(source)
 
     # Pass one: recover each page's text lines (from its text layer or OCR) in reading order.
     per_page: list[tuple] = []
@@ -524,7 +573,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
                        for key, frame in edits.frames.items()
                        if _is_figure_id(key) and key.startswith(f"p{src_page.number}")
                        and not key[len(f"p{src_page.number}")].isdigit())
-        lines, used_ocr, layout, hints = _lines_for(source, src_page, engine, dpi, profile, known)
+        lines, used_ocr, layout, hints = _lines_for(source, src_page, engine, dpi, profile, known,
+                                                    reread=src_page.number in invisible_pages)
         layouts.append((src_page, layout))
         page_hints.append(hints)
         if used_ocr and lines:
@@ -560,7 +610,6 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     # original, uncorrected colours.
     render_source = source
     recoloured = 0
-    invisible_pages = _invisible_text_pages(source)
     if darken_contrast:
         corrections = recolor.corrections_for(
             contrast.measure(source, source_pages, skip_pages=invisible_pages))
@@ -600,7 +649,8 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         _framed_pictures(figs, edits.frames, src_page)
         # What a person typed here wins over what the document already said, and either over a
         # caption found near the picture.
-        describe_figures(figs, lines, {**carried, **alt_texts}, document_captions, edits.removed)
+        describe_figures(figs, lines, {**carried, **alt_texts}, document_captions, edits.removed,
+                         src_page.width * src_page.height)
         rebuild = (_has_marked_content(page) or _has_unmappable_glyphs(lines)
                    or _has_unembedded_font(page))
         page_image = full_render() if rebuild or figs.boxes else None
@@ -689,6 +739,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     font.finish()
     _set_metadata(pdf, title=title, lang=lang)
     # So the file can be opened in Rebind again and carry on where the person left off.
+    restore_turns(pdf, turns)
     save_corrections(pdf, {"version": 1, "edits": {**edits.to_payload(), "alts": alt_texts}})
     pdf.save(target, min_version="2.0")   # PDF/UA-2 requires a PDF 2.0 base (ISO 32000-2)
     pdf.close()

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import pikepdf
-from pikepdf import Array, Dictionary, Name, String
+from pikepdf import Array, Dictionary, Name
 
 from .extract import TextLine
+from .overlay import readable
 
 # Two cells are in one column when they overlap across by more than this share of the narrower.
 COLUMN_OVERLAP_SHARE = 0.25
@@ -20,7 +21,18 @@ SECOND_HEADER_FILL = 0.8
 
 
 def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextLine]]]:
-    """Group a table's cells (mcid, line) into rows by vertical band, each row sorted left to right."""
+    """Group a table's cells (mcid, line) into rows: its printed lines (`_printed_lines`), with a
+    row's wrapped lines gathered into it (`_wrapped_rows`)."""
+    return _wrapped_rows(_printed_lines(cells))
+
+
+def _in_line_order(cells: list[tuple[int, TextLine]]) -> list[tuple[int, TextLine]]:
+    """A row's cells printed line by printed line, each left to right."""
+    return [cell for line in _printed_lines(cells) for cell in line]
+
+
+def _printed_lines(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextLine]]]:
+    """Group a table's cells (mcid, line) by vertical band, each band sorted left to right."""
     if not cells:
         return []
     heights = sorted(ln.bbox[3] - ln.bbox[1] for _mcid, ln in cells)
@@ -41,6 +53,76 @@ def _table_rows(cells: list[tuple[int, TextLine]]) -> list[list[tuple[int, TextL
     if current:
         rows.append(current)
     return [sorted(row, key=lambda cl: cl[1].bbox[0]) for row in rows]
+
+
+# A wrapped line of a first-column cell is indented under its first line by more than this share of
+# its height (a hanging indent), or follows a line ending in one of these.
+HANGING_INDENT = 0.25
+_CARRIES_ON = (",", "-", "‐", "–", "/", "&", " and", " of")
+
+
+def _carries_on(first: TextLine, above: TextLine, line: TextLine) -> bool:
+    """Whether `line` is a wrapped continuation of the first-column cell that began with `first`
+    and was last at `above`: indented under it, or the text plainly not finished."""
+    if not any(ch.isalpha() for ch in line.text + above.text):
+        return False        # a column of numbers, one to a row
+    height = line.bbox[3] - line.bbox[1]
+    if above.bbox[1] - line.bbox[3] > height:
+        return False
+    text = above.text.rstrip()
+    return (line.bbox[0] - first.bbox[0] > HANGING_INDENT * height
+            or text.endswith(_CARRIES_ON) or text.count("(") > text.count(")")
+            or line.text.lstrip()[:1].islower())
+
+
+def _wrapped_rows(lines: list[list[tuple[int, TextLine]]]) -> list[list[tuple[int, TextLine]]]:
+    """A table's printed lines gathered into its rows, where its cells wrap onto several lines.
+
+    A table without rules between its rows (a journal's summary of studies) runs each row's cells
+    down as many lines as each needs. Read a printed line at a time, every wrapped line became a
+    row of its own: "2007 (United" a row, "States)" another. A new row begins where the first
+    column begins a new entry; the other lines are the row above carrying on. Only a table that
+    shows a first-column entry wrapping (`_carries_on`) is read this way -- one with a line per
+    row, some with an empty first cell, keeps them as rows of their own. Each row's cells come
+    line by line, so a wrapped cell's lines keep their order.
+    """
+    if len(lines) < 3:
+        return lines
+    columns = _column_bands([line.bbox for row in lines for _key, line in row])
+    if len(columns) < 3:
+        return lines
+
+    def first_column(row):
+        return [line for _key, line in row
+                if _columns_of(line.bbox[0], line.bbox[2], columns)[0] == 0]
+
+    def spans_alone(row) -> bool:      # a section heading across the table ("Randomized trials")
+        first, last = _columns_of(row[0][1].bbox[0], row[0][1].bbox[2], columns)
+        return len(row) == 1 and last > first
+
+    starts = [first_column(row) for row in lines]
+    carried = [False] * len(lines)
+    entry: TextLine | None = None       # the first line of the current first-column entry
+    for k, row in enumerate(lines):
+        if not starts[k]:
+            continue
+        if entry is not None and starts[k - 1] and not spans_alone(lines[k - 1]):
+            carried[k] = _carries_on(entry, starts[k - 1][-1], starts[k][0])
+        if not carried[k]:
+            entry = starts[k][0]
+    if not any(carried):
+        return lines
+    rows: list[list[tuple[int, TextLine]]] = []
+    for k, row in enumerate(lines):
+        alone = spans_alone(row) or (k and spans_alone(lines[k - 1]))
+        # A row that has not reached its first column yet (column labels stacked over a short
+        # first label) takes the line that does.
+        heading = len(rows) == 1 and not any(first_column(rows[0]))
+        if rows and not alone and (carried[k] or not starts[k] or heading):
+            rows[-1].extend(row)
+        else:
+            rows.append(list(row))
+    return rows
 
 
 def _layout(rows: list[list[TextLine]]):
@@ -247,13 +329,13 @@ def _tagged_table(pdf: pikepdf.Pdf, rows: list[tuple[str, list[tuple[int, TextLi
         trs.append(tr)
     table.K = Array(trs)
     summary = _table_summary(len(columns), row_count, header_texts)
-    table.Alt = String(summary)
+    table.Alt = readable(summary)
     # Also the dedicated /Summary Table attribute (ISO 32000-2's own mechanism for this, the same
     # /A <</O /Table ...>> pattern already used for /Scope on header cells) -- confirmed necessary
     # on a real sample: Adobe Acrobat's "Tables must have a summary" check kept failing with /Alt
     # alone, even though /Alt is the generic PDF/UA alternate-description mechanism and should have
     # been enough on its own.
-    table.A = Dictionary(O=Name.Table, Summary=String(summary))
+    table.A = Dictionary(O=Name.Table, Summary=readable(summary))
     return table
 
 
@@ -325,8 +407,8 @@ def _cell_table(pdf: pikepdf.Pdf, cells: list[tuple[str, list[int]]], lines: lis
         trs.append(tr)
     table.K = Array(trs)
     summary = _table_summary(len(columns), len(rows), header_texts)
-    table.Alt = String(summary)
-    table.A = Dictionary(O=Name.Table, Summary=String(summary))
+    table.Alt = readable(summary)
+    table.A = Dictionary(O=Name.Table, Summary=readable(summary))
     return table
 
 
@@ -349,7 +431,7 @@ def _table_row_groups(entry: dict, lines: list[TextLine]) -> list[tuple[str, lis
     (`_table_rows`), numbered `{table id}r{n}` from the top.
     """
     if "rows" in entry:
-        return [(row_id, sorted(members, key=lambda i: lines[i].bbox[0]))
+        return [(row_id, [i for i, _line in _in_line_order([(i, lines[i]) for i in members])])
                 for row_id, members in entry["rows"]]
     cells = [(i, lines[i]) for i in range(entry["first"], entry["last"] + 1)]
     return [(f"{entry['id']}r{n}", [i for i, _line in row])

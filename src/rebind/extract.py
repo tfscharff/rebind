@@ -10,6 +10,7 @@ Pages are yielded lazily. Nothing here retains more than one page at a time, whi
 
 from __future__ import annotations
 
+import re
 from bisect import bisect_left, bisect_right
 from collections import Counter
 from collections.abc import Iterator
@@ -104,6 +105,9 @@ class Page:
     # confirmed on a real sample where six of eight figures are drawn purely with curve operators,
     # so an image-only search finds two figures and silently misses the rest.
     drawings: tuple[ImageRegion, ...] = ()
+    # How far most of the page's text is turned, clockwise as the page is shown: 90 for a table
+    # printed sideways to be read with the page turned, 0 for an ordinary page (`page_turn`).
+    turn: int = 0
 
     @property
     def has_text_layer(self) -> bool:
@@ -344,6 +348,84 @@ def _join_split_lines(raws: list[_Raw]) -> list[_Raw]:
         del raws[b]
 
 
+# A paragraph's first letter set this many times the size of the rest of its line is a drop cap.
+DROP_CAP_SCALE = 1.8
+
+
+def _char_size(char: LTChar) -> float:
+    return char.y1 - char.y0
+
+
+def _close_drop_caps(raws: list[_Raw]) -> list[_Raw]:
+    """Put a paragraph's large first letter back on the word it begins.
+
+    pdfminer groups a drop cap with whichever line sits level with the middle of it -- the third
+    line of the paragraph, as often as the first -- or leaves it a line of its own, with a space
+    after it for the gap it leaves: a screen reader said "B reastfeeding". So the cap is taken off
+    whatever line it was put in and joined to the line beside its top. "A" and "I" can be words of
+    their own, but a paragraph opens with "After", "As", "In" or "It" far more often than with
+    either, so they are joined too -- unless the page uses the rest ("study") as a word of its own
+    elsewhere, and never the two together.
+    """
+    words: dict[str, int] = {}
+    for raw in raws:
+        for word in re.findall(r"[A-Za-z']+", raw.text):
+            words[word.lower()] = words.get(word.lower(), 0) + 1
+
+    def joined(letter: str, rest: str) -> bool:
+        if letter.upper() not in ("A", "I"):
+            return True
+        word = re.match(r"[A-Za-z']*", rest).group(0).lower()
+        # The rest counts once for this very line; more is the page using it as a word.
+        return not (word and words.get(word, 0) > 1 and not words.get(letter.lower() + word))
+
+    def is_cap(char: LTChar, others: list[LTChar]) -> bool:
+        sizes = sorted(_char_size(c) for c in others if c.get_text().strip())
+        return (char.get_text().isalpha() and char.get_text().isupper() and bool(sizes)
+                and _char_size(char) >= DROP_CAP_SCALE * sizes[len(sizes) // 2])
+
+    caps: list[_Raw] = []
+    rest: list[_Raw] = []
+    for raw in raws:
+        first = raw.chars[0] if raw.chars else None
+        if first is None or first[:2] != (0, 1) or len(raw.chars) < 2 or not is_cap(
+                first[2], [c for _s, _e, c in raw.chars[1:]]):
+            rest.append(raw)
+            continue
+        char = first[2]
+        caps.append(_Raw(raw.text[0], [(0, 1, char)], (char.x0, char.y0, char.x1, char.y1)))
+        lead = len(raw.text[1:]) - len(raw.text[1:].lstrip())
+        kept = [(s - 1 - lead, e - 1 - lead, c) for s, e, c in raw.chars[1:]
+                if c.get_text().strip()]
+        rest.append(_Raw(raw.text[1 + lead:], kept,
+                         (min(c.x0 for _s, _e, c in kept), min(c.y0 for _s, _e, c in kept),
+                          max(c.x1 for _s, _e, c in kept), max(c.y1 for _s, _e, c in kept)),
+                         raw.turn))
+    caps += [raw for raw in rest if len(raw.chars) == 1 and len(raw.text) == 1]
+    out = [raw for raw in rest if not any(raw is cap for cap in caps)]
+    for cap in caps:
+        char = cap.chars[0][2]
+        height = cap.bbox[3] - cap.bbox[1]
+        # Measured from the characters: pdfminer's box for the line beside a cap can reach back
+        # over the cap itself.
+        beside = [raw for raw in out if len(raw.chars) > 1
+                  and -1.0 <= min(c.x0 for _s, _e, c in raw.chars) - cap.bbox[2] <= height
+                  and cap.bbox[1] < raw.bbox[3] <= cap.bbox[3] + height / 4]
+        if not beside or not is_cap(char, [c for raw in beside for _s, _e, c in raw.chars]):
+            out.append(cap)
+            continue
+        line = max(beside, key=lambda raw: raw.bbox[3])
+        space = "" if joined(cap.text, line.text) else " "
+        offset = 1 + len(space)
+        merged = _Raw(cap.text + space + line.text,
+                      [(0, 1, char)] + [(s + offset, e + offset, c) for s, e, c in line.chars],
+                      (min(cap.bbox[0], line.bbox[0]), min(cap.bbox[1], line.bbox[1]),
+                       max(cap.bbox[2], line.bbox[2]), max(cap.bbox[3], line.bbox[3])),
+                      line.turn)
+        out = [merged if raw is line else raw for raw in out]
+    return out
+
+
 def _turn(container) -> int:
     """+1 for a one-character line printed turned clockwise (read downwards), -1 turned
     anticlockwise (read upwards), 0 for anything else."""
@@ -356,9 +438,10 @@ def _turn(container) -> int:
     return 1 if b < 0 else -1
 
 
-# Sideways text comes out one character per line; this many in a column are a line turned on its
-# side rather than a column of separate marks.
-MIN_ROTATED_CHARS = 4
+# Sideways text comes out one character per line; this many in a column, touching and turned the
+# same way, are a line turned on its side. Two is enough: a folio printed along the edge of a
+# sideways page ("689") is three, and was read as three one-digit paragraphs.
+MIN_ROTATED_CHARS = 2
 
 
 def _join_rotated(lines: list[TextLine], turns: dict[int, int]) -> list[TextLine]:
@@ -463,8 +546,44 @@ def _collect_figure(
     return found_text, found_image
 
 
-def extract_pages(source: Path) -> Iterator[Page]:
-    """Yield one `Page` per page of the source, lazily."""
+def _direction(char: LTChar) -> int:
+    """Which way a character is turned on the page as shown, in degrees clockwise: 0, 90, 180 or
+    270. pdfminer's matrix already includes the page's own /Rotate."""
+    a, b = char.matrix[:2]
+    if abs(b) > abs(a):
+        return 90 if b < 0 else 270
+    return 180 if a < 0 else 0
+
+
+# A page is turned when most of its text is: a running head and a folio stay upright over a
+# landscape table, and a sideways stamp in the margin of an ordinary page is a few dozen letters.
+TURNED_SHARE = 0.6
+MIN_TURNED_CHARS = 40
+
+
+def page_turn(layout) -> int:
+    """How far most of a pdfminer page's characters are turned (`_direction`), or 0."""
+    counts: Counter = Counter()
+    stack = list(layout)
+    while stack:
+        obj = stack.pop()
+        if isinstance(obj, LTChar):
+            if obj.get_text().strip():
+                counts[_direction(obj)] += 1
+        elif isinstance(obj, (LTTextContainer, LTFigure)):
+            stack.extend(obj)
+    total = sum(counts.values())
+    if not total:
+        return 0
+    turn, most = max(((t, n) for t, n in counts.items() if t), key=lambda tn: tn[1],
+                     default=(0, 0))
+    return turn if most >= MIN_TURNED_CHARS and most >= TURNED_SHARE * total else 0
+
+
+def extract_pages(source: Path, only: set[int] | None = None,
+                  corrected: dict | None = None) -> Iterator[Page]:
+    """Yield one `Page` per page of the source, lazily -- or just the pages numbered in `only`.
+    `corrected` is the source's misreported glyphs, when already known (`glyphs.corrections`)."""
     source = Path(source)
     if not source.is_file():
         raise ExtractionError(f"no such file: {source}")
@@ -475,12 +594,18 @@ def extract_pages(source: Path) -> Iterator[Page]:
         # it, characters inside a figure arrive as ungrouped `LTChar`s that `_collect_figure`
         # cannot turn into `TextLine`s, and real text is misreported as an unrecoverable image
         # region -- a false provenance claim this project's invariants forbid.
-        layouts = _pdfminer_pages(str(source), laparams=LAParams(all_texts=True))
-        try:
-            corrected = glyph_corrections(source)
-        except Exception:  # noqa: BLE001 -- a check of the fonts failing must not stop the reading:
-            corrected = {}  # an encrypted file, say, is reported below by pdfminer as it always was
-        for index, layout in enumerate(layouts, start=1):
+        if only is not None and not only:
+            return
+        numbers = sorted(only) if only is not None else None
+        layouts = _pdfminer_pages(str(source), laparams=LAParams(all_texts=True),
+                                  page_numbers=[n - 1 for n in numbers] if numbers else None)
+        if corrected is None:
+            try:
+                corrected = glyph_corrections(source)
+            except Exception:  # noqa: BLE001 -- a check of the fonts failing must not stop the
+                corrected = {}  # reading: an encrypted file, say, is reported below by pdfminer
+        for position, layout in enumerate(layouts, start=1):
+            index = numbers[position - 1] if numbers else position
             raws: list[_Raw] = []
             images: list[ImageRegion] = []
             drawings: list[ImageRegion] = []
@@ -509,7 +634,7 @@ def extract_pages(source: Path) -> Iterator[Page]:
                             bbox=(element.x0, element.y0, element.x1, element.y1),
                         )
                     )
-            raws = _join_split_lines(raws)
+            raws = _close_drop_caps(_join_split_lines(raws))
             lines = [_finish(raw, index) for raw in raws]
             turns = {id(line): raw.turn for line, raw in zip(lines, raws)}
             yield Page(
@@ -519,6 +644,7 @@ def extract_pages(source: Path) -> Iterator[Page]:
                 lines=tuple(_join_rotated(lines, turns)),
                 images=tuple(images),
                 drawings=tuple(drawings),
+                turn=page_turn(layout),
             )
     except PDFSyntaxError as exc:
         raise ExtractionError(f"{source} is not a readable PDF: {exc}") from exc

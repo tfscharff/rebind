@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from .extract import TextLine
 from .tables import _table_row_groups, default_header_rows
 
-
 # Stands in for an element's id where something inserted after a picture is read first on its page,
 # because the picture is. A picture is not an element of the plan, so `after` cannot name it there.
 READ_FIRST = "^"
@@ -91,8 +90,9 @@ class Edits:
 
         frames = {str(k): frame(v) for k, v in (payload.get("frames") or {}).items()}
         return cls(
-            tags={str(k): str(v) for k, v in (payload.get("tags") or {}).items()
-                  if allowed(str(v))},
+            tags={str(k): RETIRED_TAGS.get(str(v), str(v))
+                  for k, v in (payload.get("tags") or {}).items()
+                  if allowed(RETIRED_TAGS.get(str(v), str(v)))},
             removed={str(v) for v in (payload.get("removed") or [])},
             alts={str(k): str(v).strip() for k, v in (payload.get("alts") or {}).items()
                   if str(v).strip()},
@@ -127,9 +127,12 @@ class Edits:
 # worse than one tagged as ordinary paragraphs.
 CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Code", "Formula", "Form",
                 "Note")
-# /Part is not offered: it is a container with no behaviour of its own that /Sect and /Div do not
-# already have, so it was one more thing to choose between for no gain to a reader.
-GROUPING_TAGS = ("Sect", "Div", "Art", "Index", "NonStruct")
+# /Part and /Div are not offered: each is a container with no behaviour of its own, which a screen
+# reader announces as nothing at all -- a /Div holding a paragraph reads exactly as the paragraph.
+# They were one more thing to choose between for no gain to a reader. A /Div saved by an earlier
+# version is read back as the paragraph it always sounded like (`RETIRED_TAGS`).
+GROUPING_TAGS = ("Sect", "Art", "Index", "NonStruct")
+RETIRED_TAGS = {"Div": "P"}
 SPECIAL_TAGS = ("Figure", "Table", "L", "Caption")
 # A cell is never tagged where it stands -- a /TH or /TD is only legal inside a /TR inside a /Table.
 # A run of elements marked as cells is gathered into one table around them (`_cell_table`), which
@@ -163,11 +166,10 @@ TAG_KEYS = (
     ("t", "Table", "Table", "A grid of data. Rebind builds the rows, cells and column headers."),
     ("h", "TH", "Table header cell", "A cell that labels a row or column of a table. Cells marked "
                                      "one after another are built into one table."),
-    ("b", "TD", "Table data cell", "An ordinary cell of a table, read against its header. Cells "
+    ("d", "TD", "Table data cell", "An ordinary cell of a table, read against its header. Cells "
                                    "marked one after another are built into one table."),
     ("l", "L", "List", "A bulleted or numbered list."),
     ("s", "Sect", "Section", "A container grouping related content together."),
-    ("d", "Div", "Division", "A generic container, when nothing more specific fits."),
     ("a", "Art", "Article", "A self-contained piece of writing within the document."),
     ("i", "Index", "Index", "An index of terms and where they appear."),
     ("n", "NonStruct", "No structure", "Content that carries no structural meaning of its own."),
@@ -193,7 +195,7 @@ ARTIFACT_WHAT = ("Page furniture — on the page, but skipped by a screen reader
 ROW_TAG_KEYS = (
     ("h", "TH", "Header cell", "This row labels the columns beneath it — a screen reader reads "
                                "it before each data cell in its column."),
-    ("b", "TD", "Data cell", "An ordinary cell of the table, read against its column's header."),
+    ("d", "TD", "Data cell", "An ordinary cell of the table, read against its column's header."),
 )
 ROW_TAGS = tuple(tag for _key, tag, _label, _what in ROW_TAG_KEYS)
 

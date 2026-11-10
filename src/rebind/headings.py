@@ -51,6 +51,7 @@ MIN_HEADING_CHARS = 3
 # labels ("Ventral", "Baffles", "Air pump", ...) -- confirmed on the real 28-page sample, whose
 # recovered outline surfaced both a 4-fragment byline and a 20+-label diagram burst this way.
 MAX_HEADING_BURST_RUN = 2
+MAX_TITLE_LINES = 6
 
 
 def _ocr_heading_sizes(lines: list[TextLine]) -> dict[int, float]:
@@ -117,7 +118,7 @@ def _ocr_heading_sizes(lines: list[TextLine]) -> dict[int, float]:
     return result
 
 
-def _demote_heading_bursts(levels: list[int]) -> list[int]:
+def _demote_heading_bursts(levels: list[int], title_level: int | None = None) -> list[int]:
     """Demote a run of more than MAX_HEADING_BURST_RUN consecutive lines at the SAME exact raw
     heading level back to paragraphs (0).
 
@@ -132,6 +133,10 @@ def _demote_heading_bursts(levels: list[int]) -> list[int]:
     same horizontal overlap -- so exempting joins let the real sample's 3-fragment byline back into
     the outline as headings. The limit of 2 already admits a title set across two lines, which is
     the shape that actually occurs; a title needing three is demoted, which is the safe direction.
+
+    Except the title: a run at `title_level` -- the document's largest heading size, used by no
+    other line in it -- may run to MAX_TITLE_LINES. A journal's five-line article title was
+    demoted to a paragraph, and the authors' names under it, the next size down, became the H1.
     """
     out = list(levels)
     i, n = 0, len(out)
@@ -142,7 +147,8 @@ def _demote_heading_bursts(levels: list[int]) -> list[int]:
         j = i
         while j < n and out[j] == out[i]:
             j += 1
-        if j - i > MAX_HEADING_BURST_RUN:
+        limit = MAX_TITLE_LINES if out[i] == title_level else MAX_HEADING_BURST_RUN
+        if j - i > limit:
             for k in range(i, j):
                 out[k] = 0
         i = j
@@ -205,11 +211,22 @@ def _structure_roles(per_page: list[tuple], profile,
                 page_levels.append(profile.heading_level(style_of(line)) or 1)
             else:
                 page_levels.append(0)
-        if not page_is_ocr:
-            # OCR headings already carry their own isolation signal (_ocr_heading_sizes);
-            # only born-digital candidacy (style + length alone) needs the burst check too.
-            page_levels = _demote_heading_bursts(page_levels)
         raw.append(page_levels)
+
+    # OCR headings already carry their own isolation signal (_ocr_heading_sizes); only
+    # born-digital candidacy (style + length alone) needs the burst check too.
+    digital = [not (used_ocr or _is_ocr_over_scan(src_page)) for src_page, _l, used_ocr in per_page]
+    sizes = [lvl for page_levels, born in zip(raw, digital) if born for lvl in page_levels if lvl]
+    top = min(sizes, default=None)
+    # The title's size is used by one run of lines only; a size shared with anything else is not.
+    runs = 0
+    for page_levels, born in zip(raw, digital):
+        if born:
+            runs += sum(1 for k, lvl in enumerate(page_levels)
+                        if lvl == top and (k == 0 or page_levels[k - 1] != top))
+    title_level = top if runs == 1 else None
+    raw = [_demote_heading_bursts(page_levels, title_level) if born else page_levels
+           for page_levels, born in zip(raw, digital)]
 
     if not any(lvl for page in raw for lvl in page):
         return [["P"] * len(page_levels) for page_levels in raw]

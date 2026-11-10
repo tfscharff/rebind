@@ -223,6 +223,13 @@ li.check .at{font-family:var(--mono);font-size:.7rem;color:var(--muted);flex:non
   font-size:.68rem;line-height:1;padding:.15rem .28rem;background:var(--stamp);color:#fff;
   border-radius:2px 0 2px 0}
 .ob.fig{border-style:dashed}
+/* A page with nothing on it to read still takes a Tab stop, so walking the document with Tab
+   carries on across it instead of leaving the page for the browser's own controls. */
+.blankstop{position:absolute;left:12%;right:12%;top:42%;padding:.7rem .9rem;text-align:center;
+  border:1.5px dashed var(--muted);border-radius:6px;background:var(--paper);color:var(--muted);
+  font-size:.86rem}
+.blankstop:focus{outline:none;border-color:var(--stamp);color:var(--ink);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--stamp) 45%,transparent)}
 .ob.gone{border-color:var(--muted);background:repeating-linear-gradient(45deg,
   color-mix(in srgb,var(--muted) 18%,transparent) 0 4px,transparent 4px 8px)}
 .ob.gone i{background:var(--muted)}
@@ -870,7 +877,18 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var pageno=document.getElementById('pageno');
     var label='Page '+ed.page+' of '+(ed.pageList.length||1);
     if(pageno.textContent!==label) pageno.textContent=label;
-    patchBoxes(sheet, elementsOnPage());
+    var items=elementsOnPage();
+    patchBoxes(sheet, items);
+    var blank=document.getElementById('blankstop');
+    if(!items.length && !blank){
+      blank=document.createElement('div');
+      blank.id='blankstop'; blank.className='blankstop'; blank.tabIndex=0;
+      blank.setAttribute('role','note');
+      blank.textContent='Nothing on this page is read. Tab goes on to the next page.';
+      sheet.appendChild(blank);
+    }else if(items.length && blank){
+      blank.remove();
+    }
   }
 
   // The boxes over the page, changed in place when the page holds the same elements as before (the
@@ -1301,7 +1319,22 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var boxes=document.querySelectorAll('.ob');
     var target=landOnLast? boxes[boxes.length-1] : boxes[0];
     if(target) target.focus();
-    else noteWalked(page);   // a page with nothing on it is still a page you have been to
+    else{
+      noteWalked(page);   // a page with nothing on it is still a page you have been to
+      var blank=document.getElementById('blankstop');
+      if(blank) blank.focus();
+    }
+  }
+
+  // The stop on a page with nothing to read answers to the keys that leave a page.
+  function blankKey(ev){
+    var key=ev.key||'';
+    if(ev.ctrlKey||ev.metaKey||ev.altKey) return;
+    if(key==='Tab'){
+      if(turnPage(ev.shiftKey? -1 : 1, ev.shiftKey)) ev.preventDefault();
+    }else if(key==='['||key===']'){
+      ev.preventDefault(); turnPage(key===']'?1:-1);
+    }
   }
 
   function turnPage(step, landOnLast){
@@ -1339,6 +1372,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       if(e && frameable(e)) startFrameDrag(box, e, ev);
     });
     host.addEventListener('keydown', function(ev){
+      if(ev.target && ev.target.id==='blankstop'){ blankKey(ev); return; }
       var box=boxOf(ev.target), e=box && elementById(box.getAttribute('data-box'));
       if(!e) return;
       var boxes=Array.prototype.slice.call(document.querySelectorAll('.ob'));

@@ -68,7 +68,7 @@ def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
     assert body["artifact"]["key"] not in keys
     assert "Artifact" not in {entry["tag"] for entry in body["keys"]}
     row_keys = {entry["key"] for entry in body["rowKeys"]}
-    assert row_keys == {"h", "b"}
+    assert row_keys == {"h", "d"}
     assert {entry["tag"] for entry in body["rowKeys"]} == {"TH", "TD"}
     # The same keys mark a cell whether or not Rebind found its table.
     element_keys = {entry["tag"]: entry["key"] for entry in body["keys"]}
