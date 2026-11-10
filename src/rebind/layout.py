@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .extract import Page, TextLine
-from .model import BBox
+from .geometry import BBox, _center_in_any
 from .profile import TypographicProfile
 
 # Named thresholds, tuned against the 1905 Wheaton Bulletin (a real two-column OCR'd scan).
@@ -108,7 +108,7 @@ class Region:
 class PageLayout:
     lines: list[PlacedLine]
     flags: list[str]
-    # id() of each line that belongs to a detected table grid, so assemble can flag exactly those
+    # id() of each line that belongs to a detected table grid, so the plan can treat exactly those
     # paragraphs `table-suspected`. Detection runs per column region (see order_page), so a
     # multi-column page layout is not mistaken for a table.
     table_line_ids: set[int] = field(default_factory=set)
@@ -341,11 +341,6 @@ def _reading_order(region: Region) -> list[PlacedLine]:
     return out
 
 
-def _center_inside(bbox: BBox, boxes: tuple) -> bool:
-    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
-    return any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in boxes)
-
-
 def _splice_figure_text(placed: list[PlacedLine], in_figure: list[TextLine]) -> list[PlacedLine]:
     """Put a figure's own labels back into reading order at the height they sit at.
 
@@ -502,7 +497,7 @@ def order_page(page: Page, profile: TypographicProfile,
     artifacts: list[TextLine] = []
     in_figure: list[TextLine] = []
     for line in page.lines:
-        if _center_inside(line.bbox, figure_boxes):
+        if _center_in_any(line.bbox, figure_boxes):
             in_figure.append(line)
         elif (id(line) in furniture
               or profile.role_of(line, page_height=page.height) == "artifact"):
@@ -601,7 +596,7 @@ def detect_table_lines(lines: list[TextLine]) -> set[int]:
     """Return the ids() of lines that belong to a detected table grid, or an empty set.
 
     A region is a table when its lines form a grid: at least MIN_ROWS_FOR_TABLE rows that each hold
-    at least MIN_CELLS_PER_ROW side-by-side cells, landing on at least MIN_COLUMNS_FOR_TABLE column
+    several side-by-side cells, landing on at least MIN_COLUMNS_FOR_TABLE column
     positions that recur across rows. Conservative by construction -- prose (one long line per row)
     yields no side-by-side cells, and a single-column list yields no recurring second column.
 

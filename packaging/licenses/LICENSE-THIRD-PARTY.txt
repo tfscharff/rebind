@@ -11,7 +11,7 @@ engine, the PDF libraries, the local web server, and everything they depend on.
 Those are the work of other people, distributed under their own licenses, and
 this file discharges the obligation to tell you so.
 
-35 bundled distributions are covered, listed below. The full text of each
+37 bundled distributions are covered, listed below. The full text of each
 distribution's license is installed in the python/ subfolder of this directory.
 None of these libraries have been modified. Nothing in this file modifies the
 terms of any license it points to; where they differ, the license text governs.
@@ -22,6 +22,10 @@ terms of any license it points to; where they differ, the license text governs.
 anyio 4.14.2
     License:  MIT
     Text:     python/anyio.txt
+
+brotli 1.2.0
+    License:  MIT
+    Text:     python/brotli.txt
 
 certifi 2026.7.22
     License:  Mozilla Public License 2.0 (MPL 2.0)
@@ -131,6 +135,10 @@ requests 2.34.2
     License:  Apache Software License
     Text:     python/requests.txt
 
+setuptools 83.0.0
+    License:  MIT
+    Text:     python/setuptools.txt
+
 shapely 2.1.2
     License:  BSD License
     Text:     python/shapely.txt
@@ -159,11 +167,30 @@ uvicorn 0.51.0
     License:  BSD-3-Clause
     Text:     python/uvicorn.txt
 
-Bundled OCR models:
+The Python interpreter and its standard library (CPython), which the app runs on:
+    License:  PSF-2.0
+    Text:     LICENSE-Python.txt
+    Built into it, each under its own license:
+        zlib           LICENSE-zlib.txt
+        bzip2          LICENSE-bzip2.txt
+        liblzma (XZ)   LICENSE-xz-liblzma.txt
+        Expat          LICENSE-expat.txt
+        libffi         LICENSE-libffi.txt
+        OpenSSL        LICENSE-Apache-2.0.txt
+
+Libraries built into the distributions above are credited in the license text of the
+distribution that carries them, under python/: FreeType, libjpeg-turbo, libpng, libtiff
+and HarfBuzz in pillow; PDFium and what it is built from in pypdfium2; qpdf in pikepdf;
+GEOS in shapely; OpenBLAS and the GCC runtime in numpy. lxml carries two it does not
+include the texts of:
+        libxml2        LICENSE-libxml2.txt
+        libxslt        LICENSE-libxslt.txt
+
+Bundled models and fonts:
     PP-OCRv4 detection / recognition / classification models (PaddleOCR)
         License: Apache-2.0 (shipped inside rapidocr_onnxruntime/models/*.onnx)
     PP-DocLayoutV3 page-layout model (PaddleOCR, ONNX export by RapidAI/RapidLayout)
-        License: Apache-2.0 (models/pp_doc_layoutv3.onnx)
+        License: Apache-2.0 (models/pp_doc_layoutv3.onnx; text in LICENSE-Apache-2.0.txt)
     LaTeX-OCR (pix2tex) equation reader, Copyright (c) 2021 Lukas Blecher; ONNX export and the inference code adapted in rebind/formula_reader.py, Copyright (c) 2023 RapidAI
         License: MIT (models/latex_ocr/*; texts in LICENSE-LaTeX-OCR.txt and LICENSE-RapidLaTeXOCR.txt)
     DejaVu Sans, DejaVu Serif and DejaVu Serif Italic typefaces (reference glyphs for rebind/glyphs.py), (c) Bitstream; DejaVu changes public domain
@@ -175,3 +202,4 @@ REQUIRED CREDITS
 
     Portions of this software are copyright (c) 2006-2021 The FreeType
     Project (www.freetype.org). All rights reserved.
+    (The FreeType License: LICENSE-FreeType-FTL.txt.)

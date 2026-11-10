@@ -156,7 +156,7 @@ def _fonts(pdf: pikepdf.Pdf) -> list:
 # -- the checks ---------------------------------------------------------------------------------
 
 def _document_checks(pdf: pikepdf.Pdf, tree: _Tree, *, page_count: int,
-                     empty_pages: tuple, reading_order: dict, contrast: dict) -> list[Check]:
+                     empty_pages: tuple, contrast: dict) -> list[Check]:
     out: list[Check] = []
 
     encrypted = "/Encrypt" in pdf.trailer
@@ -587,16 +587,15 @@ def _heading_checks(tree: _Tree) -> list[Check]:
 
 
 def build_checklist(pdf_path: Path, *, page_count: int = 0, empty_pages: tuple = (),
-                    undescribed_figures: tuple = (), reading_order: dict | None = None,
+                    undescribed_figures: tuple = (),
                     contrast: dict | None = None) -> list[dict]:
     """Every Adobe accessibility rule, judged against the finished document at `pdf_path`."""
-    reading_order, contrast = reading_order or {}, contrast or {}
+    contrast = contrast or {}
     with pikepdf.open(pdf_path) as pdf:
         tree = _walk(pdf)
         checks = (
             _document_checks(pdf, tree, page_count=page_count or len(pdf.pages),
-                             empty_pages=empty_pages, reading_order=reading_order,
-                             contrast=contrast)
+                             empty_pages=empty_pages, contrast=contrast)
             + _page_content_checks(pdf, tree)
             + _form_checks(pdf)
             + _alt_text_checks(pdf, tree, undescribed_figures)

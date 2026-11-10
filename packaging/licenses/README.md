@@ -11,7 +11,7 @@ installed, not clicked through.
 | `LICENSE-THIRD-PARTY.txt` | The third-party notice installed with the app. **Generated** -- do not edit. |
 | `PYTHON-INVENTORY.md` | Table of every bundled Python distribution: name, version, license, text. **Generated** -- do not edit. |
 | `python/*.txt` | Each bundled distribution's own license text, copied verbatim from its wheel. **Generated** -- do not edit. |
-| `LICENSE-*.txt` | Canonical upstream license texts (Apache-2.0 for the OCR models/RapidOCR fallback; FreeType for the credit obligation; plus texts retained for native libraries bundled inside the Python wheels). Verbatim, not paraphrases. |
+| `LICENSE-*.txt` | Texts no wheel carries for itself: Python's own, the libraries built into Python (zlib, bzip2, liblzma, Expat, libffi), libxml2 and libxslt (inside lxml), Apache-2.0 (models, OpenSSL, wheels with no text of their own), FreeType (the credit it requires), and the equation reader and DejaVu fonts. Verbatim. Each is named in the generated notice; a test fails on one that is not. |
 
 The generated files come from `scripts/license_inventory.py`:
 
@@ -22,7 +22,9 @@ uv run python scripts/license_inventory.py --check   # verify only (used by pyte
 
 The script resolves the runtime dependency closure the bundle freezes (from the top-level runtime
 deps in `pyproject.toml`), writes each distribution's own license text, and **fails** if any
-bundled distribution has no discoverable license text. Rebind's own `LICENSE` is installed
+bundled distribution has no discoverable license text. It takes every license file a wheel ships,
+not only the first, so libraries built into a wheel (PDFium in pypdfium2, GEOS in shapely, qpdf in
+pikepdf) are credited through that wheel's text. Rebind's own `LICENSE` is installed
 separately as `LICENSE-Rebind.txt` by `rebind.iss`.
 
 ## Scope

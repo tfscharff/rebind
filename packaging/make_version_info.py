@@ -31,7 +31,7 @@ _TEMPLATE = """\
 # Why this file exists at all: a PyInstaller-built exe has NO version resource unless one is
 # supplied, and an executable with entirely empty metadata is a well-known antivirus heuristic
 # trigger. Rebind's binary already looks alarming to a scanner without help -- it is unsigned,
-# ~80 MB, packed by PyInstaller, ships native DLLs, and opens a local network listener on startup.
+# ~550 MB, packed by PyInstaller, ships native DLLs, and opens a local network listener on startup.
 # Blank Company/Product/Description fields on top of that is the profile of something a
 # managed-machine AV or an ASR rule declines to run, and Rebind's users are librarians on exactly
 # such machines. Metadata is not a fix for being unsigned, but it removes one free strike.

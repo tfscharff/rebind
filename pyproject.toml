@@ -1,6 +1,6 @@
 [project]
 name = "rebind"
-version = "1.11.0"
+version = "1.11.1"
 description = "Makes a PDF accessible (PDF/UA-2) on your own computer: text layer, reading order, structure and figure descriptions, with the page left as it is"
 readme = "README.md"
 license = "MIT"

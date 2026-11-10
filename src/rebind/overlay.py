@@ -9,6 +9,7 @@ import pikepdf
 from pikepdf import Array, Dictionary, Name, String
 
 from .extract import TextLine
+from .pagecache import PageCache, file_key
 
 # The invisible font's metrics, per 1000 of its size: every character the same width, and a descent
 # under the baseline. Neither is ever seen; they place the text over the print (`_text_placement`).
@@ -332,6 +333,10 @@ def _text_visibility(page: pikepdf.Page) -> tuple[bool, bool]:
     return (has_text, has_visible)
 
 
+# Worked out once per file: it reads every page's drawing, and every saved correction asked again.
+_invisible = PageCache()
+
+
 def _invisible_text_pages(source: Path) -> set[int]:
     """Page numbers whose text is *entirely* invisible -- a scan with an OCR layer over it.
 
@@ -342,9 +347,15 @@ def _invisible_text_pages(source: Path) -> set[int]:
     Rebind strips that layer anyway, so the measurement would describe a document that no longer
     exists by the time it is written.
     """
-    with pikepdf.open(source) as pdf:
-        return {number for number, page in enumerate(pdf.pages, start=1)
-                if _text_visibility(page) == (True, False)}
+    stamp = file_key(source)
+    key = stamp and stamp + ("invisible",)
+    known = _invisible.get(key)
+    if known is None:
+        with pikepdf.open(source) as pdf:
+            known = _invisible.put(key, frozenset(
+                number for number, page in enumerate(pdf.pages, start=1)
+                if _text_visibility(page) == (True, False)))
+    return set(known)
 
 
 def _strip_invisible_text(pdf: pikepdf.Pdf, page: pikepdf.Page) -> bool:

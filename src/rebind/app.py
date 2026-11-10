@@ -118,8 +118,7 @@ def _run_conversion(job: _Job, source: Path) -> None:
         # the librarian will be judged by, so every tick has to be earned by the actual bytes.
         job.checklist = build_checklist(
             result.pdf_path, page_count=result.page_count, empty_pages=result.empty_pages,
-            undescribed_figures=tuple(result.figures), reading_order=result.reading_order,
-            contrast=result.contrast)
+            undescribed_figures=tuple(result.figures), contrast=result.contrast)
         job.status = "done"
     except ExtractionError as exc:
         job.status = "error"

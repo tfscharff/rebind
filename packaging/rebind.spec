@@ -69,7 +69,7 @@ a = Analysis(
     noarchive=False,
 )
 # Drop OpenCV's FFmpeg videoio DLL (~30 MB): it backs cv2.VideoCapture, which nothing here uses.
-# RapidOCR and restoration only touch cv2 core/imgproc. This must run on `a.binaries` after
+# RapidOCR, the picture search and the music finder only touch cv2 core/imgproc. This must run on `a.binaries` after
 # Analysis, because PyInstaller's own cv2 hook re-adds the DLL after collect_all -- filtering the
 # collect_all output alone does not remove it. Match by name for robustness across OpenCV versions
 # (opencv_videoio_ffmpeg<ver>_64.dll).

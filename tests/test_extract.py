@@ -4,7 +4,7 @@ from pathlib import Path
 import pikepdf
 import pytest
 
-from rebind.extract import ExtractionError, extract_pages, source_is_tagged
+from rebind.extract import ExtractionError, extract_pages
 from tests.fixtures import born_digital_pdf, pdf_with_text_in_form_xobject
 
 
@@ -67,12 +67,6 @@ def test_missing_file_raises_extraction_error(tmp_path: Path):
         list(extract_pages(tmp_path / "nope.pdf"))
 
 
-def test_untagged_fixture_is_reported_as_untagged(tmp_path: Path):
-    source = born_digital_pdf("<p>text</p>", tmp_path / "u.pdf")
-
-    assert source_is_tagged(source) is False
-
-
 def _encrypted_pdf(tmp_path: Path) -> Path:
     target = tmp_path / "encrypted.pdf"
     pdf = pikepdf.new()
@@ -86,13 +80,6 @@ def test_encrypted_pdf_raises_extraction_error_on_extract(tmp_path: Path):
 
     with pytest.raises(ExtractionError):
         list(extract_pages(source))
-
-
-def test_encrypted_pdf_raises_extraction_error_on_is_tagged(tmp_path: Path):
-    source = _encrypted_pdf(tmp_path)
-
-    with pytest.raises(ExtractionError):
-        source_is_tagged(source)
 
 
 def test_text_inside_a_form_xobject_is_extracted_not_reported_as_an_image(tmp_path: Path):

@@ -1,3 +1,7 @@
+==============================================================================
+uvicorn-0.51.0.dist-info/licenses/LICENSE.md
+==============================================================================
+
 Copyright © 2017-present, [Encode OSS Ltd](https://www.encode.io/).
 All rights reserved.
 

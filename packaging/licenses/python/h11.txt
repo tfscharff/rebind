@@ -1,3 +1,7 @@
+==============================================================================
+h11-0.16.0.dist-info/licenses/LICENSE.txt
+==============================================================================
+
 The MIT License (MIT)
 
 Copyright (c) 2016 Nathaniel J. Smith <njs@pobox.com> and other contributors

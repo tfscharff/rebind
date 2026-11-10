@@ -166,43 +166,6 @@ def test_first_page_title_at_top_is_not_an_artifact():
     assert profile.role_of(title, page_height=792.0) != "artifact"
 
 
-def test_confidence_is_one_for_exact_body_match_and_lower_for_rare_styles():
-    lines = [line("body") for _ in range(50)]
-    lines.append(line("Odd", size=13.0))
-
-    profile = build_profile([page_of(lines)])
-
-    assert profile.confidence_for(line("body"), page_height=792.0) == 1.0
-    assert profile.confidence_for(line("Odd", size=13.0), page_height=792.0) < 1.0
-
-
-def test_heading_confidence_reflects_evidence_not_a_flat_value():
-    """Regression test for Finding 3: `confidence_for` used to return a flat 0.9 for every
-    heading style regardless of how much of the document it actually covers. A heading style
-    that recurs across many pages (a real section-heading style) must score higher than one seen
-    only a couple of characters anywhere in the document (a barely-evidenced guess)."""
-    lines = [line("body text " * 5) for _ in range(200)]
-    # A well-evidenced heading style: many section headings, each with substantial text.
-    for i in range(20):
-        lines.append(line(f"Section heading number {i}", size=18.0, bold=True))
-    # A barely-seen heading style: appears exactly once, three characters.
-    lines.append(line("Xyz", size=24.0, bold=True))
-
-    profile = build_profile([page_of(lines)])
-
-    well_evidenced = line("Section heading number 0", size=18.0, bold=True)
-    barely_seen = line("Xyz", size=24.0, bold=True)
-    assert profile.heading_level(Style("DejaVuSerif", 18.0, True, False))
-    assert profile.heading_level(Style("DejaVuSerif", 24.0, True, False))
-
-    confidence_well_evidenced = profile.confidence_for(well_evidenced, page_height=792.0)
-    confidence_barely_seen = profile.confidence_for(barely_seen, page_height=792.0)
-
-    assert confidence_well_evidenced > confidence_barely_seen
-    assert 0.0 <= confidence_barely_seen <= 1.0
-    assert 0.0 <= confidence_well_evidenced <= 1.0
-
-
 def test_document_with_no_text_yields_no_body_style():
     profile = build_profile([page_of([])])
 

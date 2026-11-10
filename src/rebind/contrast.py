@@ -15,7 +15,7 @@ The ink is the exception: where the page declares its text colour, that declarat
 than sampled, because a glyph stroke is only a pixel or two wide and almost every pixel of it is an
 anti-aliased blend. Sampling alone read a real sample's pure-black body text as mid-grey and its
 pure-blue links as lilac, reporting forty-three failures in a document that has none. An OCR'd page
-declares nothing, so there the sample is all there is.
+declares nothing, so its text is not measured at all: its words are the picture.
 
 The measurement follows WCAG 2.1 SC 1.4.3 (Contrast, Minimum): relative luminance per WCAG's own
 formula, a 4.5:1 threshold for body text and 3:1 for large text (>= 18pt, or >= 14pt bold).
@@ -29,6 +29,8 @@ from pathlib import Path
 import numpy as np
 
 from .extract import Page, TextLine
+from .geometry import _center_in_any
+from .pagecache import PageCache, file_key
 
 # WCAG 2.1 SC 1.4.3 thresholds and the definition of "large" text (SC 1.4.3 names 18pt, or 14pt
 # bold, measured as the font's own point size).
@@ -158,10 +160,7 @@ def _sample_line(page_image: np.ndarray, line: TextLine, page: Page
     return (tuple(int(v) for v in crop[ink_index]), paper)
 
 
-def _inside(bbox: tuple[float, float, float, float],
-            boxes: tuple[tuple[float, float, float, float], ...]) -> bool:
-    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
-    return any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in boxes)
+_samples = PageCache()
 
 
 def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI,
@@ -197,12 +196,25 @@ def measure(source: Path, pages: list[Page], *, dpi: int = SAMPLE_DPI,
         measurable = [line for line in page.lines if line.color is not None and line.text.strip()]
         if not measurable:
             continue
-        page_image = render_page_to_image(source, page.number, dpi=dpi)
+        # What is behind each line is sampled once per page of a file. A run measures twice --
+        # before correcting and after -- and every saved correction is another run; when nothing
+        # was recoloured the file is the same one, and the page was rendered again each time to
+        # find out what it had already found.
+        stamp = file_key(source)
+        key = stamp and stamp + (page.number, dpi, "paper")
+        samples = _samples.get(key)
+        if samples is None:
+            samples = _samples.put(key, {}) if key else {}
+        page_image = None
         in_figures = tuple(figures.get(page.number, ()))
         for line in measurable:
-            if _inside(line.bbox, in_figures):
+            if _center_in_any(line.bbox, in_figures):
                 continue
-            sampled = _sample_line(page_image, line, page)
+            if line.bbox not in samples:
+                if page_image is None:
+                    page_image = render_page_to_image(source, page.number, dpi=dpi)
+                samples[line.bbox] = _sample_line(page_image, line, page)
+            sampled = samples[line.bbox]
             if sampled is None:
                 continue
             # The ink is taken from the page's own declaration when it makes one -- exact, where

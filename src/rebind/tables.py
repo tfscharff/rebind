@@ -273,7 +273,7 @@ def _row_cells(boxes: list[tuple], bands: list[tuple[float, float]]) -> list[tup
 
 
 def _tagged_table(pdf: pikepdf.Pdf, rows: list[tuple[str, list[tuple[int, TextLine]]]],
-                  document_elem: pikepdf.Object, page_obj: pikepdf.Object, leaf,
+                  document_elem: pikepdf.Object, leaf,
                   row_tags: dict[str, str]) -> pikepdf.Object:
     """Build a fully tagged `/Table` from its rows of cells, top to bottom, each as `(row id,
     [(line index, line)] left to right)` (`_table_row_groups`): a regular grid of `/TR`s whose

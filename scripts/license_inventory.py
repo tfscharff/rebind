@@ -42,18 +42,22 @@ RUNTIME_ROOTS = [
     for spec in tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     ["project"]["dependencies"]
 ]
+# Distributions PyInstaller freezes that are not in that closure: imported optionally by something
+# that is (urllib3 uses brotli when it is there; several packages reach for setuptools). Found by
+# listing the built bundle, which is the only place such a thing shows.
+EXTRA_BUNDLED = ["brotli", "setuptools"]
 # Distributions whose wheel ships no license file of its own -> a canonical fallback text.
 PY_FALLBACK: dict[str, tuple[str, str]] = {
     "flatbuffers": ("Apache-2.0", "LICENSE-Apache-2.0.txt"),
     "rapidocr-onnxruntime": ("Apache-2.0", "LICENSE-Apache-2.0.txt"),
 }
 # Redistributed data that is not a Python distribution: the OCR models bundled inside RapidOCR, and
-# the page-layout model fetched by scripts/fetch_models.py.
+# the models fetched on first use (rebind.weights).
 BUNDLED_MODELS: list[tuple[str, str, str]] = [
     ("PP-OCRv4 detection / recognition / classification models (PaddleOCR)", "Apache-2.0",
      "shipped inside rapidocr_onnxruntime/models/*.onnx"),
     ("PP-DocLayoutV3 page-layout model (PaddleOCR, ONNX export by RapidAI/RapidLayout)",
-     "Apache-2.0", "models/pp_doc_layoutv3.onnx"),
+     "Apache-2.0", "models/pp_doc_layoutv3.onnx; text in LICENSE-Apache-2.0.txt"),
     ("LaTeX-OCR (pix2tex) equation reader, Copyright (c) 2021 Lukas Blecher; ONNX export and the "
      "inference code adapted in rebind/formula_reader.py, Copyright (c) 2023 RapidAI",
      "MIT", "models/latex_ocr/*; texts in LICENSE-LaTeX-OCR.txt and LICENSE-RapidLaTeXOCR.txt"),
@@ -79,22 +83,42 @@ def _spdx(dist: _md.Distribution) -> str:
     return first_line[0] if first_line else "see license text"
 
 
+_LICENSE_WORDS = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "THIRDPARTY", "THIRD-PARTY",
+                  "THIRD_PARTY")
+
+
 def _dist_license_text(dist: _md.Distribution) -> str | None:
-    """The license text a wheel ships in its dist-info, or None if it ships none."""
-    for entry in dist.files or []:
-        name = str(entry).upper()
-        if name.endswith(".PY"):
+    """Every license text a wheel ships, one after another under its own file name, or None if it
+    ships none.
+
+    All of them, not the first. A wheel that carries native libraries says so in further files
+    beside its own license -- PDFium and the dozen libraries built into it under pypdfium2's
+    `licenses/`, GEOS's LGPL in shapely's `LICENSE_GEOS`, qpdf in pikepdf's
+    `licenses-for-wheels.txt`, onnxruntime's `ThirdPartyNotices.txt` -- and taking only the first
+    file left every one of those out of the notice. A file whose text is the same as one already
+    taken (opencv ships its pair twice) is taken once.
+    """
+    parts: list[str] = []
+    seen: set[str] = set()
+    for entry in sorted(dist.files or [], key=str):
+        path = str(entry).replace("\\", "/")
+        upper = path.upper()
+        if upper.endswith((".PY", ".PYC")):
             continue
-        if "LICENSE" in name or "LICENCE" in name or "COPYING" in name:
-            try:
-                text = dist.read_text(str(entry))
-                if not text:
-                    text = dist.locate_file(entry).read_text(encoding="utf-8", errors="replace")
-            except (OSError, UnicodeError):
-                continue
-            if text and len(text) > 50:
-                return text
-    return None
+        in_license_dir = "/LICENSES/" in upper or ".DIST-INFO/LICENSES/" in upper
+        if not in_license_dir and not any(word in upper.rsplit("/", 1)[-1] for word in _LICENSE_WORDS):
+            continue
+        try:
+            text = dist.locate_file(entry).read_text(encoding="utf-8", errors="replace")
+        except (OSError, UnicodeError):
+            continue
+        key = " ".join(text.split())
+        if len(text) <= 50 or key in seen:
+            continue
+        seen.add(key)
+        rule = "=" * 78
+        parts.append(f"{rule}\n{path}\n{rule}\n\n{text.strip()}\n")
+    return "\n".join(parts) if parts else None
 
 
 def _runtime_distributions() -> dict[str, _md.Distribution]:
@@ -105,7 +129,7 @@ def _runtime_distributions() -> dict[str, _md.Distribution]:
     rather than the whole dev virtualenv.
     """
     seen: dict[str, _md.Distribution] = {}
-    stack = list(RUNTIME_ROOTS)
+    stack = list(RUNTIME_ROOTS) + EXTRA_BUNDLED
     while stack:
         name = canonicalize_name(stack.pop())
         if name in seen:
@@ -204,7 +228,26 @@ def _render_third_party(rows: list[tuple[str, str, str, str | None]]) -> str:
         out.append(f"    License:  {spdx}")
         out.append(f"    Text:     python/{name}.txt")
         out.append("")
-    out.append("Bundled OCR models:")
+    out.append('The Python interpreter and its standard library (CPython), which the app runs on:')
+    out.append('    License:  PSF-2.0')
+    out.append('    Text:     LICENSE-Python.txt')
+    out.append('    Built into it, each under its own license:')
+    out.append('        zlib           LICENSE-zlib.txt')
+    out.append('        bzip2          LICENSE-bzip2.txt')
+    out.append('        liblzma (XZ)   LICENSE-xz-liblzma.txt')
+    out.append('        Expat          LICENSE-expat.txt')
+    out.append('        libffi         LICENSE-libffi.txt')
+    out.append('        OpenSSL        LICENSE-Apache-2.0.txt')
+    out.append('')
+    out.append('Libraries built into the distributions above are credited in the license text of the')
+    out.append('distribution that carries them, under python/: FreeType, libjpeg-turbo, libpng, libtiff')
+    out.append('and HarfBuzz in pillow; PDFium and what it is built from in pypdfium2; qpdf in pikepdf;')
+    out.append('GEOS in shapely; OpenBLAS and the GCC runtime in numpy. lxml carries two it does not')
+    out.append('include the texts of:')
+    out.append('        libxml2        LICENSE-libxml2.txt')
+    out.append('        libxslt        LICENSE-libxslt.txt')
+    out.append('')
+    out.append("Bundled models and fonts:")
     for component, spdx, location in BUNDLED_MODELS:
         out.append(f"    {component}")
         out.append(f"        License: {spdx} ({location})")
@@ -214,6 +257,7 @@ def _render_third_party(rows: list[tuple[str, str, str, str | None]]) -> str:
     # applies even though FreeType is not itself a top-level distribution.
     out.append("    Portions of this software are copyright (c) 2006-2021 The FreeType")
     out.append("    Project (www.freetype.org). All rights reserved.")
+    out.append("    (The FreeType License: LICENSE-FreeType-FTL.txt.)")
     out.append("")
     return "\n".join(out)
 

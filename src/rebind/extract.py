@@ -15,7 +15,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-import pikepdf
 from pdfminer.high_level import extract_pages as _pdfminer_pages
 from pdfminer.layout import (
     LAParams,
@@ -83,7 +82,7 @@ class Script:
 
 @dataclass(frozen=True)
 class ImageRegion:
-    """A non-text region. Phase 1 records its existence and location, nothing more."""
+    """A non-text region: where it is on the page, and nothing more."""
 
     page: int
     bbox: tuple[float, float, float, float]
@@ -109,7 +108,7 @@ class Page:
 
     @property
     def has_text_layer(self) -> bool:
-        """False means the page is a scan and belongs to the (unbuilt) OCR branch."""
+        """False means the page has no text of its own: a scan, to be recognised (`ocr`)."""
         return bool(self.lines)
 
 
@@ -521,7 +520,7 @@ def _collect_figure(
     text, so a figure with both a photo and a caption yields both a text line and an image
     region rather than one masking the other. Only a figure that yields neither text nor an
     embedded image anywhere within it (e.g. one containing only vector graphics) falls back to a
-    single opaque `ImageRegion` for the whole figure, preserving Phase 1's honest "something is
+    single opaque `ImageRegion` for the whole figure, preserving the honest "something is
     here and we cannot describe it" signal for genuinely non-text, non-raster content.
 
     Returns (found_text, found_image) so a caller nesting figures inside figures can propagate
@@ -665,24 +664,3 @@ def extract_pages(source: Path, only: set[int] | None = None,
         raise ExtractionError(
             f"{source} is password-protected; Rebind cannot read encrypted PDFs"
         ) from exc
-
-
-def source_is_tagged(source: Path) -> bool:
-    """Whether the source already declares a structure tree.
-
-    Rebind should not churn documents that are already accessible (governing design 5.1). This
-    only reports the claim; it does not validate that the tagging is any good.
-    """
-    try:
-        with pikepdf.open(source) as pdf:
-            return "/StructTreeRoot" in pdf.Root
-    # Narrowed to the exceptions that genuinely mean "this file cannot be opened" -- PdfError for
-    # malformed PDFs, PasswordError for encrypted ones, OSError for filesystem failures. A bare
-    # `except Exception` would also swallow programmer errors (e.g. an internal AttributeError)
-    # and misreport them as extraction failures, masking real bugs.
-    except (pikepdf.PdfError, pikepdf.PasswordError, OSError) as exc:
-        if isinstance(exc, pikepdf.PasswordError):
-            raise ExtractionError(
-                f"{source} is password-protected; Rebind cannot read encrypted PDFs"
-            ) from exc
-        raise ExtractionError(f"cannot open {source}: {exc}") from exc

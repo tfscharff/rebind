@@ -8,7 +8,7 @@
 # Why this file exists at all: a PyInstaller-built exe has NO version resource unless one is
 # supplied, and an executable with entirely empty metadata is a well-known antivirus heuristic
 # trigger. Rebind's binary already looks alarming to a scanner without help -- it is unsigned,
-# ~80 MB, packed by PyInstaller, ships native DLLs, and opens a local network listener on startup.
+# ~550 MB, packed by PyInstaller, ships native DLLs, and opens a local network listener on startup.
 # Blank Company/Product/Description fields on top of that is the profile of something a
 # managed-machine AV or an ASR rule declines to run, and Rebind's users are librarians on exactly
 # such machines. Metadata is not a fix for being unsigned, but it removes one free strike.
@@ -18,8 +18,8 @@
 
 VSVersionInfo(
   ffi=FixedFileInfo(
-    filevers=(1, 11, 0, 0),
-    prodvers=(1, 11, 0, 0),
+    filevers=(1, 11, 1, 0),
+    prodvers=(1, 11, 1, 0),
     mask=0x3f,
     flags=0x0,
     OS=0x40004,
@@ -34,12 +34,12 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', 'Thomas Scharff'),
           StringStruct('FileDescription', 'Rebind - accessible PDF remediation'),
-          StringStruct('FileVersion', '1.11.0'),
+          StringStruct('FileVersion', '1.11.1'),
           StringStruct('InternalName', 'rebind'),
           StringStruct('LegalCopyright', 'Copyright (c) Thomas Scharff. MIT License.'),
           StringStruct('OriginalFilename', 'rebind.exe'),
           StringStruct('ProductName', 'Rebind'),
-          StringStruct('ProductVersion', '1.11.0'),
+          StringStruct('ProductVersion', '1.11.1'),
         ],
       )
     ]),

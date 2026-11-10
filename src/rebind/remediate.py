@@ -96,6 +96,7 @@ from .profile import build_profile
 from .structure import StructTree
 from .turn import move_box, restore_turns, upright
 from .validate import self_check_pdf_ua2
+from .geometry import _on_page
 
 # The page editor shows each page as a picture -- elements are selected on it and their text read
 # from it -- rendered once per page at this resolution.
@@ -443,10 +444,7 @@ def _page_records(source: Path, src_page, lines: list[TextLine], content_lines: 
         records.append({
             **_untagged_record(src_page, entry["id"], members[0], content_source[entry["first"]]),
             "text": " ".join(ln.text.strip() for ln in members).strip()[:300],
-            "left": round(100 * x0 / src_page.width, 2),
-            "top": round(100 * (src_page.height - y1) / src_page.height, 2),
-            "width": round(100 * (x1 - x0) / src_page.width, 2),
-            "height": round(100 * (y1 - y0) / src_page.height, 2),
+            **_on_page((x0, y0, x1, y1), src_page.width, src_page.height),
             "row": True,
         })
     # Lines Rebind set aside are listed too, marked as untagged, so the editor can offer them.
@@ -533,6 +531,28 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
               dpi: int = 300, alt_texts: dict[str, str] | None = None,
               darken_contrast: bool = True, strip_scripts: bool = False,
               edits: Edits | None = None) -> RemediationResult:
+    """Write `target`: the source made accessible, looking exactly like the original (`_remediate`
+    has the detail). Whatever happens on the way, the document is closed and the working copy made
+    for corrected colours is removed: a failure used to leave both behind, the open file locked."""
+    held: list = []
+    try:
+        return _remediate(source, target, held, title=title, lang=lang, dpi=dpi,
+                          alt_texts=alt_texts, darken_contrast=darken_contrast,
+                          strip_scripts=strip_scripts, edits=edits)
+    finally:
+        for thing in held:
+            try:
+                if isinstance(thing, Path):
+                    thing.unlink(missing_ok=True)
+                else:
+                    thing.close()
+            except Exception:  # noqa: BLE001 -- tidying up must not hide what went wrong
+                pass
+
+
+def _remediate(source: Path, target: Path, held: list, *, title: str | None, lang: str,
+               dpi: int, alt_texts: dict[str, str] | None, darken_contrast: bool,
+               strip_scripts: bool, edits: Edits | None) -> RemediationResult:
     """Write `target`: the source made accessible, looking exactly like the original.
 
     The original pages are kept verbatim (vector text stays crisp, a scan stays a scan) and marked
@@ -605,6 +625,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
 
     # Pass two: build the tagged, appearance-preserving output.
     pdf = pikepdf.open(source)
+    held.append(pdf)
     # Runs before the per-page loop below (not after, as originally written) specifically so that
     # loop only ever sees the annotations that survive -- the external links it goes on to tag into
     # the structure tree -- never the legacy-destination ones this call is about to remove.
@@ -633,6 +654,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
             recoloured += recolor.apply_corrections(pdf, page, corrections)
         if recoloured:
             render_source = target.with_name(target.stem + ".recoloured.tmp.pdf")
+            held.append(render_source)
             pdf.save(render_source)
             try:
                 same_fonts(source, render_source)
@@ -709,9 +731,10 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         # The first element a person inserted after each picture, in the order the page is read.
         followed_by: dict[str, str] = {}
         read_before: dict[str, int] = {}
+        pictures = dict(figs.boxes)
         for entry in plan:
             picture = edits.after.get(entry["id"])
-            if picture in dict(figs.boxes) and picture not in followed_by:
+            if picture in pictures and picture not in followed_by:
                 followed_by[picture] = entry["id"]
                 if mcid_of[entry["first"]] is not None:
                     read_before[picture] = mcid_of[entry["first"]]

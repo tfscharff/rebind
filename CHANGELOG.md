@@ -4,6 +4,19 @@ What changed in each release, newest first. Each entry is a summary; the full no
 [releases page](https://github.com/tfscharff/rebind/releases). Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.11.1 (2026-11-10)
+
+- The third-party notices are complete and no longer padded. The notice generator kept only the
+  first license file from each package, so PDFium, GEOS and qpdf went uncredited; it now takes
+  every one. Python's own license and two packages the installer picks up (brotli, setuptools) are
+  added. Twenty-one license texts for software Rebind no longer includes were removed.
+- A failed conversion closes the document and removes its working copy.
+- Checking colour contrast, and finding scans that carry their own text layer, are done once per
+  file, not on every saved correction.
+- Removed code nothing used: the image clean-up module, the old document model, and several
+  unused helpers. Box arithmetic that was written out in seven places is in one.
+- The README is rewritten in plain language and has a screenshot.
+
 ## 1.11.0 (2026-11-10)
 
 - Faster: recognising a scanned page takes about half as long, and reading a page's layout about a

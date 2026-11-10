@@ -116,7 +116,7 @@ def _page_structure(pdf: pikepdf.Pdf, lines: list[TextLine], plan: list[dict],
             row_tags = edits.tags if edits else {}
             rows = [(row_id, [(i, lines[i]) for i in members])
                     for row_id, members in _table_row_groups(entry, lines)]
-            table = _tagged_table(pdf, rows, document_elem, page_obj, leaf, row_tags)
+            table = _tagged_table(pdf, rows, document_elem, leaf, row_tags)
             table_boxes[table.objgen] = (min(lines[i].bbox[0] for i in indices),
                                          min(lines[i].bbox[1] for i in indices),
                                          max(lines[i].bbox[2] for i in indices),

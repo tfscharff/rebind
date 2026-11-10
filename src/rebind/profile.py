@@ -5,8 +5,9 @@ levels correctly where a per-page rule cannot: a page holding only a heading and
 has no usable local baseline, and per-page assignment drifts across a long document -- a silent
 failure, worst on exactly the 300-page catalog that motivates the project.
 
-This pass retains style statistics only, never text, so memory is bounded by the number of
-distinct styles rather than by document length.
+This pass retains style statistics, and for lines at a page's edge the words that recur there
+(running heads), so memory is bounded by the number of distinct styles and edge phrases rather
+than by document length.
 """
 
 from __future__ import annotations
@@ -94,8 +95,6 @@ class TypographicProfile:
     body: Style | None
     heading_levels: tuple[Style, ...]
     artifact_keys: frozenset[tuple[Style, str]]
-    style_volumes: dict[Style, int]
-    total_chars: int
     artifact_texts: frozenset[tuple[str, str]] = frozenset()
 
     def heading_level(self, style: Style) -> int:
@@ -117,33 +116,6 @@ class TypographicProfile:
         if self.heading_level(style):
             return "heading"
         return "body"
-
-    def confidence_for(self, line: TextLine, page_height: float) -> float:
-        """How cleanly this line's style matches the profile.
-
-        This is a style-match score and nothing else. Born-digital text is exact by
-        construction, so it is deliberately NOT a text-accuracy score -- conflating the two
-        would make the number meaningless once OCR confidence arrives in Phase 2.
-        """
-        style = style_of(line)
-        if style == self.body:
-            return 1.0
-        if not self.total_chars:
-            return 0.0
-        share = self.style_volumes.get(style, 0) / self.total_chars
-        if self.heading_level(style):
-            # A heading style covering a meaningful share of the document -- because it recurs
-            # across many pages, or introduces long sections -- is a confident classification;
-            # one seen only a handful of characters anywhere (a style guessed to be a heading
-            # purely from being larger/bolder than body, with almost nothing else to go on) is a
-            # guess and must score low, not the flat 0.9 every heading style used to get
-            # regardless of evidence. The floor and ceiling are higher than the generic fallback
-            # below because heading candidates arrive here already narrowed by the size/bold
-            # heuristic in `build_profile`, so the same share of evidence carries more weight.
-            return round(min(1.0, 0.4 + share * 6), 3)
-        # A style covering a large share of the document is a confident classification even when
-        # it is neither body nor a recognized heading; a style seen twice is a guess.
-        return round(min(0.8, 0.2 + share * 4), 3)
 
 
 def build_profile(pages: Iterable[Page]) -> TypographicProfile:
@@ -184,7 +156,7 @@ def build_profile(pages: Iterable[Page]) -> TypographicProfile:
                         text_last_page[text_key] = page.number
 
     if not volumes:
-        return TypographicProfile(None, (), frozenset(), {}, 0)
+        return TypographicProfile(None, (), frozenset())
 
     # Tie-break on every Style field, never on dict/set iteration order: Style has exactly four
     # fields (font, size, bold, italic), so once all four appear in the sort key the order is
@@ -234,7 +206,5 @@ def build_profile(pages: Iterable[Page]) -> TypographicProfile:
         body=body,
         heading_levels=tuple(heading_candidates),
         artifact_keys=artifact_keys,
-        style_volumes=volumes,
-        total_chars=sum(volumes.values()),
         artifact_texts=artifact_texts,
     )

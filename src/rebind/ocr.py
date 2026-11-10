@@ -1,8 +1,7 @@
 """On-device OCR for pages with no text layer.
 
 Turns a scanned page into the same `TextLine` records the born-digital path produces, so
-`profile`, `layout` and `assemble` consume OCR output unchanged (the branch-agnostic interface the
-layout slice was built against). RapidOCR (onnxruntime) runs on CPU with in-package models, so this
+`profile`, `layout` and `plan` take OCR output exactly as they take a text layer's. RapidOCR (onnxruntime) runs on CPU with in-package models, so this
 needs no API key, GPU or network at runtime -- see docs/decisions/0005-ocr-engine-selection.md.
 """
 
@@ -10,13 +9,12 @@ from __future__ import annotations
 
 import re
 import threading
-from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
-from .extract import Page, Script, TextLine
+from .extract import Script, TextLine
 
 
 class OcrEngine:
@@ -557,38 +555,3 @@ def _gap(left: _Read, right: _Read) -> float:
 
 def _union(a: tuple, b: tuple) -> tuple:
     return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
-
-
-def ocr_pages(
-    source: Path,
-    pages: Iterable[Page],
-    *,
-    engine: OcrEngine,
-    cache: dict[int, list[TextLine]],
-    dpi: int = 200,
-    restore_images: bool = True,
-) -> Iterator[Page]:
-    """Yield each page unchanged if it has a text layer, or with OCR'd lines if it does not.
-
-    A scanned page is rasterized, restored (deskew + gentle denoise, unless `restore_images` is
-    False), then recognized. OCR is expensive, and the pipeline reads the pages twice (profile pass,
-    then assemble pass), so a page's recognized lines are memoized in `cache` on first sight and
-    reused on the second pass. The cache holds only text (never images) and only for scanned pages,
-    so a born-digital document leaves it empty and keeps streaming with bounded memory (invariant 5).
-    A blank or unrecoverable scan simply yields no lines and stays a no-text-layer page downstream.
-    """
-    for page in pages:
-        if page.has_text_layer:
-            yield page
-            continue
-        if page.number not in cache:
-            image = render_page_to_image(source, page.number, dpi=dpi)
-            if restore_images:
-                from .restoration import restore
-
-                image = restore(image).image
-            cache[page.number] = recognize(
-                image, page_number=page.number, page_width=page.width,
-                page_height=page.height, engine=engine,
-            )
-        yield replace(page, lines=tuple(cache[page.number]))

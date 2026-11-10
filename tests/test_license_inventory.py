@@ -63,3 +63,14 @@ def test_notice_carries_the_freetype_credit():
     assert "The FreeType" in notice and "freetype.org" in notice, (
         "generated notice is missing the credit required by the FreeType License"
     )
+
+
+def test_every_loose_license_text_is_named_in_the_notice():
+    """A license text nothing points to is a leftover: the installer shipped 29 of them, GPL texts
+    among them, for the HTML renderer and its GTK libraries long after both were gone."""
+    notice = (LICENSES_DIR / "LICENSE-THIRD-PARTY.txt").read_text(encoding="utf-8")
+    loose = sorted(path.name for path in LICENSES_DIR.glob("LICENSE-*.txt")
+                   if path.name != "LICENSE-THIRD-PARTY.txt")
+    assert loose, "expected the canonical license texts beside the notice"
+    orphans = [name for name in loose if name not in notice]
+    assert not orphans, f"license texts the notice never mentions: {orphans}"

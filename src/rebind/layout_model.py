@@ -28,6 +28,7 @@ import numpy as np
 
 from . import weights
 from .pagecache import PageCache, file_key
+from .geometry import _area, _center_in_box
 
 log = logging.getLogger(__name__)
 
@@ -186,18 +187,6 @@ def page_regions(source: Path, page_number: int, page_width: float, page_height:
     return regions
 
 
-def _center(bbox: tuple[float, float, float, float]) -> tuple[float, float]:
-    return (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
-
-
-def _inside(point: tuple[float, float], box: tuple[float, float, float, float]) -> bool:
-    return box[0] <= point[0] <= box[2] and box[1] <= point[1] <= box[3]
-
-
-def _area(box: tuple[float, float, float, float]) -> float:
-    return max(box[2] - box[0], 0.0) * max(box[3] - box[1], 0.0)
-
-
 def _gap(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:
     """Distance between two boxes (0 when they touch or overlap)."""
     dx = max(0.0, max(a[0] - b[2], b[0] - a[2]))
@@ -269,9 +258,8 @@ def hints_for(lines, regions: tuple[Region, ...] | None) -> PageHints:
         return nearest.label == TABLE
 
     for line in lines:
-        point = _center(line.bbox)
         containing = [(index, region) for index, region in usable
-                      if _inside(point, region.bbox)]
+                      if _center_in_box(line.bbox, region.bbox)]
         if not containing:
             continue
         index, region = min(containing, key=lambda item: _area(item[1].bbox))

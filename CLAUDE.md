@@ -25,8 +25,8 @@ browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
 - `extract.py` — pdfminer.six pulls born-digital text lines + image boxes per page.
 - `ocr.py` — pages with no text layer are rasterized (pypdfium2) and recognized as they are
   (RapidOCR / onnxruntime, CPU, models bundled), each line with its confidence. A line the
-  recogniser is unsure of is dropped by it, not replaced: there is no placeholder. `restoration.py`
-  (deskew + denoise) and `ocr.ocr_pages` are NOT on the live path; only their tests use them.
+  recogniser is unsure of is dropped by it, not replaced: there is no placeholder. Pages are not deskewed or
+  denoised first (a `restoration` module that did was never wired in, and is gone).
 - `profile.py` — document-global typographic profile (born-digital heading sizes).
 - `layout.py` — recursive XY-cut for reading order; `detect_table_lines` flags grid regions.
 - `layout_model.py` — PP-DocLayoutV3 (via rapid-layout, onnxruntime) boxes each page's regions;
@@ -196,7 +196,7 @@ ebind.iss`.
 - **PDF/UA table scope goes on `/TH` as `/A << /O /Table /Scope /Column >>`.** Rebind builds the
   struct tree itself, so it uses `/Scope` directly (unlike a WeasyPrint-rendered table, which would
   use `/Headers`+`/ID`).
-- **cv2 (OpenCV) is a hard dependency of RapidOCR**, not just restoration — it cannot be removed.
+- **cv2 (OpenCV) is a hard dependency of RapidOCR**, and of the picture search and music finder — it cannot be removed.
   The bundle drops only OpenCV's FFmpeg videoio DLL (video decode is never used).
 - **App icon:** Pillow's ICO writer ignores `append_images` — save from the 256px master with
   `sizes=[...]` (`packaging/make_icon.py`) or you get a 16px-only icon. Installer is unsigned by
@@ -219,6 +219,12 @@ ebind.iss`.
   output — a DRM/fingerprint artifact) that breaks veraPDF's metadata parser badly enough to hide
   Rebind's own `dc:title`/`pdfuaid:*` too. `_set_metadata` strips any top-level XMP key without a
   namespace before adding its own.
+- **Third-party notices are generated** (`scripts/license_inventory.py`): every license file each
+  bundled wheel ships, plus `EXTRA_BUNDLED` for packages PyInstaller picks up that are not in the
+  dependency closure (list `packaging/dist/rebind/_internal` after a build to find new ones). A
+  loose `packaging/licenses/LICENSE-*.txt` must be named in the notice; a test fails otherwise.
+- **README screenshots** are made by `scripts/screenshots.py` (headless Chrome over the DevTools
+  protocol) from `scripts/demo_document.py`'s made-up report, never from a real sample.
 - **New samples come with an accessibility-checker report** (Adobe Acrobat's or similar) in
   `samples/reports/`, per the workflow Thomas set — treat the report's failing rules as a checklist
   and re-validate with `-f ua2` after remediating. This is what surfaced the four bugs above.

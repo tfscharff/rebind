@@ -20,7 +20,7 @@ from .captions import (
     _side_captions,
 )
 from .extract import TextLine
-from .geometry import _area, _boxes_overlap, _center_in_box, _horizontally_overlaps, _overlaps
+from .geometry import _area, _center_in_box, _horizontally_overlaps, _overlaps
 from .layout import detect_table_lines
 from .ocr import render_page_to_image
 from .pagecache import PageCache, file_key
@@ -214,7 +214,7 @@ def _scanned_figures(source: Path, src_page, lines: list[TextLine], dpi: int,
             page_image, list(boxes), page_width=src_page.width, page_height=src_page.height)))
     out: list[tuple[str, tuple]] = []
     for index, region in enumerate(found):
-        if any(_boxes_overlap(region.bbox, bbox) for _fid, bbox in already + out):
+        if any(_overlaps(region.bbox, bbox) for _fid, bbox in already + out):
             continue
         out.append((f"p{src_page.number}r{index}", region.bbox))
     return out
@@ -375,20 +375,13 @@ def _paragraph_lines(lines: list[TextLine]) -> set[int]:
 
     A long line standing alone is not a paragraph: on a drawing it is a callout ("D  Bond this part
     with super glue"), and it stays the drawing's."""
-    def near(line: TextLine, other: TextLine) -> bool:
-        if other is line or not _horizontally_overlaps(line.bbox, other.bbox):
-            return False
-        gap = max(other.bbox[1] - line.bbox[3], line.bbox[1] - other.bbox[3])
-        return gap <= PARAGRAPH_LEADING_GAP * max(line.bbox[3] - line.bbox[1],
-                                                  other.bbox[3] - other.bbox[1])
-
     prose = {id(ln) for ln in lines if len(ln.text.split()) > FIGURE_LABEL_MAX_WORDS
-             and any(near(ln, other) for other in lines)}
+             and any(_stacked(ln, other) for other in lines)}
     grew = True
     while grew:
         grew = False
         for line in lines:
-            if id(line) not in prose and any(id(o) in prose and near(line, o) for o in lines):
+            if id(line) not in prose and any(id(o) in prose and _stacked(line, o) for o in lines):
                 prose.add(id(line))
                 grew = True
     return prose
@@ -519,7 +512,7 @@ def find_figures(source: Path, render_source: Path, src_page, lines: list[TextLi
                 keep_out=lambda line: music.is_label(line.text) or _is_caption_marker(line.text),
                 render=(lambda: (full_render(), dpi)) if scanned else None)):
             covering = [(fid, bbox) for fid, bbox in figs.boxes
-                        if _boxes_overlap(bbox, example.bbox)]
+                        if _overlaps(bbox, example.bbox)]
             if any(_area(bbox) > MUSIC_REPLACES_AREA * _area(example.bbox)
                    for _fid, bbox in covering):
                 continue
@@ -530,7 +523,7 @@ def find_figures(source: Path, render_source: Path, src_page, lines: list[TextLi
     if scanned:
         pictures = [(f"p{src_page.number}m{index}", bbox)
                     for index, bbox in enumerate(hints.pictures)
-                    if not any(_boxes_overlap(bbox, known) for _fid, known in figs.boxes)]
+                    if not any(_overlaps(bbox, known) for _fid, known in figs.boxes)]
         figs.modelled = {fid for fid, _bbox in pictures}
         figs.boxes += pictures
         found = _scanned_figures(render_source, src_page, list(lines), dpi, figs.boxes)

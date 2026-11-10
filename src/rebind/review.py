@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from .extract import Page, TextLine
 from .layout import PageLayout
+from .geometry import _center_in_any, _on_page
 
 # Consecutive lines in the same column belong to the same visual block until a vertical gap opens
 # up. Measured against the line height rather than in absolute points, so it holds for a 6pt
@@ -54,11 +55,6 @@ class PageOrder:
         return bool(self.reason)
 
 
-def _in_any(bbox: tuple[float, float, float, float], boxes: tuple) -> bool:
-    cx, cy = (bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2
-    return any(b[0] <= cx <= b[2] and b[1] <= cy <= b[3] for b in boxes)
-
-
 def _group_blocks(placed) -> list[tuple[int, list[TextLine]]]:
     """Consecutive placed lines grouped into visual blocks, preserving reading order."""
     blocks: list[tuple[int, list[TextLine]]] = []
@@ -90,7 +86,7 @@ def page_order(page: Page, layout: PageLayout, figure_boxes: tuple = ()) -> Page
     # standing alone -- showing either as its own numbered block would depict a reading order that
     # is not the one the document actually has.
     content = [placed for placed in layout.lines
-               if placed.column >= 0 and not _in_any(placed.line.bbox, figure_boxes)]
+               if placed.column >= 0 and not _center_in_any(placed.line.bbox, figure_boxes)]
     grouped = _group_blocks(content)
     blocks = tuple(
         Block(
@@ -116,24 +112,20 @@ def page_order(page: Page, layout: PageLayout, figure_boxes: tuple = ()) -> Page
                      width=page.width, height=page.height)
 
 
-def summarize(orders: list[PageOrder], thumbs: dict[int, str] | None = None) -> dict:
+def summarize(orders: list[PageOrder]) -> dict:
     """The reading-order section of the review: a bulk verdict plus the pages needing an eye.
 
     Block boxes are emitted as percentages of the page, so the UI can lay the numbered overlay
     over a thumbnail of any size without knowing the page's point dimensions. PDF's y axis runs
     bottom-up and CSS's runs top-down, so `top` is flipped here rather than in the browser.
     """
-    thumbs = thumbs or {}
     flagged = [order for order in orders if order.needs_review]
 
     def box(order: PageOrder, b: Block) -> dict:
         x0, y0, x1, y1 = b.bbox
         return {
             "n": b.number, "text": b.text,
-            "left": round(100 * x0 / order.width, 2),
-            "top": round(100 * (order.height - y1) / order.height, 2),
-            "width": round(100 * (x1 - x0) / order.width, 2),
-            "height": round(100 * (y1 - y0) / order.height, 2),
+            **_on_page((x0, y0, x1, y1), order.width, order.height),
         }
 
     return {
@@ -143,7 +135,6 @@ def summarize(orders: list[PageOrder], thumbs: dict[int, str] | None = None) -> 
             {
                 "page": order.page,
                 "reason": order.reason,
-                "thumb": thumbs.get(order.page, ""),
                 "blocks": [box(order, b) for b in order.blocks],
             }
             for order in flagged

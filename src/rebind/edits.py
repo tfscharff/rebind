@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from .extract import TextLine
 from .tables import _table_row_groups, default_header_rows
+from .geometry import _on_page
 
 # Stands in for an element's id where something inserted after a picture is read first on its page,
 # because the picture is. A picture is not an element of the plan, so `after` cannot name it there.
@@ -236,10 +237,7 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
             "kind": entry["kind"],
             "alt": entry.get("alt", ""),
             "text": " ".join(ln.text.strip() for ln in members).strip()[:300],
-            "left": round(100 * box[0] / src_page.width, 2),
-            "top": round(100 * (src_page.height - box[3]) / src_page.height, 2),
-            "width": round(100 * (box[2] - box[0]) / src_page.width, 2),
-            "height": round(100 * (box[3] - box[1]) / src_page.height, 2),
+            **_on_page(box, src_page.width, src_page.height),
             "editable": True,
         })
         if entry["kind"] == "Table":
@@ -256,10 +254,7 @@ def _element_records(src_page, plan: list[dict], lines: list[TextLine],
                     "page": src_page.number,
                     "kind": edits.tags.get(row_id, default_kind),
                     "text": " ".join(ln.text.strip() for ln in row_lines).strip()[:300],
-                    "left": round(100 * rbox[0] / src_page.width, 2),
-                    "top": round(100 * (src_page.height - rbox[3]) / src_page.height, 2),
-                    "width": round(100 * (rbox[2] - rbox[0]) / src_page.width, 2),
-                    "height": round(100 * (rbox[3] - rbox[1]) / src_page.height, 2),
+                    **_on_page(rbox, src_page.width, src_page.height),
                     "editable": True,
                     "row": True,
                 })
@@ -282,10 +277,7 @@ def _untagged_record(src_page, element_id: str, line: TextLine, order: int) -> d
     return {
         "id": element_id, "_order": order, "page": src_page.number, "kind": "Artifact",
         "text": line.text.strip()[:300],
-        "left": round(100 * x0 / src_page.width, 2),
-        "top": round(100 * (src_page.height - y1) / src_page.height, 2),
-        "width": round(100 * (x1 - x0) / src_page.width, 2),
-        "height": round(100 * (y1 - y0) / src_page.height, 2),
+        **_on_page((x0, y0, x1, y1), src_page.width, src_page.height),
         "editable": True,
     }
 
@@ -355,9 +347,6 @@ def _place_figures(elements: list[dict], src_page, figures: list[tuple[str, str,
             "id": figure_id,
             "page": src_page.number, "kind": "Figure", "text": "", "alt": alt,
             **({"music": True} if figure_id in music else {}),
-            "left": round(100 * bbox[0] / src_page.width, 2),
-            "top": round(100 * (src_page.height - bbox[3]) / src_page.height, 2),
-            "width": round(100 * (bbox[2] - bbox[0]) / src_page.width, 2),
-            "height": round(100 * (bbox[3] - bbox[1]) / src_page.height, 2),
+            **_on_page(bbox, src_page.width, src_page.height),
             "editable": True,
         })
