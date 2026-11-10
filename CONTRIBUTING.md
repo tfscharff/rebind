@@ -32,6 +32,13 @@ uv run ruff check .
   tests are skipped, so a green run does not mean the output conforms.
 - **WeasyPrint** renders the synthetic PDFs the tests are built on. It is a test dependency only
   and needs its GTK libraries on Windows; Rebind itself never renders HTML.
+- **DejaVu Serif** must be installed. The synthetic PDFs are set in it; without it another font
+  is substituted silently and a few tests about particular lines fail.
+  `PYTHONPATH=. uv run python scripts/fixture_fonts.py` shows which font you are getting.
+- **CI.** Every push and pull request runs `ruff` and the tests on a Windows machine at GitHub,
+  with veraPDF installed (`.github/workflows/ci.yml`). Two tests in `tests/test_app.py` that
+  stand in for the app quitting are left out there, and should be left out of a full local run
+  the same way: their watchdog threads outlive them and end the test run.
 - **Samples.** Real documents used in development are copyrighted and are not in the repository.
   A test must build its own input (`tests/fixtures.py`).
 

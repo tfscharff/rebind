@@ -4,6 +4,16 @@ What changed in each release, newest first. Each entry is a summary; the full no
 [releases page](https://github.com/tfscharff/rebind/releases). Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.11.2 (2026-11-10)
+
+- In a short window the list of keys scrolls, and the element's **Insert** and **Delete** buttons
+  stay in view. They used to be pushed out of sight.
+- Fixed: removing a scan's old hidden text layer could take a font away from another page that
+  shared it, leaving that page's visible text without one.
+- Fixed: a model downloaded after Rebind had first looked for it was not used until the next run.
+- A conversion opens the PDF once to draw its pages, not once for every page drawn.
+- The tests now run on GitHub on every push, on Windows, with veraPDF installed.
+
 ## 1.11.1 (2026-11-10)
 
 - The third-party notices are complete and no longer padded. The notice generator kept only the

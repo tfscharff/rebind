@@ -1,5 +1,7 @@
 # Rebind
 
+[![CI](https://github.com/tfscharff/rebind/actions/workflows/ci.yml/badge.svg)](https://github.com/tfscharff/rebind/actions/workflows/ci.yml)
+
 Rebind makes a PDF accessible by adding a text layer, reading order, headings, lists, tables and
 figure descriptions. It exports a PDF/UA-2 document that validates with
 [veraPDF](https://verapdf.org) at zero failures. It needs no technical setup, no account and no
@@ -159,7 +161,7 @@ Rebind is not on PyPI. For tests and the installer build, see [CONTRIBUTING.md](
 
 ## Status
 
-The current version is **1.11.1**. Scanned and born-digital PDFs both work from start to finish,
+The current version is **1.11.2**. Scanned and born-digital PDFs both work from start to finish,
 and the output validates as PDF/UA-2 with zero failures. [CHANGELOG.md](CHANGELOG.md) lists what
 changed in each release.
 
