@@ -87,7 +87,7 @@ def _run_conversion(job: _Job, source: Path) -> None:
     thread silently, so the UI always gets a status it can show the librarian.
     """
     # Absolute imports, not relative: when PyInstaller freezes app.py as the __main__ entry
-    # script, a relative import has no parent package and raises ImportError (see /render-smoke,
+    # script, a relative import has no parent package and raises ImportError (see /ocr-smoke,
     # which uses the same absolute form for the same reason).
     from rebind.checklist import build_checklist
     from rebind.extract import ExtractionError
@@ -134,7 +134,6 @@ def _run_conversion(job: _Job, source: Path) -> None:
 # Generously longer than a browser's background-tab timer throttling (Chrome slows an idle tab's
 # setInterval to roughly once a minute), so a minimised window is not mistaken for a closed one.
 IDLE_SHUTDOWN_SECONDS = 150.0
-HEARTBEAT_CHECK_SECONDS = 5.0
 # How long after a page says it is going away before the process follows it out. Long enough that a
 # reload's first heartbeat (sent as the script runs) arrives first and cancels it; short enough
 # that closing the tab still feels like quitting the app.
@@ -474,10 +473,43 @@ def _open_browser(url: str) -> None:
     webbrowser.open(url)
 
 
+# Working copies older than this are from a session that has ended.
+STALE_WORK_SECONDS = 24 * 60 * 60
+
+
+def clear_old_working_files(now: float | None = None) -> int:
+    """Delete the working copies earlier sessions left in the temp folder: each upload's own
+    folder (`rebind-job-*`) and the copies made to read a document upright or without Rebind's own
+    layer. Nothing removed them, so every document ever opened stayed there -- its whole text,
+    on a shared library computer. Only what is more than a day old goes, so a conversion running
+    from the command line beside the app keeps its files. Returns how many were removed."""
+    import shutil
+    import time
+
+    now = time.time() if now is None else now
+    temp = Path(tempfile.gettempdir())
+    removed = 0
+    for path in [*temp.glob("rebind-job-*"), temp / "rebind-originals", temp / "rebind-upright"]:
+        try:
+            if path.name.startswith("rebind-job-"):
+                if now - path.stat().st_mtime > STALE_WORK_SECONDS:
+                    shutil.rmtree(path, ignore_errors=True)
+                    removed += 1
+            elif path.is_dir():
+                for copy in path.iterdir():
+                    if now - copy.stat().st_mtime > STALE_WORK_SECONDS:
+                        copy.unlink(missing_ok=True)
+                        removed += 1
+        except OSError:
+            continue        # in use, or gone already: leave it for next time
+    return removed
+
+
 def main() -> None:
     import uvicorn
 
     _hold_single_instance_mutex()
+    clear_old_working_files()
     log_config = uvicorn.config.LOGGING_CONFIG
     # use_colors=None makes uvicorn's formatters call sys.stdout.isatty() at construction time.
     # In the console=False frozen build sys.stdout is None whenever the process is launched

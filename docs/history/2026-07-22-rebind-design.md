@@ -1,7 +1,9 @@
 # Rebind — Design
 
 **Date:** 2026-07-22
-**Status:** Approved (design); implementation plan pending
+**Status:** Superseded 2026-07-30. The reconstruction approach below was dropped: Rebind keeps each
+page as it is and adds only the accessibility it lacks. Kept as a record; see
+[how-it-works.md](../how-it-works.md) for the program as built.
 **Author:** Thomas Scharff, with Claude
 
 ---

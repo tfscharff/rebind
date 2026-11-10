@@ -26,6 +26,7 @@ from pikepdf import Array
 
 from .extract import Page, extract_pages
 from .glyphs import corrections as glyph_corrections
+from .glyphs import same_fonts
 from .pagecache import file_key
 
 Matrix = tuple[float, float, float, float, float, float]
@@ -158,6 +159,7 @@ def upright(source: Path, pages: list[Page]) -> tuple[Path, list[Page], dict[int
             copy.parent.mkdir(parents=True, exist_ok=True)
             pdf.save(copy)
     try:
+        same_fonts(source, copy)
         corrected = glyph_corrections(source)
     except Exception:  # noqa: BLE001 -- as in extract_pages: the reading goes on without it
         corrected = {}

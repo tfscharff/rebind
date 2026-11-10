@@ -1,10 +1,11 @@
 """Remediate a PDF: keep the original appearance, add accessibility (PDF/UA structure).
 
-Each source page is rebuilt as its own rendered image, marked as an *artifact* (the picture the
-reader sees), with an *invisible*, *tagged* text layer placed over it -- the words drawn in render
-mode 3 (never printed) at their positions, wrapped in marked content and referenced from a PDF/UA
-structure tree. Rendering at 300 DPI keeps a scanned page visually identical to the original; the
-text comes from the page's own text layer where it has one, or from OCR where it does not.
+Each source page is kept as it is -- its own drawing marked as an *artifact* (what the reader
+sees) -- with an *invisible*, *tagged* text layer placed over it: the words drawn in render mode 3
+(never printed) at their positions, wrapped in marked content and referenced from a PDF/UA
+structure tree. The text comes from the page's own text layer where it has one, or from OCR where
+it does not. A page is redrawn from a 300-DPI picture of itself only where conformance leaves no
+other way (`overlay._rebuild_page` and the three tests beside its call).
 
 The output looks like the input but is now readable by assistive technology, with document
 language, title, tags and reading order set. This is remediation, not reconstruction: the page is
@@ -68,7 +69,7 @@ from .figures import (
     describe_figures,
     find_figures,
 )
-from .glyphs import repair_fonts
+from .glyphs import repair_fonts, same_fonts
 from .headings import _structure_roles
 from .layout import order_page
 from .ocr import OcrEngine, recognize, render_page_to_image
@@ -105,6 +106,21 @@ EDITOR_PAGE_PX = 900
 # of a scanned page, and the picture of each page the editor lays its boxes over.
 _recognised = PageCache()
 _editor_pictures = PageCache()
+
+
+# A document's pages as read from its text layer, kept while the file is unchanged: every saved
+# correction rebuilds the document, and reading a long born-digital file again each time was the
+# largest part of the wait. A handful of documents, since each is every line of every page.
+_extracted = PageCache(limit=4)
+
+
+def _pages_of(source: Path) -> list:
+    stamp = file_key(source)
+    key = stamp and stamp + ("pages",)
+    pages = _extracted.get(key)
+    if pages is None:
+        pages = _extracted.put(key, tuple(extract_pages(source)))
+    return list(pages)
 
 
 @dataclass
@@ -528,9 +544,9 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     `darken_contrast` is the one thing that changes how the document *looks*: text failing WCAG AA
     is darkened just enough to pass, keeping its hue (see `recolor`). On by default -- an
     accessible document is the job, and a contrast failure Rebind can fix is not worth handing back
-    as homework. It is conservative by construction: only colours used exclusively by text are
-    touched, never one the artwork also uses, and a page with nothing failing keeps its original
-    bytes. Pass False to measure and report without correcting.
+    as homework. It is conservative by construction: a correction is confined to the text object
+    it is made in, so artwork in the same colour is untouched, and a page with nothing failing
+    keeps its original bytes. Pass False to measure and report without correcting.
     """
     source, target = Path(source), Path(target)
     # With no corrections given, a file Rebind wrote is opened with the ones it was saved with.
@@ -543,7 +559,7 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
     # wrote is then read as what it was before: its own layer read back in would double every word.
     described = existing_descriptions(source)
     source = original_of(source)
-    source_pages = list(extract_pages(source))
+    source_pages = _pages_of(source)
     # A page printed sideways is read, drawn over and shown in the editor turned upright, and
     # written turned back (`turn`).
     source, source_pages, turns, moved = upright(source, source_pages)
@@ -618,6 +634,10 @@ def remediate(source: Path, target: Path, *, title: str | None = None, lang: str
         if recoloured:
             render_source = target.with_name(target.stem + ".recoloured.tmp.pdf")
             pdf.save(render_source)
+            try:
+                same_fonts(source, render_source)
+            except Exception:  # noqa: BLE001 -- only saves work; the fonts are looked at again
+                pass
 
     tree = StructTree(pdf, len(source_pages))
     font = OverlayFont(pdf)

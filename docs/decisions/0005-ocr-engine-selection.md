@@ -1,7 +1,7 @@
 # 0005 — OCR engine selection (feasibility spike)
 
-**Status:** Proposed. RapidOCR (onnxruntime) passed a Phase-0-style feasibility spike; adopting it
-is a pending decision because of its bundle-size cost (see Consequences).
+**Status:** Accepted. RapidOCR (onnxruntime) passed a Phase-0-style feasibility spike and is the
+engine Rebind ships. The text below is as written when the decision was still open.
 
 **Date:** 2026-07-29
 

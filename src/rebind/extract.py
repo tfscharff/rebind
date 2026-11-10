@@ -1,11 +1,9 @@
 """Read a born-digital PDF's text layer with position and font metrics.
 
-pdfminer.six is used rather than `inspect.py`'s ToUnicode parser, which is diagnostic/test-only
-by design (see CLAUDE.md). pdfminer.six is MIT, pure Python and has no native build step, so it
-satisfies the bundle-able-on-Windows invariant.
+pdfminer.six is MIT, pure Python and has no native build step, so it satisfies the
+bundle-able-on-Windows invariant.
 
-Pages are yielded lazily. Nothing here retains more than one page at a time, which is what makes
-1,000-page documents tractable.
+Pages are yielded lazily; nothing here retains more than one page at a time.
 """
 
 from __future__ import annotations
@@ -50,8 +48,8 @@ class TextLine:
     bold: bool
     italic: bool
     # Set only for lines recovered by OCR: the recognizer's per-line confidence (0.0-1.0). None for
-    # born-digital text, which is exact by construction. `assemble` uses it as the node's confidence
-    # and, below a threshold, replaces the line with an honest placeholder rather than a guess.
+    # born-digital text, which is exact by construction. The recogniser itself leaves out a line
+    # it is not confident of; nothing replaces it.
     ocr_confidence: float | None = None
     # The ink colour the page itself declares for this line, as 8-bit sRGB. None when the page does
     # not declare a plain device colour (a pattern or an unusual colour space), and always None for
@@ -406,15 +404,22 @@ def _close_drop_caps(raws: list[_Raw]) -> list[_Raw]:
                          (min(c.x0 for _s, _e, c in kept), min(c.y0 for _s, _e, c in kept),
                           max(c.x1 for _s, _e, c in kept), max(c.y1 for _s, _e, c in kept)),
                          raw.turn))
-    caps += [raw for raw in rest if len(raw.chars) == 1 and len(raw.text) == 1]
+    # A line of one capital letter may be a cap too. (Not every one-character line: sideways text
+    # arrives as hundreds of them, and trying each against every line made this the slowest step
+    # of reading a page.)
+    caps += [raw for raw in rest if len(raw.chars) == 1 and len(raw.text) == 1
+             and raw.text.isalpha() and raw.text.isupper() and not raw.turn]
+    if not caps:
+        return rest
     out = [raw for raw in rest if not any(raw is cap for cap in caps)]
+    # Measured from the characters: pdfminer's box for the line beside a cap can reach back over
+    # the cap itself.
+    left = {id(raw): min(c.x0 for _s, _e, c in raw.chars) for raw in out if len(raw.chars) > 1}
     for cap in caps:
         char = cap.chars[0][2]
         height = cap.bbox[3] - cap.bbox[1]
-        # Measured from the characters: pdfminer's box for the line beside a cap can reach back
-        # over the cap itself.
-        beside = [raw for raw in out if len(raw.chars) > 1
-                  and -1.0 <= min(c.x0 for _s, _e, c in raw.chars) - cap.bbox[2] <= height
+        beside = [raw for raw in out if id(raw) in left
+                  and -1.0 <= left[id(raw)] - cap.bbox[2] <= height
                   and cap.bbox[1] < raw.bbox[3] <= cap.bbox[3] + height / 4]
         if not beside or not is_cap(char, [c for raw in beside for _s, _e, c in raw.chars]):
             out.append(cap)
@@ -428,6 +433,7 @@ def _close_drop_caps(raws: list[_Raw]) -> list[_Raw]:
                        max(cap.bbox[2], line.bbox[2]), max(cap.bbox[3], line.bbox[3])),
                       line.turn)
         out = [merged if raw is line else raw for raw in out]
+        left[id(merged)] = left.pop(id(line))
     return out
 
 

@@ -256,3 +256,30 @@ def test_a_report_fix_is_applied_and_survives_a_later_rebuild(tmp_path: Path):
     (tmp_path / "out2.pdf").write_bytes(client.get(f"/jobs/{job_id}/pdf").content)
     with pikepdf.open(tmp_path / "out2.pdf") as pdf:
         assert str(pdf.open_metadata()["dc:title"]) == "A Better Title"
+
+
+def test_working_copies_from_earlier_sessions_are_cleared(tmp_path, monkeypatch):
+    # Nothing ever removed them: every document opened stayed in the temp folder, whole.
+    import os
+    import tempfile
+    import time
+
+    from rebind.app import STALE_WORK_SECONDS, clear_old_working_files
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    old_job, new_job = tmp_path / "rebind-job-old", tmp_path / "rebind-job-new"
+    for job in (old_job, new_job):
+        job.mkdir()
+        (job / "source.pdf").write_bytes(b"%PDF")
+    copies = tmp_path / "rebind-upright"
+    copies.mkdir()
+    old_copy, new_copy = copies / "old.pdf", copies / "new.pdf"
+    old_copy.write_bytes(b"%PDF")
+    new_copy.write_bytes(b"%PDF")
+    long_ago = time.time() - STALE_WORK_SECONDS - 60
+    os.utime(old_job, (long_ago, long_ago))
+    os.utime(old_copy, (long_ago, long_ago))
+
+    assert clear_old_working_files() == 2
+    assert not old_job.exists() and not old_copy.exists()
+    assert new_job.exists() and new_copy.exists()

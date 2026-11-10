@@ -1,317 +1,41 @@
 # Rebind
 
-Accessible PDF remediation for damaged library scans.
+Rebind makes a PDF accessible. Give it a PDF, scanned or born-digital, tagged or not, and it gives
+back the same document, looking the same, with what a screen reader needs added: a text layer,
+reading order, headings, lists, tables and figure descriptions. The result is a PDF/UA-2 document
+that validates with [veraPDF](https://verapdf.org) at zero failures.
 
-Rebind takes a PDF — scanned or born-digital, tagged or not — and produces a PDF/UA-2 document that
-validates with veraPDF at zero failures. It preserves each page as it is and adds a selectable text
-layer and a structure tree. Everything runs on the local machine: no API key, no GPU, no network.
+It is built for library staff who remediate documents for patrons: interlibrary-loan scans, journal
+articles, book chapters, course catalogs. It needs no technical setup, no account and no internet
+connection. It runs on an ordinary Windows computer, and a document never leaves it.
+
+What a machine cannot decide, Rebind asks you, in one place: it shows each page with every element
+boxed, you walk through with Tab, correct a type with one key, and type a description for each
+picture.
 
 ## Install
 
-**Windows.** Download `rebind-setup.exe` from the
+**Windows 10 or 11 (64-bit).** Download `rebind-setup.exe` from the
 [latest release](https://github.com/tfscharff/rebind/releases/latest) and run it. No admin rights
-needed. The installer is unsigned, so SmartScreen warns on first run — choose *More info* →
-*Run anyway*.
+are needed. It takes about 550 MB of disk space; most of the 350 MB download is the two models it
+uses to read page layout and equations.
 
-Open Rebind from the Start menu. It opens a page in your browser; that is the app. Closing the tab
-quits it.
+The installer is not code-signed, so Windows SmartScreen warns the first time: choose *More info*,
+then *Run anyway*.
 
-**From source** (Python 3.12):
+Open Rebind from the Start menu. It opens a page in your browser; that page is the app. Closing the
+tab quits it.
 
-```bash
-git clone https://github.com/tfscharff/rebind
-cd rebind
-uv sync                # https://docs.astral.sh/uv/
-uv run rebind serve
-```
+## Use
 
-The first run from a clone downloads the page-layout model (130 MB) and the equation reader
-(179 MB), both too large for the repository, into `models/` and checks their SHA-256s; the installer already carries it, and the installed app never
-downloads anything. Offline, Rebind still runs on its geometric rules alone (see *Layout model*)
-and tries again next time. `REBIND_LAYOUT_MODEL=off` switches the model off on purpose.
-
-On Windows, `rebind.cmd` in the clone does the same.
-
-```bash
-uv run rebind convert in.pdf out.pdf     # no app
-```
-
-`REBIND_DEBUG=1` prints a full traceback on failure.
-
-## Per page
-
-- **Born-digital** — kept verbatim, vector text unchanged, tagged with reading order and structure.
-- **Scanned** — image kept, with an invisible selectable text layer from on-device OCR (RapidOCR on
-  the CPU, models bundled). Deskewed and denoised before recognition.
-- **No recoverable text** (blank, or an image with no words) — kept as is, and reported.
-
-A scan that already carries another tool's invisible OCR layer has it removed first, so the output
-holds one copy of each word. Visible marks are untouched and the page is not re-rendered. That layer
-is kept as the page's text, but the page is recognised again too, and any line it missed (a graphic
-novel's came without a single speech balloon) is added, when read with confidence.
-
-**Sideways and offset pages.** A page whose text is mostly turned (a landscape table printed on a
-portrait page), a page with a `/Rotate` of its own, and a page whose box does not start at the
-origin or is cropped (every JSTOR download: its media box starts 8 points below) are read from a
-copy with that page turned upright and its shown area moved to the origin. Every stage downstream
-sees an ordinary page, the editor shows it the right way up, and the page written out is given the
-`/Rotate` that shows it exactly as the original was. Without this a sideways table was read as a
-scatter of fragments, and on a JSTOR file every frame, and the text layer, sat 8 points too high.
-
-**Drop caps.** A paragraph's large first letter is joined to the word it begins ("Breastfeeding", not
-"B reastfeeding"), wherever pdfminer had grouped it. "A" and "I" are joined too, unless the page uses
-the rest ("study") as a word of its own.
-
-Text is never fabricated. Every text node traces to recognizer output with a confidence score;
-below threshold it becomes `[text not recoverable from source scan, p. 214]`.
-
-## Reading order
-
-Recovered by recursive XY-cut over the text-line boxes, including the layout where a full-width
-heading sits above the columns and hides the gutter. A figure's callout labels are held out of the
-cut and spliced back in at the height they sit at.
-
-Within a block, items on one line read left to right. Two lines count as one line when their boxes
-share most of the shorter one's height. The rule never crosses a gutter: in two-column text the
-whole left column is read before the right.
-
-Page furniture and table grids are held out of the cut and put back afterwards, because both
-mislead it — a running head spanning two columns hides the gutter, and a table's inter-cell gaps
-look exactly like gutters. Furniture goes back at the height it sits at, so a running head is the
-first stop on the page rather than the last. A table goes back as one unbroken run, read row by
-row: a grid the cut had split down the middle is one `/Table` with one header row, not two tables
-each inventing a header, with the body paragraph that sat between the halves back outside it.
-
-Born-digital pages name their own structure through markup. Scanned pages do not, so structure is
-inferred from geometry: line height against the body median, whitespace above and below, and
-alignment into recurring column positions.
-
-### Layout model
-
-Each page is also looked at as a picture by a document-layout model — PP-DocLayoutV3 (PaddleOCR,
-Apache-2.0) on onnxruntime, on the CPU, about two seconds a page, remembered between rebuilds of an
-unchanged file. It boxes the page's regions: running heads and folios, paragraphs, section titles,
-tables and their titles, footnotes. Where it boxed a line, its boxes decide:
-
-- **Paragraphs** — the lines in one text block are one paragraph, and lines in different blocks are
-  not, whatever the margins suggest.
-- **Tables** — a table is exactly the lines inside its table region, so prose in the next column
-  that lines up with the table's columns stays prose.
-- **Table titles** — a title next to a table becomes the table's `/Caption`, inside it, first.
-- **Page furniture** — running heads, feet and folios the model is confident of become artifacts.
-- **Headings** — a large line run in with other lines in one text block is not a heading.
-- **Equations** — a displayed equation, with the number set beside it, becomes one `/Formula`.
-
-Where it boxed nothing, or is unsure, the geometric rules decide as before. The model groups lines;
-it never supplies text, so a wrong box can only group wrongly, which the editor corrects.
-
-## Structure tree
-
-- **Headings** `/H1`–`/H6`, level-normalized so the sequence starts at H1 and skips no level.
-  Born-digital from font size; scanned from geometry — distinctly taller than body text, set apart
-  by whitespace, shorter than the column. A title wrapping onto a second line is one heading:
-  consecutive lines set the same way, stacked with tight leading and overlapping horizontally, are
-  joined. Two lines is the limit, since a wrapped byline is geometrically identical to a wrapped
-  title; longer runs are demoted to paragraphs.
-  The document's title (its largest heading size, used by one run of lines only) may run to six
-  lines, and nothing smaller read before it is a heading: a library's cover sheet came first on a
-  real file, H1 was anchored to one of its lines, and every heading after it came out H1. A font
-  named with a bare weight suffix (`.B`, `.I`) is read as bold or italic, which is what ranks a
-  journal's section headings above its subsection headings when both are the same size.
-- **Paragraphs** `/P` — whole paragraphs, not one per line. Lines join unless the typesetting says
-  otherwise: the previous line stopping short of the measure, a first-line indent, a gap wider than
-  the run's leading, or a change of size, weight, slope or face. Where signals disagree the split
-  is kept.
-- **Superscripts and subscripts** — each a `/Span` inside its paragraph, heading, caption, list
-  item or cell, carrying the standard Layout attribute `/BaselineShift` (positive raised, negative
-  lowered, in points). The words around them stay one element, so "Ca²⁺" and "10⁻⁵" are not lost
-  as a charge and a power. Born-digital: read from where the PDF places each character's baseline.
-  A line pdfminer breaks at a subscript followed by a superscript ("SO₄²⁻") is rejoined. Scanned:
-  each figure and sign is measured against its line's own baseline and cap height. A line the text
-  finder drops because its scripts crowd the lines around it is found from the ink left unread and
-  read again on its own, and pieces read separately are joined back with their scripts. Letters are
-  not judged on a scan (`K_sp` is caught only when it comes back as its own piece). The text stays
-  as printed ("H2O"), and most screen readers do not yet announce a baseline shift.
-- **Page furniture** `/Artifact` — running heads, footers, folios. Born-digital: the same style
-  recurring at a page edge. Scanned: the same *words* recurring at a page edge, digits stripped so
-  a changing folio still matches. The threshold is a quarter of the document's pages, because a
-  running head alternates between verso and recto.
-- **Captions** `/Caption` — one element per caption. Grouped by which caption a line belongs to
-  rather than by adjacency, so stray marks between a caption's lines do not split it. Each caption
-  is moved inside the figure or table nearest it, measured between boxes; a table's title set above
-  it becomes its first child. PDF/UA-2 permits at most one
-  caption per figure and requires it to be the first or last child; a caption with no figure left
-  to attach to stays a paragraph.
-- **Lists** `/L` → `/LI` → `/LBody`.
-- **Tables** `/Table` → `/TR` → `/TD` as a regular grid. Top row is `/TH` scoped to its column,
-  empty cells fill gaps, and the table carries an `/Alt` summary of column/row count and header
-  text. In a table without rules between its rows, where cells wrap onto several lines, a row
-  starts where the first column starts a new entry (its wrapped lines hang indented, or carry on
-  mid-phrase), and the other lines join the row above, so "2007 (United / States)" is one cell.
-- **Formulas** `/Formula` — displayed equations, found by the layout model or marked with `m`.
-  Undescribed, a screen reader reads the formula's own text; the editor takes a description in
-  words exactly as it does for a picture (Enter or Space on the formula), which becomes its `/Alt`.
-  The box comes with a draft: the equation is read from its picture into LaTeX by LaTeX-OCR
-  (pix2tex, on the CPU, about half a second each) and put into words — "omega sub d equals the
-  square root of omega sub 0 squared minus gamma squared". The reader slips (a double prime read
-  as a prime, a zero as the letter O), so the draft is never written into the document unless the
-  person accepts it, and the box says to check it against the page. The report lists undescribed
-  formulas and goes to them.
-- **Figures** `/Figure` with `/Alt` — see below.
-- **Links** — external URIs tagged with an object reference to the annotation. Removed rather than
-  carried through: internal links using legacy page/coordinate destinations (PDF/UA-2 requires
-  structure destinations), and links whose target is unfollowable, such as `http:0.5–0.75` from an
-  auto-linker firing on a numeric range.
-- **Bookmarks** — an outline from the recovered headings, nested by level, each a PDF 2.0 structure
-  destination.
-
-### Figures
-
-Found five ways:
-
-1. **Printed music**, by its staves — see below.
-2. **Placed images**, read from the file.
-3. **Drawn figures** — line art leaves no image object, so it is found by anchoring on its caption:
-   everything drawn in the band above a `Fig. N …` caption.
-4. **Pictures on a scan, boxed by the layout model.** A scanned sheet is one raster and an
-   illustration on it is a patch of that raster, not an object. The layout model looks at the whole
-   page and boxes pictures and charts as such (score ≥ 0.6).
-5. **Regions of a scan, from its pixels**, for whatever the model did not box. OCR says where the
-   words are, those are masked out, and the remaining ink is closed into blobs. A blob qualifies if
-   it covers ≥1.5% of the page, is solid enough to be a picture, is not mostly text, and does not
-   reach three page edges (what does is the scanner's dark strip at the spine or platen edge).
-
-A picture the model boxed is kept whether or not anything captions it: an uncaptioned one goes to
-the editor to be described. A pixel region is a guess — on a page of plans it is mostly hatching —
-so it is kept only if the document captions it somewhere, or if it covers at least 5% of the page
-(a comic's panels are captioned by nothing). Smaller and uncaptioned, it is treated as part of the
-page and can be marked by hand with `f`. Declared images are always kept. Lines stacked inside a
-guessed picture (a speech balloon, a caption box) are read as text, not held out as its labels.
-
-Alt text comes from the document's own caption, including when the caption is split across a page
-break. Captions are recognised by a wide label set (`Fig.`, `Figure`, `Plate`, `Chart`, `Diagram`,
-`Scheme`, `Photograph`, `Exhibit`, `Map`, …, numbered or not). Searched below, above, and — where a
-book stacks captions in the outer margin — beside, the last only when exactly one unclaimed caption
-sits beside the figure. Line-break hyphens are healed, so the alt text reads "iconographical", not
-"iconograph- ical".
-
-Never used as alt text: prose that merely sits under a picture, and a bare label ("Fig. 8"). Both
-satisfy a checker while telling a reader nothing. A bare label is offered in the editor as a
-starting point.
-
-A figure's callout labels ("A", "B", "3 mm") belong to the figure, described or not, and are drawn
-inside it rather than left loose in the reading order — so do the scraps a recogniser makes of
-the picture's own lettering. Only labels: a line of a paragraph is never claimed, so a picture set
-beside a title block or under a run of paragraphs cannot pull them out of the reading order.
-
-A sentence that names a figure ("Figure 3A. is FTIR spectra of…", "Fig. 2 shows…") is prose, not a
-caption: a label followed by a verb is never taken as one.
-
-**Tables are tables, not figures.** A figure found from drawings or pixels whose lines are mostly a
-table's (as the layout model boxes it, or the geometric detector finds it) gives way to the table.
-A table described in a sentence would pass a checker, but it fails WCAG 1.3.1: a screen reader can
-move through a tagged table cell by cell, hearing each cell's column header, and no description
-gives that back. Every table already carries a drafted `/Summary` (columns, rows and headers).
-
-A figure is read where it sits in its own column: after the text above it that shares any of its
-width. On a two-column page, a figure in the left column is no longer read in the middle of the
-right one.
-
-**Music.** PDF/UA has no tag for notation, so a music example is a figure, and what a reader needs
-is a description. It is found by its staves: five long, evenly spaced lines, closer together than
-lines of text. The search runs strip by strip across the page and chains the pieces, so a tilted or
-warped scan and a stave with worn-away stretches still come out as one stave each, while two
-examples set side by side on one line stay two. Staves stacked with no prose or caption between
-them are one example; a sentence between them, an "Ex. 25." label, or an exercise number over the
-left end of a stave starts the next. Five lines with words in their spaces are a ruled table, not
-music. Born-digital pages are searched too when they carry drawings or images.
-
-The example's box takes in what is printed on and around its staves — ledger lines, figures under a
-bass, a tempo — and everything read as text on the staves belongs to the figure, so a screen reader
-no longer meets note heads read as letters. The example's label stays outside it, read in its own
-right.
-
-A music example always goes to the editor to be described, with a draft: its own label, then how it
-is laid out and its clefs — "Ex. 238. Music in two lines, each on two staves: treble and bass
-clefs." Lines are told apart by the clefs repeating down the example; a clef that cannot be told is
-left out, and so is the layout with it. Key signatures, time signatures and bar counts were tried
-and left out: on two real scanned books they came out wrong too often to offer, and a wrong key is
-worse than none. The draft is only a start; what the music is — the piece, the passage, what it
-shows — is the person's to add.
-
-**Not read.** Text turned sideways in a margin (a download stamp, an archive identifier — rejoined
-first, since it arrives one character per line), lines made only of icon glyphs, a rule typed out
-as a row of one mark ("------"), and text set off the page entirely are page furniture.
-
-**Specks.** On a scanned page, a line the recogniser read out of dirt is not read and not listed in
-the editor: a line of nothing but marks ("|", "~", "."), or one or two characters the layout model
-found outside every region where words are expected. Born-digital text is never treated this way,
-and a frame drawn over a speck still brings it back.
-
-## The accessibility report
-
-Adobe's Accessibility Checker rule list, judged against the produced PDF. Four verdicts: *passes*,
-*needs you*, *needs your eye* (reading order only), and *not applicable*. Each is read off the
-finished document — the structure tree, the fonts, the annotations — never inferred from what
-remediation intended.
-
-Every open item carries either a fix Rebind can perform or the place in the document to correct it
-by hand. A test asserts this for every check.
-
-### Colour contrast
-
-Measured against WCAG 2.1 SC 1.4.3 (4.5:1, or 3:1 for large text) and corrected during remediation,
-then re-measured. It is never asked of the user.
-
-Ink comes from the page's own declaration; paper is sampled from the rendered page, since what sits
-behind text is not stated anywhere. Each failing colour moves away from the paper behind it — text
-on white darkens, text on a dark panel lightens — keeping its hue. Changes are scoped to a text
-object and undone at its end, so a colour shared by a heading and a rule corrects only the heading.
-
-Two kinds of text are not measured, because no colour is being chosen: text with no declared colour
-(a scan's words are the picture), and text drawn invisibly in rendering mode 3.
-
-### Reading order
-
-No measurement settles reading order, so it stays with the user. Every element is a tab stop and
-Tab runs off the end of one page onto the next. The report counts pages walked and ticks the check
-when all have been seen.
-
-## The result view
-
-Three columns: the report on the left, the document at twice the width in the middle, the walk on
-the right.
-
-Nothing has to be saved. An edit goes to the server on its own and the document is rebuilt behind
-you; the header says where that has got to. Saving is triggered by a change, not by a keystroke.
-A rebuild reuses everything an edit cannot change — each scanned page's OCR, its layout regions,
-music and formula readings, and the page pictures — and when it lands only what changed is redrawn:
-the boxes are updated in place, the one you are on is never moved or re-focused, and the panel
-beside it is left alone unless that element itself changed. Page pictures are fetched as images
-when you turn to a page (the pages either side are decoded ahead), not re-sent with every save.
-
-**Tab order:** each failing check in the report, then element 1 of the document, with nothing in
-between. A page with nothing to read on it still has one Tab stop, saying so, so Tab carries on
-to the next page instead of leaving the document. Other controls are out of the natural order and reached from what they belong to — a fix
-field from its `!` row, the pager from `[` and `]`. **Download PDF** and **Do another document**
-are the last two stops.
-
-**Left.** Adobe's rule list in Adobe's groups. A rule with nothing to test is *not applicable*, not
-passed. Anything that did not pass is a button: activate it and the middle column turns to the page
-concerned, or focus lands on the field that fixes it.
-
-**Middle.** The document, sized so a whole page is visible without scrolling. Each tagged element
-is drawn over the page and is a tab stop, in reading order.
-
-**Right.** The element you are on, named in large type with the key that sets it, and the key
-legend below. Pressing a key sets the type and moves to the next element. `?` (or the **All keys**
-button) opens a list of every key on whatever you are on, a picture included; `Enter` opens it
-too, except on a picture or formula, where `Enter` writes the description.
-
-On a figure, the right column becomes its description with the caption pre-filled. Landing on it
-does not take focus: `Tab` accepts the guess and moves on, `Enter` or any character goes into the
-box, and from the box `Enter` or `Tab` accepts while `Esc` returns to the page. `x` still takes the
-figure out of the reading order; other type keys type instead.
+1. Drop a PDF on the page. Rebind converts it and shows the result: Adobe's accessibility checks on
+   the left, the document in the middle, and the element you are on to the right.
+2. Press Tab to walk the document in reading order. Each stop is one element: a heading, a
+   paragraph, a table row, a picture.
+3. Where Rebind got a type wrong, press the key for the right one (the table below). On a picture,
+   type what it shows. Press `?` on anything to see every key that works there.
+4. Download the PDF. Nothing needs saving along the way, and a downloaded file can be opened in
+   Rebind again later with every correction still in place.
 
 | key | | key | | key | |
 |---|---|---|---|---|---|
@@ -320,96 +44,112 @@ figure out of the reading order; other type keys type instead.
 | `f` | Figure | `t` | Table | `i` | Index |
 | `l` | List | `m` | Formula | `n` | No structure |
 | `e` | Code | `o` | Form field | `v` | Footnote |
-| `x` | Not read | `[` `]` | Previous / next page | | |
-| `h` | Table header cell | `d` | Table data cell | | |
+| `h` | Table header cell | `d` | Table data cell | `x` | Not read |
+| `Insert` | New element | `Delete` | Remove element | `[` `]` | Previous / next page |
 
-`Insert` adds a new element right after the one you are on in the reading order: an empty frame
-just below it, which becomes whatever
-lines you drag it (or `Shift`+arrow it) over — including lines Rebind set aside as page furniture.
-On something marked not read, `Insert` puts it back instead. `Delete` deletes the element (marks it
-not read) and moves on; `Backspace` does the same and steps back, for clearing a run of junk
-upwards. Deleting an element you inserted just removes its frame. On a table row, `h`/`d` set the
-row, `Insert` adds a new row below it, `Delete` takes that row out of the table, and every other
-type key retypes the whole table. (`+` and `−` still work as `Insert` and `Delete`.)
+Frames can be dragged and tables built by hand: see
+[the editor reference](docs/editor.md).
 
-**Building a table by hand.** Mark each cell with `h` or `d`. A run of consecutive cells becomes one
-`/Table`: rows from vertical overlap (so a wrapped cell stays in its row), columns from clustered left
-edges, empty cells to keep the grid regular. A header cell is scoped to its column when its whole row
-is headers, otherwise to its row.
+## What it does
 
-**Frames.** Each element's box is the region whose lines it holds, and it can be reshaped: drag an
-edge or corner with the mouse (drag the middle to move it), or use `Shift`+arrows for the bottom and
-right edges and `Ctrl`+`Shift`+arrows for the top and left. On the rebuild the element becomes
-exactly the lines whose centres fall inside the frame — dragging a paragraph's bottom edge over the
-lines it was split from merges them; pulling it back up gives them away as an element of their own.
-Lines a frame lets go of become an element of their own, with a frame of its own to gather them up
-again. A detected table's header and data rows have frames too: drag a row over a cell the table missed and
-it joins that row (and the table); shrink a row and the cells it lets go leave the table. A picture's
-frame is its box: reshape it when Rebind's guess is off, and exactly the labels inside it are read
-as part of the picture.
+- **Keeps the page.** A born-digital page stays as it is, crisp and vector. A scan stays the scan.
+  Rebind adds an invisible, tagged text layer over it. The one visible change is text that fails
+  WCAG colour contrast, which is darkened just enough to pass.
+- **Reads scans.** Pages with no text are recognised on the computer itself (RapidOCR). A scan that
+  arrives with another tool's text layer keeps it, and Rebind adds what that layer missed.
+- **Finds the structure.** Reading order across columns, headings and their levels, lists, tables
+  with header cells, captions, footnotes, superscripts, running heads and page numbers (marked as
+  page furniture, not read).
+- **Handles awkward pages.** Tables printed sideways, drop caps, journal fonts that mislabel their
+  own symbols, pages whose boxes do not start at the corner.
+- **Finds pictures** and asks you to describe each one, starting from the document's own caption
+  where there is one. Equations and printed music get a drafted description for you to check.
+- **Checks its work.** The report lists Adobe Acrobat's accessibility rules and where each stands.
+  Anything open comes with a fix Rebind can make or the place in the document to make it.
 
-**Symbols a font misreports.** Some journals set their plus signs, arrows and Greek letters in
-fonts that label those glyphs as ordinary letters, so the file says "þ" where the page shows "+".
-Rebind compares each glyph's shape with the character its font claims, and in a font that is
-mostly wrong about itself it reads a symbol only when the shape leaves no doubt. Every other glyph
-is read as unknown (U+FFFD) rather than guessed. The report lists the pages this happened on:
-describing the formulas there is what makes them readable. The font's map is repaired too, so
-the page itself stays as it was.
+[How it works](docs/how-it-works.md) explains each of these, with the reasons.
 
-**Coming back to a document.** A file Rebind wrote can be uploaded again and the work carries on
-where it was left: every correction (types, frames, removed and inserted elements, descriptions)
-is saved inside the file, and the editor opens with all of it. Rebind reads the file as the
-document it was before, not with its text doubled; a page it had to redraw from a picture keeps
-its own drawing too, and is put back exactly. A description already in another tool's tags is
-kept and shown as well; what you type replaces it.
+## Limitations
 
-`x` is an action, not a type: it marks content as an artifact rather than untagging it, since
-untagged content is a conformance failure. Page furniture and text inside figures are drawn hatched
-as "not read"; giving one a type puts it back into the reading order.
+- **OCR makes mistakes.** Text recognised from a scan can contain misread words. A line the
+  recogniser is not confident of is left out, not guessed at, and nothing marks where it was: check
+  a faint or damaged page against the scan.
+- **Descriptions are yours to write.** Rebind does not describe pictures. It drafts a description
+  only for equations and for the layout of printed music, and never writes a draft into the file
+  unless you accept it.
+- **Structure is inferred.** Headings, tables and reading order are judged from the page's
+  geometry and a layout model. The walk exists because those judgements are sometimes wrong.
+- **Mathematics is described in words**, not converted to MathML. Printed music is kept as a
+  figure, not read as notes.
+- **A document's own bookmarks and internal links are dropped** and bookmarks are rebuilt from
+  Rebind's headings (PDF/UA-2 requires a kind of link that older files cannot contain).
+- **Pages are not straightened.** A skewed or spine-curved scan is read as it is.
+- **English by default.** The document language is set to English; `--lang` changes it from the
+  command line. OCR is tuned for Latin-script text.
+- **Windows only** as an installed app. It runs from source elsewhere, untested.
+- Output is not byte-for-byte reproducible between runs.
 
-On a detected table's row, only `h` (Header cell) and `d` (Data cell) are offered, letting you correct which
-rows are headers without retagging the whole table. The key legend is the element's own, not the
-document's: land on a row and it lists those two and nothing else, because nothing else answers
-there.
+## Privacy
 
-Every change rebuilds the document from the corrected plan rather than patching the structure tree,
-so grouping decisions change too. Every offered type has a test that applies it and validates the
-result: `/Caption` and `/Quote` are illegal directly under the document, `/Aside` is not a PDF 2.0
-name, a grouping element may not hold content directly, a `/Figure` needs an `/Alt`, and a
-`/Caption` must be nested inside the figure or table it captions. `/Part` is not offered.
+The installed app makes no network connections. It serves its page to your own browser at
+`127.0.0.1:8756` and nowhere else, and there is no telemetry.
 
-The result view also shows a structure badge: a fast, dependency-free check of what remediation is
-expected to have built. It is not conformance validation — that is veraPDF, dev/CI only (ADR 0006).
+While it works, Rebind keeps copies of the document in the Windows temp folder. Copies more than a
+day old are deleted the next time Rebind starts. A log, `rebind.log`, is written beside the
+program. It records each request and any error, including the names of the files you open, but
+not their text.
 
-Closing the tab quits Rebind. A reload does not: the beacon starts a short countdown that the
-reloaded page's first heartbeat cancels.
+## Reporting a problem
+
+Open an [issue](https://github.com/tfscharff/rebind/issues). The most useful report is a document
+Rebind handled badly: say what kind it is (scan or born-digital, how many pages), what went wrong
+and on which page, and attach `rebind.log` if there was an error. Please do not attach copyrighted
+scans to a public issue; describe the page instead.
+
+If Rebind's output is confusing or wrong with the assistive technology you use, that is a bug, and
+it is the kind this project most wants to hear about.
+
+## From source
+
+Python 3.12 and [uv](https://docs.astral.sh/uv/):
+
+```bash
+git clone https://github.com/tfscharff/rebind
+cd rebind
+uv sync
+uv run rebind serve                      # the app
+uv run rebind convert in.pdf out.pdf     # no app; --title and --lang set the metadata
+```
+
+On Windows, `rebind.cmd` in the clone starts the app.
+
+The first run from a clone downloads the page-layout model (130 MB) and the equation reader
+(179 MB) into `models/` and checks their SHA-256s: they are too large for the repository. That is
+the only time Rebind uses the network, and the installed app never does. Offline, Rebind runs on
+its geometric rules alone and tries again next time. `REBIND_LAYOUT_MODEL=off` and
+`REBIND_FORMULA_READER=off` switch each model off on purpose; `REBIND_DEBUG=1` prints a full
+traceback on failure.
+
+Rebind is not published on PyPI. [CONTRIBUTING.md](CONTRIBUTING.md) covers the tests and the
+installer build.
 
 ## Status
 
-**1.10.1.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
-and download, to a document that validates PDF/UA-2 at zero failures.
-
-Not implemented:
-
-- Page dewarp for spine-curved scans.
-- Mathematics as MathML, and chemistry. Equations are found, tagged and given a drafted
-  description in words for the person to check, but not converted to MathML.
-- Reading music: its notes, key and time, and output as MusicXML. Music examples are found, kept
-  as figures and given a draft of their layout and clefs only.
-- A source document's own internal navigation, which is dropped rather than rebuilt (ADR 0006).
-- Byte-reproducible output (ADR 0003).
-
-## Runtime
-
-Local only — no API key, no GPU, no network. The Windows installer (~350 MB, most of it the page-layout model and the equation reader) is unsigned, so
-SmartScreen warns on first run.
-
-## License
-
-MIT — see [LICENSE](LICENSE). Bundled components carry their own licenses; the installer ships the
-full notices (`packaging/licenses/`).
+**1.11.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+and download, to a document that validates PDF/UA-2 at zero failures. See
+[CHANGELOG.md](CHANGELOG.md) for what changed in each release.
 
 ## Documentation
 
-- [Design specification](docs/superpowers/specs/2026-07-22-rebind-design.md)
+- [How it works](docs/how-it-works.md): what Rebind does to a page, and why
+- [The editor](docs/editor.md): every key, frames, tables by hand
+- [Decisions](docs/decisions/): the records behind the larger choices (PDF/UA-2, OCR engine,
+  determinism, code signing)
+- [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
+
+## License
+
+MIT; see [LICENSE](LICENSE). Bundled components carry their own licenses. The installer puts the
+full notices in the `licenses` folder beside the program, and they are in
+[`packaging/licenses/`](packaging/licenses/) here.

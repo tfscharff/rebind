@@ -291,6 +291,14 @@ def _analyse(source: Path) -> dict[str, dict[int, tuple[str, str]]]:
     return _found.put(key, out)
 
 
+def same_fonts(original: Path, copy: Path) -> None:
+    """Say that `copy` is `original` with the same fonts (a working copy with pages turned, or with
+    colours corrected), so its fonts are not rendered and compared all over again."""
+    stamp = file_key(copy)
+    if stamp is not None:
+        _found.put(stamp + ("glyphs",), _analyse(original))
+
+
 def corrections(source: Path) -> dict[tuple[str, str], str]:
     """What to read instead, by (font name as pdfminer gives it, the text it claims): a character
     identified from its shape, or U+FFFD. Only for glyphs in fonts that misreport their own."""

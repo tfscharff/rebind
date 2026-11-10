@@ -14,8 +14,8 @@ from .extract import TextLine
 # under the baseline. Neither is ever seen; they place the text over the print (`_text_placement`).
 OVERLAY_WIDTH = 500
 OVERLAY_DESCENT = 200
-# A typesetter's ligature is two or three letters drawn as one glyph. WinAnsi has none of them, and
-# replaced with '?' a screen reader said "ef?cient" on any page set in a font that uses them.
+# A typesetter's ligature is two or three letters drawn as one glyph. Spelled out, a reader meets
+# "efficient" and a search for it finds it, rather than one character standing for "ffi".
 LIGATURES = str.maketrans({"ﬀ": "ff", "ﬁ": "fi", "ﬂ": "fl", "ﬃ": "ffi",
                            "ﬄ": "ffl", "ﬅ": "st", "ﬆ": "st"})
 

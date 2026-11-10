@@ -36,8 +36,24 @@ class OcrEngine:
         with OcrEngine._lock:
             if OcrEngine._shared is None:
                 from rapidocr_onnxruntime import RapidOCR
+                from rapidocr_onnxruntime.utils import infer_engine
 
-                OcrEngine._shared = RapidOCR()
+                # RapidOCR switches onnxruntime's memory arena off and offers no setting for it.
+                # Every page is a different size, so without the arena each one asks for its
+                # memory afresh: with it on, recognising a page takes about half as long (27 s
+                # down to 14 s over six real pages, measured both ways round).
+                default_options = infer_engine.OrtInferSession._init_sess_opts
+
+                def with_arena(config):
+                    session_options = default_options(config)
+                    session_options.enable_cpu_mem_arena = True
+                    return session_options
+
+                infer_engine.OrtInferSession._init_sess_opts = staticmethod(with_arena)
+                try:
+                    OcrEngine._shared = RapidOCR()
+                finally:
+                    infer_engine.OrtInferSession._init_sess_opts = staticmethod(default_options)
             result, _elapsed = OcrEngine._shared(image, **options)
         return result or []
 

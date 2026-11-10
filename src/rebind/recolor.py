@@ -26,26 +26,15 @@ it would mean altering the scan itself. Such text declares no colour, so it is n
 from __future__ import annotations
 
 import pikepdf
-from pikepdf import Name
 
 from .contrast import contrast_ratio, relative_luminance
 
 # Operators that set the NON-stroking colour (the one text is painted with by default).
 _FILL_COLOR_OPS = {"g": 1, "rg": 3, "k": 4, "sc": None, "scn": None}
-# Operators that paint something that is not text: paths and shadings. `Do` is handled separately:
-# it only counts when it draws a *Form* XObject, whose content inherits the fill colour and may
-# paint with it. An image XObject ignores the fill colour altogether, so counting `Do` wholesale
-# needlessly protected colours no image ever used -- on the real sample it left four callout
-# labels beside a photograph uncorrected, purely because the colour happened to be in effect when
-# the photograph was drawn.
-_NON_TEXT_PAINT_OPS = {"S", "s", "f", "F", "f*", "B", "B*", "b", "b*", "sh"}
-_TEXT_SHOW_OPS = {"Tj", "TJ", "'", '"'}
 # Aim slightly past the threshold. A colour that lands exactly on 4.5:1 renders, once anti-aliased
 # into thin glyph strokes, as very slightly lighter than it is -- enough to measure back at 4.48
 # and still read as a failure. 5% of headroom costs nothing visually and settles it.
 HEADROOM = 1.05
-# Text at or above this fraction of the background's luminance is reverse-video, not faint text.
-REVERSE_VIDEO_LUMINANCE = 0.9
 
 
 def _to_rgb(op: str, operands: list) -> tuple[int, int, int] | None:
@@ -66,20 +55,6 @@ def _to_rgb(op: str, operands: list) -> tuple[int, int, int] | None:
         grey = max(0.0, min(1.0, values[0]))
         return tuple(round(grey * 255) for _ in range(3))
     return None
-
-
-def _is_form(page: pikepdf.Page, operands) -> bool:
-    """Whether a `Do` draws a Form XObject (which inherits and may paint with the fill colour)
-    rather than an image (which ignores it). Unknown names are treated as forms -- the cautious
-    reading, since a form is the case where leaving the colour alone matters."""
-    try:
-        xobjects = page.obj.get("/Resources", {}).get("/XObject", {})
-        target = xobjects.get(str(operands[0]))
-    except Exception:      # noqa: BLE001 -- a malformed resource dict is simply treated as a form
-        return True
-    if target is None:
-        return True
-    return target.get("/Subtype") != Name.Image
 
 
 def _linear(value: float) -> float:
@@ -197,7 +172,27 @@ def apply_corrections(pdf: pikepdf.Pdf, page: pikepdf.Page,
     in_text = False
     current: pikepdf.ContentStreamInstruction | None = None   # the live fill-colour instruction
     current_rgb: tuple[int, int, int] | None = None
+    # The fill colour space the page chose (`cs`), and whether a corrected `rg` has replaced it
+    # since. `sc`/`scn` give only numbers, read in whatever space is current: after an inserted
+    # `rg` that is DeviceRGB, so the page's own space is named again before one of its `sc`/`scn`
+    # is let through. Without that, "/CS0 cs 0.6 scn" restored as a bare "0.6 scn" was one number
+    # read as device RGB, and so was every such colour after it on the page.
+    space: pikepdf.ContentStreamInstruction | None = None
+    displaced = False
     stack: list[tuple] = []
+
+    def emit(ins: pikepdf.ContentStreamInstruction) -> None:
+        nonlocal displaced
+        if str(ins.operator) in ("sc", "scn") and displaced and space is not None:
+            out.append(space)
+        displaced = False
+        out.append(ins)
+
+    def corrected(rgb: tuple[int, int, int]) -> None:
+        nonlocal displaced, changed
+        out.append(_rg(corrections[rgb]))
+        displaced = True
+        changed += 1
 
     for ins in instructions:
         token = str(getattr(ins, "operator", ""))
@@ -205,21 +200,21 @@ def apply_corrections(pdf: pikepdf.Pdf, page: pikepdf.Page,
             rgb = _to_rgb(token, list(ins.operands))
             current, current_rgb = ins, rgb
             if in_text and rgb is not None and rgb in corrections:
-                out.append(_rg(corrections[rgb]))
-                changed += 1
+                corrected(rgb)
                 continue
-            out.append(ins)
+            emit(ins)
             continue
-        if token == "q":
-            stack.append((current, current_rgb))
+        if token == "cs":
+            space, displaced = ins, False
+        elif token == "q":
+            stack.append((current, current_rgb, space, displaced))
         elif token == "Q" and stack:
-            current, current_rgb = stack.pop()
+            current, current_rgb, space, displaced = stack.pop()
         elif token == "BT":
             in_text = True
             out.append(ins)
             if current_rgb is not None and current_rgb in corrections:
-                out.append(_rg(corrections[current_rgb]))
-                changed += 1
+                corrected(current_rgb)
             continue
         elif token == "ET":
             in_text = False
@@ -227,7 +222,7 @@ def apply_corrections(pdf: pikepdf.Pdf, page: pikepdf.Page,
             # Put back exactly the instruction the page had, not a device-RGB approximation of it:
             # re-encoding a CMYK or separation colour would shift whatever is painted next.
             if current_rgb is not None and current_rgb in corrections and current is not None:
-                out.append(current)
+                emit(current)
             continue
         out.append(ins)
 

@@ -826,7 +826,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     return found;
   }
 
-  // Every element answers to the whole keymap. On a table row, h and b set that row; any other
+  // Every element answers to the whole keymap. On a table row, h and d set that row; any other
   // type is about the table the row belongs to (setKind), so p on a row of a false table turns the
   // whole thing back into a paragraph instead of doing nothing.
   function keysFor(e){
@@ -967,10 +967,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   }
 
   // The legend lists the keys that answer on the element you are standing on, because those are
-  // not always the document's keys. A table row answers to `h` and `b` and to nothing else
-  // (`keysFor`), and a legend that went on listing the whole document's seventeen types is why
-  // the row keys could not be found: every key on display did nothing, and the only two that
-  // worked were printed nowhere on the screen.
+  // not always the document's keys. On a table row `h` and `d` set the row and every other type
+  // key retypes the whole table, which the legend has to say: the two row keys used to be printed
+  // nowhere on the screen.
   function keysHtml(e){
     var row=!!(e&&e.row);
     var sub='<b>Tab</b> next element · <b>Shift + Tab</b> previous · '+
@@ -978,7 +977,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         '<b>Del</b> delete, next · <b>Backspace</b> delete, previous · '+
         '<b>[</b> <b>]</b> turn the page · '+
         '<b>Enter</b> lists every type';
-    if(row) sub+='<br>On a table row, <b>h</b> and <b>b</b> set the row, <b>Ins</b> adds a row '+
+    if(row) sub+='<br>On a table row, <b>h</b> and <b>d</b> set the row, <b>Ins</b> adds a row '+
         'below it and <b>Del</b> takes the row out. Every other type key applies to the whole '+
         'table.';
     // Only said where it works: a frame is the lines an element holds, which a picture's region
@@ -1538,12 +1537,6 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   function describable(e){
     var k=kindOf(e);
     return k==='Figure' || k==='Formula';
-  }
-
-  function needsAlt(e){
-    if(kindOf(e)!=='Figure') return false;
-    var have=ed.alts[e.id]!==undefined? ed.alts[e.id] : (e.alt||'');
-    return !String(have).trim();
   }
 
   function figThumb(elementId){

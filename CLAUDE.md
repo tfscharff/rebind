@@ -1,8 +1,8 @@
 # Rebind — project instructions
 
 Accessible PDF **remediation** for catastrophically bad library scans. Public repo:
-`tfscharff/rebind` (MIT). Primary user is Allie, an ILL/accessibility librarian at Wheaton College;
-secondary user is Thomas, who needs very long documents (a 300-page course catalog).
+`tfscharff/rebind` (MIT). Primary users are interlibrary-loan and accessibility staff at academic
+libraries; a second use is very long documents (a 300-page course catalog).
 
 ## The thesis — do not lose this
 
@@ -23,9 +23,10 @@ Entry points: `cli.py` (`rebind convert`) and `app.py` (`rebind serve` / the fro
 browser app). Both drive **`remediate.remediate()`**, the whole pipeline:
 
 - `extract.py` — pdfminer.six pulls born-digital text lines + image boxes per page.
-- `ocr.py` + `restoration.py` — pages with no text layer are rasterized (pypdfium2), deskewed +
-  denoised (OpenCV), and recognized (RapidOCR / onnxruntime, CPU, models bundled). Real per-line
-  confidence; sub-threshold text becomes an honest placeholder.
+- `ocr.py` — pages with no text layer are rasterized (pypdfium2) and recognized as they are
+  (RapidOCR / onnxruntime, CPU, models bundled), each line with its confidence. A line the
+  recogniser is unsure of is dropped by it, not replaced: there is no placeholder. `restoration.py`
+  (deskew + denoise) and `ocr.ocr_pages` are NOT on the live path; only their tests use them.
 - `profile.py` — document-global typographic profile (born-digital heading sizes).
 - `layout.py` — recursive XY-cut for reading order; `detect_table_lines` flags grid regions.
 - `layout_model.py` — PP-DocLayoutV3 (via rapid-layout, onnxruntime) boxes each page's regions;
@@ -96,9 +97,9 @@ PDF/UA-1: the PDF 2.0 Standard Structure Namespace retains all the tag names bel
 HTML5 lowercase rename needed); only the root `Document` element needs an explicit `/NS`, plus a
 PDF 2.0 header and updated XMP (`pdfuaid:part=2`).
 
-**What the tag tree contains** (`remediate.py`):
+**What the tag tree contains** (built by `headings`, `plan`, `tables`, `figures`, `structure`):
 - Headings `/H1`–`/H6`, level-normalized (no skips — PDF/UA 7.4.2, in `_structure_roles`).
-  Born-digital: from font size. **Scans/OCR: recovered geometrically** — `_ocr_heading_heights`
+  Born-digital: from font size. **Scans/OCR: recovered geometrically** — `headings._ocr_heading_sizes`
   promotes a line only when it is markedly taller than the body median AND set apart by whitespace
   AND not filling the column (levels from doc-global size tiers). Conservative: a missed heading
   stays a paragraph; a body-only scan invents none.
@@ -114,8 +115,8 @@ PDF 2.0 header and updated XMP (`pdfuaid:part=2`).
 ## Invariants — reject changes that violate these
 
 1. **Never fabricate.** Every text node traces to recognizer output with a confidence score. Below
-   threshold it becomes an honest placeholder (`[text not recoverable from source scan, p. 214]`),
-   never a plausible guess. Structural inference (heading/list/table) is conservative for the same
+   threshold it is left out, never replaced with a plausible guess. (A placeholder marking where
+   it was is the stated intent but is not implemented.) Structural inference (heading/list/table) is conservative for the same
    reason — when in doubt, a paragraph.
 2. **Everything has provenance.** Every node knows its source page and bounding box.
 3. **Deterministic — scoped to the document model.** PDF bytes are NOT reproducible (ADR 0003).
@@ -161,11 +162,12 @@ ebind.iss`.
 - **Always edit the local clone, commit, and push.** Never write to GitHub through `gh api`
   contents — it leaves the working copy behind and Thomas will not remember to pull.
 - Commit and push after every change. Concise, imperative messages. Version with SemVer 2.0.0 and a
-  `vX.Y.Z` tag per release (currently `0.2.0`; single source of truth is `rebind.__version__`).
+  `vX.Y.Z` tag per release (single source of truth is `rebind.__version__`; `CHANGELOG.md` gets an
+  entry per release).
 - `samples/` is gitignored and must stay that way — copyrighted third-party scans in a public repo.
   Same for `*.pdf` and `.superpowers/`.
-- Design docs: `docs/superpowers/specs/`; plans: `docs/superpowers/plans/`; decisions:
-  `docs/decisions/`. Full progress ledger: `.superpowers/sdd/progress.md`.
+- User docs: `README.md`, `docs/how-it-works.md`, `docs/editor.md`. Decisions: `docs/decisions/`.
+  `docs/history/` is the original design notes, kept as a record, not current.
 
 ## Gotchas (still live)
 
@@ -210,8 +212,9 @@ ebind.iss`.
   spelled out (`_overlay_text`): a control character maps to nothing a checker accepts.
 - **A source PDF's own internal navigation (outline, Link annotations with a GoTo/Dest) fails
   PDF/UA-2 clause 8.8** unless it uses structure destinations, which nothing before PDF 2.0 could
-  produce. `_strip_legacy_destinations` drops it rather than ship a false PDF/UA-2 claim — real
-  navigation lost, not yet rebuilt from Rebind's own headings (see ADR 0006).
+  produce. `document._strip_legacy_destinations` drops it rather than ship a false PDF/UA-2
+  claim; the outline is rebuilt from Rebind's own headings (`structure._build_outline`), internal
+  links are not (see ADR 0006).
 - **A source PDF's own XMP can carry a stray, non-namespaced element** (seen in real Elsevier
   output — a DRM/fingerprint artifact) that breaks veraPDF's metadata parser badly enough to hide
   Rebind's own `dc:title`/`pdfuaid:*` too. `_set_metadata` strips any top-level XMP key without a
@@ -222,6 +225,6 @@ ebind.iss`.
 
 ## Skills
 
-Follow the global workflow in `C:\Users\thoma\CLAUDE.md`: brainstorming before creative work,
+Follow the maintainer's global workflow: brainstorming before creative work,
 writing-plans for multi-step tasks, TDD, systematic-debugging before proposing fixes, and
 verification-before-completion before claiming anything works.

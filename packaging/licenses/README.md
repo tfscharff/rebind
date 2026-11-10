@@ -1,13 +1,14 @@
 # Third-party license texts bundled in the installer
 
 This directory is installed into the app's `licenses\` folder (see `rebind.iss`'s `[Files]`
-section) and its `LICENSE-THIRD-PARTY.txt` is wired up as the installer's `LicenseFile`.
+section). The setup wizard itself shows Rebind's own MIT `LICENSE`; the third-party notices are
+installed, not clicked through.
 
 ## What is here
 
 | File | What it is |
 |---|---|
-| `LICENSE-THIRD-PARTY.txt` | The notice shown in the setup wizard and installed with the app. **Generated** -- do not edit. |
+| `LICENSE-THIRD-PARTY.txt` | The third-party notice installed with the app. **Generated** -- do not edit. |
 | `PYTHON-INVENTORY.md` | Table of every bundled Python distribution: name, version, license, text. **Generated** -- do not edit. |
 | `python/*.txt` | Each bundled distribution's own license text, copied verbatim from its wheel. **Generated** -- do not edit. |
 | `LICENSE-*.txt` | Canonical upstream license texts (Apache-2.0 for the OCR models/RapidOCR fallback; FreeType for the credit obligation; plus texts retained for native libraries bundled inside the Python wheels). Verbatim, not paraphrases. |

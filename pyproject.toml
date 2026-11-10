@@ -1,11 +1,22 @@
 [project]
 name = "rebind"
-version = "1.10.1"
-description = "Accessible PDF remediation for damaged library scans"
+version = "1.11.0"
+description = "Makes a PDF accessible (PDF/UA-2) on your own computer: text layer, reading order, structure and figure descriptions, with the page left as it is"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Thomas Scharff" }]
 requires-python = ">=3.12,<3.13"
+keywords = ["accessibility", "pdf", "pdf-ua", "wcag", "ocr", "libraries", "remediation"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Education",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Markup",
+    "Topic :: Adaptive Technologies",
+]
 dependencies = [
     "pikepdf>=9",
     "starlette>=0.37",
@@ -14,7 +25,7 @@ dependencies = [
     "rapidocr-onnxruntime>=1.4",
     "pypdfium2>=4",
     # Page layout regions (PP-DocLayoutV3 on onnxruntime): hints for paragraphs, tables, page
-    # furniture and captions. The model itself is fetched by scripts/fetch_models.py.
+    # furniture and captions. The model itself is fetched on first use (rebind.weights).
     "rapid-layout>=1.2.1",
 ]
 
@@ -29,6 +40,12 @@ dev = [
     # is excluded from the frozen bundle (see packaging/rebind.spec).
     "weasyprint>=62",
 ]
+
+[project.urls]
+Homepage = "https://github.com/tfscharff/rebind"
+Releases = "https://github.com/tfscharff/rebind/releases"
+Issues = "https://github.com/tfscharff/rebind/issues"
+Changelog = "https://github.com/tfscharff/rebind/blob/main/CHANGELOG.md"
 
 [project.scripts]
 rebind = "rebind.cli:main"

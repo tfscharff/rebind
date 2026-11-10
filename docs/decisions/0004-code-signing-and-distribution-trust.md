@@ -132,7 +132,7 @@ The load-bearing empirical questions are all still open:
 - Whether MOTW propagates from the downloaded installer to the extracted payload in a way that
   causes repeat prompting.
 
-The natural place to answer these is Wheaton College, via Allie -- the primary user is inside
+The natural place to answer these is a partner library -- the primary user is inside
 exactly the kind of environment that needs testing. That is the cheapest available route to real
 evidence and should be pursued before the installer's design is considered settled.
 

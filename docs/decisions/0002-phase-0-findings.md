@@ -303,7 +303,7 @@ before citing this number as a guaranteed property rather than a single observed
 
 ## Full test output
 
-Captured in `docs/decisions/phase-0-test-output.txt`
+Captured at the time in `phase-0-test-output.txt` (since removed from the repository; it is in the git history)
 (`uv run pytest -v`): **26 passed, 1 deselected, 3 xfailed, 1 xpassed** as of Task 8's original
 close-out. That snapshot is superseded, not deleted, by the final whole-branch review recorded
 throughout this document: after the fixes above (heading-level normalization and its new tests,

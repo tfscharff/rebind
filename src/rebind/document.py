@@ -50,10 +50,10 @@ def _strip_legacy_destinations(pdf: pikepdf.Pdf) -> None:
     so a born-digital source PDF's own navigation (an outline built by whatever authored it -- Word,
     LaTeX, WeasyPrint -- or in-text cross-reference/TOC links) is carried through verbatim on a page
     kept verbatim, and it fails this clause (confirmed on a real publisher sample: 137 Link-
-    annotation and Outline destinations in one document). Rebind does not yet build its own
-    structure-destination navigation (a real feature, tracked separately), so the safe choice is to
-    drop the legacy kind rather than ship a document that claims PDF/UA-2 and fails it. This is real
-    navigation lost, not merely a formality -- worth restoring properly, see progress notes.
+    annotation and Outline destinations in one document). The safe choice is to drop the legacy
+    kind rather than ship a document that claims PDF/UA-2 and fails it. The outline is built again
+    from Rebind's own headings, with structure destinations (`structure._build_outline`); in-text
+    links to other places in the document are real navigation lost, and not yet rebuilt.
 
     A *working* external link (a URI action, or GoToR into another file) is untouched -- clause 8.8
     is only about destinations *within* this document. A URI link whose target is unusable is

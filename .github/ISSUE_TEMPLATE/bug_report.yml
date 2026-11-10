@@ -1,0 +1,43 @@
+name: A document Rebind handled badly, or a bug
+description: Something came out wrong, or Rebind stopped with an error
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please do not attach copyrighted scans. Describe the page instead: a public issue is public.
+  - type: input
+    id: version
+    attributes:
+      label: Rebind version
+      description: The release you downloaded. Windows Settings, Apps, Rebind shows it too.
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of document?
+      options:
+        - A scan (pages are pictures)
+        - Born-digital (text can be selected in the original)
+        - A scan that already had a text layer
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What went wrong, and on which page?
+      description: What the page looks like (columns, tables, pictures), what Rebind did, and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: rebind.log, if there was an error
+      description: The file is beside the program. It holds file names but not document text; remove anything you would rather not share.
+      render: text
+  - type: input
+    id: at
+    attributes:
+      label: Assistive technology, if the problem is how the result reads
+      description: For example NVDA 2026.1 with Adobe Reader.

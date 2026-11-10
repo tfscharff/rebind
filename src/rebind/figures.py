@@ -23,6 +23,7 @@ from .extract import TextLine
 from .geometry import _area, _boxes_overlap, _center_in_box, _horizontally_overlaps, _overlaps
 from .layout import detect_table_lines
 from .ocr import render_page_to_image
+from .pagecache import PageCache, file_key
 
 # An image covering between these fractions of the page is a figure worth describing. Smaller is a
 # rule/icon/bullet; a page-covering image is the scan itself, not a figure.
@@ -185,6 +186,9 @@ def _is_full_page_scan(src_page) -> bool:
     return False
 
 
+_scan_regions = PageCache()
+
+
 def _scanned_figures(source: Path, src_page, lines: list[TextLine], dpi: int,
                      already: list[tuple[str, tuple]]) -> list[tuple[str, tuple]]:
     """Pictures printed on a scanned page, found from its pixels. Each is (stable id, bbox).
@@ -195,13 +199,19 @@ def _scanned_figures(source: Path, src_page, lines: list[TextLine], dpi: int,
     """
     from .regions import find_picture_regions
 
-    try:
-        page_image = render_page_to_image(source, src_page.number, dpi=REGION_SCAN_DPI)
-    except Exception:  # noqa: BLE001 -- a page that will not render simply yields no figures
-        return []
-    found = find_picture_regions(
-        page_image, [line.bbox for line in lines],
-        page_width=src_page.width, page_height=src_page.height)
+    # Found once per page while the file and its lines are the same: every saved correction
+    # rebuilds the document, and this rendered and searched every scanned page again each time.
+    boxes = tuple(line.bbox for line in lines)
+    stamp = file_key(source)
+    key = stamp and stamp + (src_page.number, hash(boxes))
+    found = _scan_regions.get(key)
+    if found is None:
+        try:
+            page_image = render_page_to_image(source, src_page.number, dpi=REGION_SCAN_DPI)
+        except Exception:  # noqa: BLE001 -- a page that will not render simply yields no figures
+            return []
+        found = _scan_regions.put(key, tuple(find_picture_regions(
+            page_image, list(boxes), page_width=src_page.width, page_height=src_page.height)))
     out: list[tuple[str, tuple]] = []
     for index, region in enumerate(found):
         if any(_boxes_overlap(region.bbox, bbox) for _fid, bbox in already + out):

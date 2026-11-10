@@ -100,3 +100,20 @@ def test_a_page_needing_nothing_is_not_rewritten(tmp_path: Path):
     with pikepdf.open(source) as pdf:
         report = measure(source, list(extract_pages(source)))
         assert apply_corrections(pdf, pdf.pages[0], corrections_for(report)) == 0
+
+
+def test_the_pages_own_colour_space_is_named_again_after_a_correction(tmp_path: Path):
+    # "/CS0 cs 0.6 scn" sets one number in the page's own colour space. A corrected `rg` switches
+    # the space to device RGB; restoring a bare "0.6 scn" after it was one number read as RGB.
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(200, 200))
+    page = pdf.pages[0]
+    page.obj.Contents = pdf.make_stream(
+        b"/CS0 cs 0.6 scn BT /F1 12 Tf 10 100 Td (pale) Tj ET 0 0 50 5 re f")
+    assert apply_corrections(pdf, page, {(153, 153, 153): (90, 90, 90)}) == 1
+    ops = [(str(i.operator), [str(o) for o in i.operands])
+           for i in pikepdf.parse_content_stream(page)]
+    names = [op for op, _operands in ops]
+    after_text = names[names.index("ET") + 1:]
+    assert after_text[:2] == ["cs", "scn"]
+    assert "rg" in names[names.index("BT"):names.index("ET")]

@@ -94,3 +94,19 @@ def test_a_page_whose_box_starts_below_the_origin_is_framed_where_it_is(tmp_path
     out = tmp_path / "out.pdf"
     assert tops(shifted, out) == tops(plain, tmp_path / "plain-out.pdf")
     assert np.abs(_picture(out) - _picture(shifted)).max() == 0
+
+
+def test_a_page_that_inherits_its_resources_keeps_them(tmp_path: Path, verapdf_exe):
+    # Rebind adds its own font to a page's /Resources; a page with none of its own must go on
+    # using the ones it inherits from the page tree.
+    plain = born_digital_pdf("<p>Words drawn with the page tree's fonts.</p>", tmp_path / "p.pdf")
+    inherited = tmp_path / "inherited.pdf"
+    with pikepdf.open(plain) as pdf:
+        page = pdf.pages[0]
+        pdf.Root.Pages.Resources = page.obj.Resources
+        del page.obj["/Resources"]
+        pdf.save(inherited)
+    out = tmp_path / "out.pdf"
+    remediate(inherited, out)
+    assert np.abs(_picture(out) - _picture(plain)).max() == 0
+    assert validate_pdf_ua(out, verapdf_exe=verapdf_exe).compliant

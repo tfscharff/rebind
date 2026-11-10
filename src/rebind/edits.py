@@ -197,7 +197,6 @@ ROW_TAG_KEYS = (
                                "it before each data cell in its column."),
     ("d", "TD", "Data cell", "An ordinary cell of the table, read against its column's header."),
 )
-ROW_TAGS = tuple(tag for _key, tag, _label, _what in ROW_TAG_KEYS)
 
 
 def _element_records(src_page, plan: list[dict], lines: list[TextLine],

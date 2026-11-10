@@ -68,8 +68,13 @@ class _Tree:
 
     kinds: dict[str, int] = field(default_factory=dict)
     elements: list = field(default_factory=list)        # every StructElem, in document order
-    parents: dict[int, object] = field(default_factory=dict)   # objgen id -> parent element
-    pages: dict[int, int] = field(default_factory=dict)        # id(elem) -> 1-based page number
+    # element (`_key`) -> 1-based page number. Not by `id()`: asking an element for its children
+    # makes new wrapper objects each time, and a row or cell found that way was on "no page".
+    pages: dict[object, int] = field(default_factory=dict)
+
+
+def _key(elem):
+    return elem.objgen if elem.is_indirect else id(elem)
 
 
 def _walk(pdf: pikepdf.Pdf) -> _Tree:
@@ -83,7 +88,7 @@ def _walk(pdf: pikepdf.Pdf) -> _Tree:
     def visit(elem, parent, page) -> None:
         if not isinstance(elem, pikepdf.Dictionary) or elem.get("/Type") != pikepdf.Name.StructElem:
             return
-        key = elem.objgen if elem.is_indirect else id(elem)
+        key = _key(elem)
         if key in seen:
             return
         seen.add(key)
@@ -93,9 +98,8 @@ def _walk(pdf: pikepdf.Pdf) -> _Tree:
         if own is not None and own.is_indirect:
             page = page_of.get(own.objgen, page)
         tree.elements.append(elem)
-        tree.parents[id(elem)] = parent
         if page:
-            tree.pages[id(elem)] = page
+            tree.pages[key] = page
         kind = str(elem.get("/S") or "")
         tree.kinds[kind] = tree.kinds.get(kind, 0) + 1
         kids = elem.get("/K")
@@ -112,7 +116,7 @@ def _where(tree: _Tree, elements: list) -> tuple:
     """The pages a set of structure elements sit on, in order and without repeats."""
     pages: list[int] = []
     for elem in elements:
-        page = tree.pages.get(id(elem))
+        page = tree.pages.get(_key(elem))
         if page and page not in pages:
             pages.append(page)
     return tuple({"page": page} for page in pages)
