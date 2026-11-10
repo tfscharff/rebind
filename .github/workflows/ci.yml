@@ -50,7 +50,10 @@ jobs:
       # the tests about particular lines fail.
       - name: Install Pango and the DejaVu fonts (for WeasyPrint, used only by the tests)
         shell: pwsh
-        run: C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-pango mingw-w64-x86_64-ttf-dejavu
+        run: |
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-pango mingw-w64-x86_64-ttf-dejavu
+          # Pango looks for fonts in the Windows folder, not in MSYS2's own.
+          Get-ChildItem C:\msys64\mingw64\share\fonts -Recurse -Filter "DejaVu*.ttf" | Copy-Item -Destination C:\Windows\Fonts
 
       - name: Keep the downloaded models between runs
         uses: actions/cache@v4
