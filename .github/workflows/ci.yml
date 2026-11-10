@@ -62,6 +62,12 @@ jobs:
 
       - run: uv run ruff check .
 
+      - name: Show the fonts the test PDFs are set in
+        shell: pwsh
+        run: |
+          $env:PYTHONPATH = "."
+          uv run python scripts/fixture_fonts.py
+
       # The two deselected tests stand in for the app quitting itself; their watchdog threads
       # outlive them and end the whole test run.
       - run: >
