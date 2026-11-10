@@ -4,6 +4,12 @@ What changed in each release, newest first. Each entry is a summary; the full no
 [releases page](https://github.com/tfscharff/rebind/releases). Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.12.2 (2026-11-10)
+
+- Block quote and Footnote are no longer offered as types. Neither is known to be announced by
+  a screen reader in a PDF, and a footnote was already written to the file as a kind of
+  paragraph. A file saved with either opens with a paragraph in its place.
+
 ## 1.12.1 (2026-11-10)
 
 - Code and Form field are no longer offered as types. A screen reader reads code as a paragraph.

@@ -124,7 +124,7 @@ class Edits:
 # what the entry points at -- and Rebind cannot know which heading a line of a contents list refers
 # to without guessing. So it is not offered: a table of contents that names the wrong targets is
 # worse than one tagged as ordinary paragraphs.
-CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Formula", "Note")
+CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "Formula")
 # The containers (/Part, /Div, /Sect, /Art, /Index, /NonStruct) are not offered. Each groups other
 # elements and has no behaviour of its own: a screen reader announces it as nothing at all, and the
 # editor retags one element at a time, so all it could make was a container holding one paragraph,
@@ -134,8 +134,12 @@ CONTENT_TAGS = ("P", "H1", "H2", "H3", "H4", "H5", "H6", "BlockQuote", "Formula"
 # /Code and /Form went the same way. A screen reader reads code as the paragraph it is. A /Form
 # belongs around a field a reader can fill in, which a retagged run of printed text is not, and
 # the report then asked for a description of it that the editor had nowhere to take.
+#
+# /BlockQuote and /Note (a footnote) were the last to go. Neither is in the PDF 2.0 namespace
+# PDF/UA-2 is written in -- a /Note was only allowed role-mapped to /P, which is to say as a
+# paragraph -- and nobody could show a screen reader saying either aloud in a PDF.
 RETIRED_TAGS = {"Div": "P", "Sect": "P", "Art": "P", "Index": "P", "NonStruct": "P",
-                "Code": "P", "Form": "P"}
+                "Code": "P", "Form": "P", "BlockQuote": "P", "Note": "P"}
 SPECIAL_TAGS = ("Figure", "Table", "L", "Caption")
 # A cell is never tagged where it stands -- a /TH or /TD is only legal inside a /TR inside a /Table.
 # A run of elements marked as cells is gathered into one table around them (`_cell_table`), which
@@ -148,8 +152,7 @@ EDITABLE_TAGS = CONTENT_TAGS + SPECIAL_TAGS + CELL_TAGS
 # here rather than in the page's script so the keys, the labels and the tags cannot drift apart.
 # The third column is what the editor shows in big letters when an element has focus, with its key
 # beside it; the fourth says what the type *means* -- a librarian retagging a page should not have
-# to already know what a PDF structure type does, and "BlockQuote" is not self-explanatory to
-# anyone who doesn't.
+# to already know what a PDF structure type does.
 #
 # /Artifact is not here either. It is not a structure type -- it is the absence of one -- and
 # offering it alongside real types put a non-answer in the list of answers.
@@ -161,7 +164,6 @@ TAG_KEYS = (
     ("4", "H4", "Heading 4", "A fourth-level heading."),
     ("5", "H5", "Heading 5", "A fifth-level heading."),
     ("6", "H6", "Heading 6", "A sixth-level heading — the deepest there is."),
-    ("q", "BlockQuote", "Block quote", "An extended quotation set apart from the body text."),
     ("c", "Caption", "Caption", "The text that describes a figure or table. Rebind puts it inside "
                                 "the figure or table it belongs to."),
     ("f", "Figure", "Figure", "A picture, chart or diagram. Needs a description, so a screen "
@@ -173,8 +175,6 @@ TAG_KEYS = (
                                    "marked one after another are built into one table."),
     ("l", "L", "List", "A bulleted or numbered list."),
     ("m", "Formula", "Formula (maths)", "A mathematical or chemical expression."),
-    ("v", "Note", "Footnote", "A footnote or endnote — read separately from the body text it "
-                              "annotates, not in the middle of it."),
 )
 
 # Not a type, so not in TAG_KEYS -- an action, on its own key: take this out of the reading order

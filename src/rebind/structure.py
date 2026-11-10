@@ -292,8 +292,8 @@ def _link_alt(annot: pikepdf.Object) -> str:
 
 # PDF/UA-2 (ISO 14289-2) namespace. All the structure types Rebind writes (/P, /H1-/H6, /Table,
 # /TR, /TD, /TH, /L, /LI, /LBody, /Figure) keep their names as-is in the PDF 2.0 Standard Structure
-# Namespace -- confirmed against `verapdf -f ua2` (see docs/decisions/ for the spike). /Note is the
-# one exception: it still needs the RoleMap entry below. Only the root Document element needs /NS
+# Namespace -- confirmed against `verapdf -f ua2` (see docs/decisions/ for the spike). Only the
+# root Document element needs /NS
 # set explicitly; every descendant inherits it. Getting the namespace URI wrong (e.g. the plausible
 # but incorrect "http://iso.org/pdf/ssn") fails clause 8.2.5.2 silently -- confirmed by trial.
 PDF2_SSN_NAMESPACE = "http://iso.org/pdf2/ssn"
@@ -310,11 +310,6 @@ class StructTree:
         self.document = pdf.make_indirect(Dictionary(
             Type=Name.StructElem, S=Name.Document, NS=namespace, P=self.root, K=Array([])))
         self.root.K = Array([self.document])
-        # PDF/UA-2 clause 8.2.5.14: "the Note standard structure type shall not be present in
-        # conforming documents unless role mapped to a structure element in the PDF 2.0 namespace"
-        # -- unlike its neighbours, /Note fails validation without this line. Confirmed by trial:
-        # removing it reproduces that exact veraPDF failure.
-        self.root.RoleMap = Dictionary(Note=Name.P)
         self.root.Namespaces = Array([namespace])
         self.parent_tree = Array([])
         # Page StructParents keys use 0..page_count-1 (a page's index); annotation StructParent

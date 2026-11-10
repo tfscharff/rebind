@@ -53,13 +53,12 @@ def test_the_page_editor_lists_elements_and_applies_corrections(tmp_path: Path):
     picture = client.get(body["pages"]["1"])
     assert picture.status_code == 200, "the page picture is missing"
     assert picture.content[1:4] == b"PNG"
-    for expected in ("H2", "P", "BlockQuote", "Caption", "Figure", "Table", "L"):
+    for expected in ("H2", "P", "Caption", "Figure", "Table", "L"):
         assert expected in body["tags"], body["tags"]
     keys = {entry["key"] for entry in body["keys"]}
     assert len(keys) == len(body["keys"]), "every hotkey must be unique"
-    assert {"p", "1", "q", "c", "f", "t"} <= keys, sorted(keys)
-    # Every key carries an explanation: the editor shows what a type *means* when it has focus,
-    # because "BlockQuote" tells a librarian nothing on its own.
+    assert {"p", "1", "c", "f", "t"} <= keys, sorted(keys)
+    # Every key carries an explanation: the editor shows what a type *means* when it has focus.
     for entry in body["keys"]:
         assert entry["what"], f"{entry['tag']} has no explanation"
     # Taking an element out of the reading order is an action, not one more type to choose

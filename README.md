@@ -46,10 +46,10 @@ Press `?` on any element to see the keys that work on it.
 
 | Key | Type | Key | Type | Key | Type |
 |---|---|---|---|---|---|
-| `p` | Paragraph | `q` | Block quote | `l` | List |
-| `1` to `6` | Heading 1 to 6 | `c` | Caption | `m` | Formula |
-| `f` | Figure | `t` | Table | `v` | Footnote |
-| `h` | Table header cell | `d` | Table data cell | `x` | Not read |
+| `p` | Paragraph | `l` | List | `t` | Table |
+| `1` to `6` | Heading 1 to 6 | `f` | Figure | `h` | Table header cell |
+| `c` | Caption | `m` | Formula | `d` | Table data cell |
+| `x` | Not read | | | | |
 
 | Key | Action |
 |---|---|
@@ -162,7 +162,7 @@ Rebind is not on PyPI. For tests and the installer build, see [CONTRIBUTING.md](
 
 ## Status
 
-The current version is **1.12.1**. Scanned and born-digital PDFs both work from start to finish,
+The current version is **1.12.2**. Scanned and born-digital PDFs both work from start to finish,
 and the output validates as PDF/UA-2 with zero failures. [CHANGELOG.md](CHANGELOG.md) lists what
 changed in each release.
 
