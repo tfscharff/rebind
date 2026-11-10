@@ -207,3 +207,23 @@ def test_document_with_no_text_yields_no_body_style():
     profile = build_profile([page_of([])])
 
     assert profile.body is None
+
+
+def test_a_cover_sheet_before_the_title_does_not_flatten_the_headings():
+    # A library's copyright sheet, set a little larger than the article's body, came first. One of
+    # its lines was the first heading met, H1 was anchored to it, and the title, the authors and
+    # every section heading after it all came out H1.
+    from rebind.headings import _structure_roles
+
+    body = [line(f"Body text line {i} of the article, set at the usual size.", size=10.0,
+                 y=400.0 - 12 * i) for i in range(30)]
+    cover = [line("The copyright law of the United States governs copies.", size=12.0, y=700.0,
+                  font="Times")]
+    title = [line(f"Title line {i}", size=16.0, y=700.0 - 18 * i, font="Sans.B") for i in range(3)]
+    authors = [line("Ayse Author and Fatma Author", size=12.0, y=620.0, font="Sans.B")]
+    section = [line("Introduction", size=12.0, y=600.0, font="Sans.B")]
+    sub = [line("Databases and Search Strategy", size=12.0, y=580.0, font="Sans.I")]
+    pages = [page_of(cover, 1), page_of(title + authors + section + sub + body, 2)]
+    roles = _structure_roles([(p, list(p.lines), False) for p in pages], build_profile(pages))
+    assert roles[0] == ["P"]
+    assert roles[1][:6] == ["H1", "H1", "H1", "H2", "H2", "H3"]

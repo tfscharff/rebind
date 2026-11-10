@@ -207,7 +207,10 @@ def _structure_roles(per_page: list[tuple], profile,
             elif line.ocr_confidence is not None:
                 page_levels.append(0)
             elif (profile.role_of(line, page_height=src_page.height) == "heading"
-                  and len(line.text.strip()) >= MIN_HEADING_CHARS):
+                  and len(line.text.strip()) >= MIN_HEADING_CHARS
+                  # A rule typed as a row of dashes is no heading. Counted as the document's first
+                  # one, it made every real heading after it a top-level heading too.
+                  and any(ch.isalnum() for ch in line.text)):
                 page_levels.append(profile.heading_level(style_of(line)) or 1)
             else:
                 page_levels.append(0)
@@ -227,6 +230,17 @@ def _structure_roles(per_page: list[tuple], profile,
     title_level = top if runs == 1 else None
     raw = [_demote_heading_bursts(page_levels, title_level) if born else page_levels
            for page_levels, born in zip(raw, digital)]
+    # Nothing set smaller than the title and read before it is a heading of this document: it is a
+    # cover sheet's text (a library's copyright notice, set a little larger than the article's
+    # body). Left as a heading it was the first one met, so H1 was anchored to it and the title,
+    # the authors and every section heading after it all came out as H1.
+    if title_level is not None:
+        for page_levels in raw:
+            if title_level in page_levels:
+                at = page_levels.index(title_level)
+                page_levels[:at] = [0 if lvl > title_level else lvl for lvl in page_levels[:at]]
+                break
+            page_levels[:] = [0 if lvl > title_level else lvl for lvl in page_levels]
 
     if not any(lvl for page in raw for lvl in page):
         return [["P"] * len(page_levels) for page_levels in raw]

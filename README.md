@@ -113,6 +113,11 @@ it never supplies text, so a wrong box can only group wrongly, which the editor 
   consecutive lines set the same way, stacked with tight leading and overlapping horizontally, are
   joined. Two lines is the limit, since a wrapped byline is geometrically identical to a wrapped
   title; longer runs are demoted to paragraphs.
+  The document's title (its largest heading size, used by one run of lines only) may run to six
+  lines, and nothing smaller read before it is a heading: a library's cover sheet came first on a
+  real file, H1 was anchored to one of its lines, and every heading after it came out H1. A font
+  named with a bare weight suffix (`.B`, `.I`) is read as bold or italic, which is what ranks a
+  journal's section headings above its subsection headings when both are the same size.
 - **Paragraphs** `/P` — whole paragraphs, not one per line. Lines join unless the typesetting says
   otherwise: the previous line stopping short of the measure, a first-line indent, a gap wider than
   the run's leading, or a change of size, weight, slope or face. Where signals disagree the split
@@ -381,7 +386,7 @@ reloaded page's first heartbeat cancels.
 
 ## Status
 
-**1.10.0.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
+**1.10.1.** Born-digital and scanned inputs both work end to end, through convert, walk, describe
 and download, to a document that validates PDF/UA-2 at zero failures.
 
 Not implemented:

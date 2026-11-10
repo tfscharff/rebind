@@ -288,8 +288,13 @@ def _finish(raw: _Raw, page_number: int) -> TextLine:
         # Font names carry weight and slant as a naming convention, not as metadata; there is no
         # reliable structured source for either in a PDF. This substring check is what every PDF
         # tool does and it is wrong for fonts that do not follow the convention.
-        bold="bold" in lowered or "black" in lowered or "heavy" in lowered,
-        italic="italic" in lowered or "oblique" in lowered,
+        # Some foundries name the weight with a bare suffix instead ("AdvOT2387ff64.B", ".I"): a
+        # journal's section headings (.B) and subsection headings (.I), both 12pt, could not be
+        # told apart, so neither could be ranked above the other.
+        bold=("bold" in lowered or "black" in lowered or "heavy" in lowered
+              or re.search(r"[.\-_](B|Bd|BI)$", font) is not None),
+        italic=("italic" in lowered or "oblique" in lowered
+                or re.search(r"[.\-_](I|It|BI)$", font) is not None),
         scripts=_scripts(raw.chars, size),
     )
 
