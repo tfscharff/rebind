@@ -4,6 +4,15 @@ What changed in each release, newest first. Each entry is a summary; the full no
 [releases page](https://github.com/tfscharff/rebind/releases). Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.13.2 (2026-11-24)
+
+- An image a file draws twice in the same place is one picture; it had been listed, described
+  and read out twice.
+- Marks a scan's OCR layer left on top of a caption line are no longer read into the
+  description ("...von Hesber 8: : )").
+- In a narrow window, a title, a language or the removal of scripts is set from **Still needs
+  you**: the field opens under its row, since the report that holds it is hidden.
+
 ## 1.13.1 (2026-11-24)
 
 - A caption no longer runs on into the text under it when that text is set to a different

@@ -42,7 +42,8 @@ once it is described or marked not read (`x`). The download is never blocked: a 
 tagged and valid, with the undescribed pictures silent.
 
 In a window narrower than 80rem the report gives way to the document, and this list is where what
-it found is shown.
+it found is shown. What the report would have set -- a title, a language, the removal of scripts --
+is set here instead: press its row and the field opens under it.
 
 On a figure, the right column becomes its description with the caption pre-filled. Landing on it
 does not take focus: `Tab` accepts the guess and moves on, `Enter` or any character goes into the

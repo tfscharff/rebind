@@ -60,6 +60,8 @@ MIN_CAPTION_WORDS = 3
 # this share of its width belongs to a wider column, and one starting more than this share of the
 # way across it while still reaching past the far side is set off on its own (a page footer).
 CAPTION_MEASURE_SHARE = 0.5
+# A mark this short, on a caption's own row and touching it, is a speck and not a word of it.
+CAPTION_SPECK_MAX_CHARS = 2
 
 
 def _caption_block_bottom(lines: list[TextLine], marker: TextLine) -> float:
@@ -126,12 +128,15 @@ def _caption_block(ordered: list[TextLine], used: list | None = None) -> str | N
     if not ordered or not _is_caption_marker(ordered[0].text):
         return None
     block = [ordered[0]]
-    for prev, nxt in zip(ordered, ordered[1:]):
+    for nxt in ordered[1:]:
         if len(block) >= CAPTION_MAX_LINES:
             break
+        prev = block[-1]
         gap = prev.bbox[1] - nxt.bbox[3]   # y-up: prev is above nxt once sorted top-to-bottom
         if gap > CAPTION_CONTINUATION_GAP_PT:
             break
+        if _printed_over(nxt, prev):
+            continue
         if len(block) >= 2 and _leaves_the_measure(nxt, block):
             break
         block.append(nxt)
@@ -142,6 +147,18 @@ def _caption_block(ordered: list[TextLine], used: list | None = None) -> str | N
     if used is not None:
         used.extend(block)
     return _join_caption_lines([ln.text.strip() for ln in block])
+
+
+def _printed_over(line: TextLine, prev: TextLine) -> bool:
+    """Whether a line sits on top of the caption line before it: a mark the recogniser made of a
+    speck, not more of the caption. Two lines of print never share a place, so one on the same
+    row that overlaps the other is not text; nor is a character or two butted against its end
+    (a real description ended "...Reconstruction by H. von Hesber 8: : )")."""
+    height = line.bbox[3] - line.bbox[1]
+    if min(line.bbox[3], prev.bbox[3]) - max(line.bbox[1], prev.bbox[1]) <= height / 2:
+        return False        # on a row of its own
+    apart = max(line.bbox[0] - prev.bbox[2], prev.bbox[0] - line.bbox[2])
+    return apart < -height if len(line.text.strip()) > CAPTION_SPECK_MAX_CHARS else apart <= height
 
 
 def _leaves_the_measure(line: TextLine, block: list[TextLine]) -> bool:

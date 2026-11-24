@@ -227,3 +227,47 @@ def test_a_caption_over_the_foot_of_an_image_is_not_held_out_as_its_lettering():
     caption = _plain("Figure 1. The optics of the Mk4 K-coronameter, drawn to scale.",
                      (98, 472, 400, 481))
     assert _figure_text([label, caption], picture) == [label]
+
+
+def test_an_image_the_file_draws_twice_in_one_place_is_one_picture():
+    # A paper drew each figure's bitmap twice at the same spot. Each came up as two pictures with
+    # the same box and the same caption, to be described -- and read out -- twice.
+    from types import SimpleNamespace
+
+    from rebind.extract import ImageRegion
+    from rebind.figures import _page_figures
+
+    page = SimpleNamespace(number=2, width=612.0, height=792.0, images=(
+        ImageRegion(2, (100.0, 121.0, 530.0, 444.0)),
+        ImageRegion(2, (100.2, 121.0, 530.0, 444.3)),
+        ImageRegion(2, (105.0, 469.0, 558.0, 777.0)),
+    ))
+    assert [fid for fid, _box in _page_figures(page)] == ["p2f0", "p2f2"]
+
+
+def test_marks_a_recogniser_left_on_top_of_a_caption_are_not_read_into_it():
+    # A scan's OCR layer left "8:", ":" and ")" on the same row as a one-line caption, over its
+    # own words: the description ended "...Reconstruction by H. von Hesber 8: : )".
+    from rebind.captions import _figure_caption
+
+    picture = (140.0, 92.0, 495.0, 322.0)
+    lines = [
+        _plain("Fig. 59.  Rome, Mausoleum of Augustus.  Reconstruction by H.  von Hesber",
+               (159, 73, 457, 88)),
+        _plain("8:", (453, 72, 462, 83)),
+        _plain(":", (403, 71, 406, 81)),
+        _plain(")", (318, 69, 320, 79)),
+    ]
+    assert _figure_caption(lines, picture) == (
+        "Fig. 59.  Rome, Mausoleum of Augustus.  Reconstruction by H.  von Hesber")
+
+
+def test_a_caption_line_the_recogniser_cut_in_two_keeps_both_halves():
+    from rebind.captions import _figure_caption
+
+    picture = (140.0, 92.0, 495.0, 322.0)
+    lines = [
+        _plain("Fig. 59.  Rome, Mausoleum of Augustus.", (159, 74, 330, 87)),
+        _plain("Reconstruction by H. von Hesberg.", (340, 73, 480, 86)),
+    ]
+    assert _figure_caption(lines, picture).endswith("Reconstruction by H. von Hesberg.")

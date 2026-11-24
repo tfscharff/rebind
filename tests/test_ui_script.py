@@ -373,3 +373,16 @@ def test_a_narrow_window_really_does_hide_the_report():
     page = index_html()
     assert page.index(".col-report,.col-todo,.col-stage{min-height:0") < page.index(
         ".col-report{display:none}")
+
+
+def test_a_fix_set_in_the_report_is_offered_beside_the_download_when_the_report_is_hidden():
+    # A narrow window hides the report, and with it the only fields that set a title or a
+    # language: "Still needs you" could say what to do and nothing more. The field now opens
+    # under its own row there, with an id of its own so the two never collide.
+    script = _script()
+    assert "ed.fixHere=c.key" in script
+    assert "actionFor(check,'here')" in script
+    assert "(where||'fix')+'-'+esc(c.key)" in script
+    # Each list wires its own controls: wired document-wide, a second list fired every fix twice.
+    assert "document.querySelectorAll('.dofix')" not in script
+    assert "Widen the window" not in script

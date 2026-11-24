@@ -300,6 +300,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
 .remaining button.left:focus-visible{outline:3px solid var(--stamp);outline-offset:-2px}
 .remaining .mark{color:var(--attention);font-weight:700;text-align:center}
 .remaining .task{font-weight:600;font-size:.88rem}
+.remaining .fixhere{padding:0 0 .45rem 1.5rem}
+.remaining .fixhere .fixfield{margin-top:0}
 .remaining .how{grid-column:2;font-size:.78rem;color:var(--muted)}
 .finish a.reset{margin-top:.5rem;text-align:center}
 .struct-badge{font-family:var(--mono);font-size:.74rem;text-transform:uppercase;
@@ -502,7 +504,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     }
     h+=structureBadge(ed.status.structure_ok, ed.status.structure_issues||[])+'</section>';
     host.innerHTML=h;
-    wireActions();
+    wireActions(host);
     // The report's tab stops are its failing checks and nothing else, so that the run from the
     // first "!" to element 1 is exactly as long as the list of things wrong. The controls under
     // "Needs you" are still reachable -- the "!" row is what takes you to them -- but they are out
@@ -683,15 +685,21 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       // What is wrong in the report's own words -- "4 tables have rows with differing numbers of
       // cells" -- rather than the name of Adobe's rule for it ("Regularity").
       var wrong=(c.detail||'').split(/\.\s/)[0].replace(/\.$/,'');
-      out.push({text:wrong||c.title, how:c.need||'',
+      out.push({text:wrong||c.title, how:c.need||'', key:c.key,
         go:function(){
           if(page){ goToPage(page); return; }
           var item=document.getElementById('item-'+c.key);
           var field=item? item.querySelector('input, textarea, button') : null;
-          // The field that sets it is in the report, which a narrow window does not show.
-          if(field && field.offsetParent){ item.scrollIntoView({block:'nearest'}); field.focus(); }
-          else say(c.title+': '+(c.need||c.detail)+
-                   (field? ' Widen the window to see the report, where this is set.' : ''));
+          if(field && field.offsetParent){
+            item.scrollIntoView({block:'nearest'}); field.focus(); return;
+          }
+          // The field that sets it is in the report, which a narrow window does not show: it is
+          // offered here instead, under its own row.
+          if(!actionFor(c,'here')){ say(c.title+': '+(c.need||c.detail)); return; }
+          ed.fixHere=c.key;
+          drawRemaining();
+          var here=document.querySelector('#remaining .fixhere input, #remaining .fixhere button');
+          if(here) here.focus();
         }});
     });
     if(ed.status && !ed.status.structure_ok){
@@ -711,7 +719,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var host=document.getElementById('remaining');
     if(!host) return;
     var left=remaining();
-    var signature=JSON.stringify(left.map(function(t){ return [t.text, t.how]; }));
+    var signature=JSON.stringify([ed.fixHere||'', left.map(function(t){
+      return [t.text, t.how]; })]);
     if(signature===ed.remainingSig) return;     // nothing changed: keep focus where it is
     var held=document.activeElement&&host.contains(document.activeElement)
       ? document.activeElement.getAttribute('data-left') : null;
@@ -736,9 +745,15 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       var tip=(i>0&&t.how)? ' title="'+esc(t.how)+'"' : '';
       h+='<li>'+(t.go? '<button type="button" class="left" data-left="'+i+'"'+tip+'>'+body+
                         '</button>'
-                      : '<div class="left"'+tip+'>'+body+'</div>')+'</li>';
+                      : '<div class="left"'+tip+'>'+body+'</div>');
+      if(t.key && t.key===ed.fixHere){
+        var check=ed.checks.filter(function(c){ return c.key===t.key; })[0];
+        h+='<div class="fixhere">'+actionFor(check,'here')+'</div>';
+      }
+      h+='</li>';
     });
     host.innerHTML=h+'</ul>';
+    wireActions(host);
     Array.prototype.slice.call(host.querySelectorAll('button.left')).forEach(function(b){
       b.addEventListener('click', function(){
         var task=remaining()[parseInt(b.getAttribute('data-left'),10)];
@@ -755,12 +770,12 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   // Every open item gets a control. A fix Rebind can perform is a button; a fault that can only
   // be corrected by retagging gets the buttons that take you to it. Nothing is reported without
   // a way to act on it -- an issue with no route to a fix is just a complaint.
-  function actionFor(c){
+  function actionFor(c, where){
     // Describing a picture is not done here. It is asked for in the walk, on the picture itself,
     // at the moment you reach it -- so what the report offers is the way into the walk at the page
     // that needs it, not a second place to type the same descriptions from a list of thumbnails.
-    if(c.action==='set-title') return renderFixField(c, 'A short, meaningful title');
-    if(c.action==='set-language') return renderFixField(c, 'e.g. en, en-GB, fr');
+    if(c.action==='set-title') return renderFixField(c, 'A short, meaningful title', where);
+    if(c.action==='set-language') return renderFixField(c, 'e.g. en, en-GB, fr', where);
     if(c.action==='strip-scripts') return renderFixButton(c, 'Remove the scripts');
     return renderGoto(c);
   }
@@ -777,11 +792,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     return out+'</div>';
   }
 
-  function renderFixField(c, placeholder){
-    return '<div class="fixfield"><input type="text" id="fix-'+esc(c.key)+'" '+
+  // `where` keeps the ids apart when the same field is also offered beside the download.
+  function renderFixField(c, placeholder, where){
+    var id=(where||'fix')+'-'+esc(c.key);
+    return '<div class="fixfield"><input type="text" id="'+id+'" '+
       'aria-label="'+esc(c.title)+'" placeholder="'+esc(placeholder)+'">'+
       '<button type="button" class="btn small dofix" data-fix="'+esc(c.action)+'" '+
-      'data-field="fix-'+esc(c.key)+'">Set</button></div>';
+      'data-field="'+id+'">Set</button></div>';
   }
 
   function renderFixButton(c, label){
@@ -805,8 +822,8 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       issues.map(function(i){return esc(i);}).join(', ')+'</p>';
   }
 
-  function wireActions(){
-    Array.prototype.slice.call(document.querySelectorAll('.dofix')).forEach(function(b){
+  function wireActions(root){
+    Array.prototype.slice.call(root.querySelectorAll('.dofix')).forEach(function(b){
       b.addEventListener('click', function(){
         var field=b.getAttribute('data-field');
         var input=field? document.getElementById(field) : null;
@@ -814,7 +831,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
         applyFix(b.getAttribute('data-fix'), input? input.value.trim() : '');
       });
     });
-    Array.prototype.slice.call(document.querySelectorAll('.jump')).forEach(function(b){
+    Array.prototype.slice.call(root.querySelectorAll('.jump')).forEach(function(b){
       b.addEventListener('click', function(){
         goToPage(parseInt(b.getAttribute('data-page'),10));
       });

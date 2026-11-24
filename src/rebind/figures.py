@@ -29,6 +29,8 @@ from .pagecache import PageCache, file_key
 # rule/icon/bullet; a page-covering image is the scan itself, not a figure.
 FIGURE_MIN_COVERAGE = 0.01
 FIGURE_MAX_COVERAGE = 0.6
+# How far apart the edges of two placed images may be and still be the same place.
+SAME_PLACE_PT = 1.0
 
 # Vector (line-art) figure recovery -- see `_vector_figures`. A drawing sits a little further from
 # its caption than a raster image does (the caption marker's own top edge vs the drawing's lowest
@@ -80,8 +82,14 @@ def _page_figures(src_page) -> list[tuple[str, tuple[float, float, float, float]
     for index, image in enumerate(src_page.images):
         x0, y0, x1, y1 = image.bbox
         coverage = (x1 - x0) * (y1 - y0) / page_area
-        if FIGURE_MIN_COVERAGE <= coverage <= FIGURE_MAX_COVERAGE:
-            figures.append((f"p{src_page.number}f{index}", image.bbox))
+        if not FIGURE_MIN_COVERAGE <= coverage <= FIGURE_MAX_COVERAGE:
+            continue
+        # The same bitmap drawn twice in one place (a paper did it for every figure) is one
+        # picture: it was listed, described and read out twice.
+        if any(max(abs(a - b) for a, b in zip(image.bbox, seen)) <= SAME_PLACE_PT
+               for _fid, seen in figures):
+            continue
+        figures.append((f"p{src_page.number}f{index}", image.bbox))
     return figures
 
 

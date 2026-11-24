@@ -135,7 +135,7 @@ it never supplies text, so a wrong box can only group wrongly, which the editor 
 Found five ways:
 
 1. **Printed music**, by its staves — see below.
-2. **Placed images**, read from the file.
+2. **Placed images**, read from the file. One drawn twice in the same place is one picture.
 3. **Drawn figures** — line art leaves no image object, so it is found by anchoring on its caption:
    everything drawn in the band above a `Fig. N …` caption.
 4. **Pictures on a scan, boxed by the layout model.** A scanned sheet is one raster and an
@@ -168,7 +168,7 @@ starting point.
 
 A caption ends where its measure does, not only where the leading opens up: body text starting
 close under a caption set in a narrow margin, or a page footer off to one side a line below, is not
-part of it. A caption set over the blank foot of its own image -- a placed image's box is its whole
+part of it. Nor is a mark the recogniser left on a caption's own row, on top of its words. A caption set over the blank foot of its own image -- a placed image's box is its whole
 bitmap, margin included -- is found inside the box, when it opens in the lower half and runs down
 to the bottom edge.
 
