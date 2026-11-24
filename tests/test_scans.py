@@ -133,3 +133,97 @@ def test_a_sentence_that_goes_on_about_a_figure_is_not_its_caption():
     assert not _is_caption_marker("Fig. 1, which is derived from the CBS-QB3 energies at 0 K.")
     assert _is_caption_marker("Figure 4a, 4b, & 4c.  Prime focus height mask.")
     assert _is_caption_marker("Fig. 9.  Denarius of C. M. Limetanus. Rome, 82 B.C.")
+
+
+def test_a_caption_does_not_run_on_into_the_wider_column_of_text_under_it():
+    # A book's caption set in the margin beside its picture, in a narrow measure, with the body
+    # text starting eight points under its last line: the description ran on through the whole
+    # column -- "...(H: ca. 1.20 m). powerful impression (fig. 59). The original structure was...".
+    from rebind.captions import _side_captions
+
+    picture = (683.0, 366.0, 902.0, 619.0)
+    lines = [
+        _plain("Fig. 60.  Head of a co-", (583, 407, 673, 416)),
+        _plain("lossal statue of Octa-", (583, 396, 668, 405)),
+        _plain("vian, with Baroque ad-", (583, 384, 675, 394)),
+        _plain("ditions to the hair (H:", (583, 373, 672, 384)),
+        _plain("ca. 1.20 m).", (583, 360, 633, 371)),
+        _plain("powerful impression (fig.  59). The original structure was eighty-seven me-",
+               (582, 335, 911, 352)),
+        _plain("ters wide and nearly forty meters high. It consisted of two concentric cylin-",
+               (582, 322, 910, 339)),
+    ]
+    [(text, used)] = _side_captions(lines, picture)
+    assert text == ("Fig. 60.  Head of a colossal statue of Octavian, with Baroque additions to "
+                    "the hair (H: ca. 1.20 m).")
+    assert len(used) == 5
+
+
+def test_a_caption_does_not_take_the_page_footer_set_off_to_one_side_under_it():
+    from rebind.captions import _figure_caption
+
+    picture = (100.0, 121.0, 530.0, 444.0)
+    lines = [
+        _plain("Figure 2.  Rotating section of the K-coronameter.  The prime focus solar image",
+               (96, 104, 527, 113)),
+        _plain("relayed to the line array detector, I3.  The rotating retarder creates a",
+               (96, 93, 527, 103)),
+        _plain("sends two beams with polarization modulation of opposite phases.",
+               (96, 82, 444, 91)),
+        _plain("Proc. of SPIE Vol. 4843     67", (445, 67, 549, 75)),
+    ]
+    assert _figure_caption(lines, picture).endswith("of opposite phases.")
+
+
+def test_a_label_on_a_line_of_its_own_still_takes_the_wider_caption_under_it():
+    from rebind.captions import _figure_caption
+
+    picture = (100.0, 300.0, 500.0, 600.0)
+    lines = [
+        _plain("Fig. 8", (100, 284, 130, 294)),
+        _plain("Schematic of the apparatus, with the pump connected via silicone tubing",
+               (100, 272, 500, 282)),
+        _plain("through two valves to the reservoir, whose level a float keeps steady.",
+               (100, 260, 495, 270)),
+        _plain("Arrows give the direction of flow.", (100, 248, 280, 258)),
+    ]
+    assert _figure_caption(lines, picture).endswith("Arrows give the direction of flow.")
+
+
+def test_a_caption_set_over_the_blank_foot_of_its_own_image_is_found():
+    # A placed image is the whole bitmap, white margin and all, and this paper set each caption
+    # over the blank strip at the foot of its figure's bitmap: no line was *below* the picture.
+    picture = (105.0, 469.0, 558.0, 777.0)
+    lines = [
+        _plain("MK4 K-CORONAMETER", (259, 719, 340, 725)),
+        _plain("MANGIN MIRROR", (452, 516, 503, 522)),
+        _plain("Figure 1. Mk4 K-coronameter.  Optics from the objective through calibration tilt",
+               (98, 487, 529, 496)),
+        _plain("spar.  Optics from the occulting disk to the detectors are mounted in a rotating",
+               (98, 477, 529, 486)),
+        _plain("in azimuth around the Sun.", (98, 467, 198, 476)),
+        _plain("OCCULTER, I1", (128, 356, 170, 362)),
+    ]
+    assert _described(lines, picture, []) == (
+        "Figure 1. Mk4 K-coronameter.  Optics from the objective through calibration tilt "
+        "spar.  Optics from the occulting disk to the detectors are mounted in a rotating "
+        "in azimuth around the Sun.")
+
+
+def test_a_figure_number_lettered_in_the_middle_of_a_picture_is_not_its_caption():
+    picture = (100.0, 200.0, 500.0, 700.0)
+    lines = [
+        _plain("Figure 3 of the original report, redrawn here", (150, 440, 420, 450)),
+        _plain("ROTATING RETARDER", (160, 300, 230, 306)),
+    ]
+    assert _described(lines, picture, []) is None
+
+
+def test_a_caption_over_the_foot_of_an_image_is_not_held_out_as_its_lettering():
+    from rebind.figures import _figure_text
+
+    picture = (105.0, 469.0, 558.0, 777.0)
+    label = _plain("MANGIN MIRROR", (452, 516, 503, 522))
+    caption = _plain("Figure 1. The optics of the Mk4 K-coronameter, drawn to scale.",
+                     (98, 472, 400, 481))
+    assert _figure_text([label, caption], picture) == [label]

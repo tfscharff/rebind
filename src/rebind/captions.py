@@ -56,6 +56,10 @@ CAPTION_MAX_LINES = 24
 # isn't usable as alt text on its own (WCAG 1.1.1: a figure's bare label never conveys its actual
 # content) and signals _document_captions should look for a fuller caption elsewhere instead.
 MIN_CAPTION_WORDS = 3
+# Where a caption's measure ends. Once two lines have set it, a line reaching past it by more than
+# this share of its width belongs to a wider column, and one starting more than this share of the
+# way across it while still reaching past the far side is set off on its own (a page footer).
+CAPTION_MEASURE_SHARE = 0.5
 
 
 def _caption_block_bottom(lines: list[TextLine], marker: TextLine) -> float:
@@ -128,6 +132,8 @@ def _caption_block(ordered: list[TextLine], used: list | None = None) -> str | N
         gap = prev.bbox[1] - nxt.bbox[3]   # y-up: prev is above nxt once sorted top-to-bottom
         if gap > CAPTION_CONTINUATION_GAP_PT:
             break
+        if len(block) >= 2 and _leaves_the_measure(nxt, block):
+            break
         block.append(nxt)
     # `ordered` may walk outward from a figure bottom-to-top (the "caption above" fallback) rather
     # than top-to-bottom -- re-sort by position so the joined text always reads in the document's
@@ -136,6 +142,27 @@ def _caption_block(ordered: list[TextLine], used: list | None = None) -> str | N
     if used is not None:
         used.extend(block)
     return _join_caption_lines([ln.text.strip() for ln in block])
+
+
+def _leaves_the_measure(line: TextLine, block: list[TextLine]) -> bool:
+    """Whether a line close under a caption is set to some other measure than the caption's.
+
+    Leading alone does not end a caption. A book set one in the margin beside its picture, five
+    short lines, with the body text starting eight points under the last of them: the description
+    ran on through the whole column. A paper's caption took the page footer, set at the right-hand
+    edge a line below it.
+
+    Asked only once two lines have set the measure -- a label on a line of its own ("Fig. 8") is
+    no measure for the caption under it.
+    """
+    left = min(ln.bbox[0] for ln in block)
+    right = max(ln.bbox[2] for ln in block)
+    reach = CAPTION_MEASURE_SHARE * (right - left)
+    before, beyond = left - line.bbox[0], line.bbox[2] - right
+    if max(before, beyond) > reach:
+        return True
+    height = line.bbox[3] - line.bbox[1]
+    return (beyond > height and -before > reach) or (before > height and -beyond > reach)
 
 
 def _join_caption_lines(parts: list[str]) -> str:
@@ -196,7 +223,34 @@ def _figure_caption(lines: list[TextLine], bbox: tuple[float, float, float, floa
         key=lambda ln: ln.bbox[1],   # closest to the figure (lowest y0) first
     )
     if above and (above[0].bbox[1] - fy1) <= CAPTION_MAX_GAP_PT:
-        return _caption_block(above, used)
+        found = _caption_block(above, used)
+        if found is not None:
+            return found
+    return _caption_over_the_foot(lines, bbox, used)
+
+
+def _caption_over_the_foot(lines: list[TextLine], bbox: tuple[float, float, float, float],
+                           used: list | None = None) -> str | None:
+    """A caption set over the blank foot of the picture's own box.
+
+    A placed image's box is its whole bitmap, margin and all, and a paper set each caption over
+    the blank strip at the foot of its figure's bitmap: nothing was *below* the picture, so it had
+    no caption. Taken only when the block opens in the lower half of the box and runs down to its
+    bottom edge -- a figure number lettered on the artwork does neither.
+    """
+    fx0, fy0, fx1, fy1 = bbox
+    low = sorted((ln for ln in lines if ln.bbox[3] <= (fy0 + fy1) / 2
+                  and _horizontally_overlaps(ln.bbox, bbox)), key=lambda ln: -ln.bbox[3])
+    inside = [ln for ln in low if ln.bbox[3] > fy0]
+    for index in range(len(inside) - 1, -1, -1):       # the lowest label first
+        if not _is_caption_marker(inside[index].text):
+            continue
+        block: list[TextLine] = []
+        found = _caption_block(low[index:], block)     # it may run on past the foot of the box
+        if found is not None and min(ln.bbox[1] for ln in block) <= fy0 + CAPTION_MAX_GAP_PT:
+            if used is not None:
+                used.extend(block)
+            return found
     return None
 
 

@@ -146,16 +146,16 @@ uv run pytest -m packaging # opt-in: rebuilds the frozen bundle and OCRs through
 uv run ruff check .
 ```
 
-Build the installer (after building the bundle):
+Build the bundle and the installer, in one step:
 ```bash
-uv run pyinstaller packaging/rebind.spec --noconfirm          # -> packaging/dist/rebind/
-& "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe" packaging\rebind.iss  # -> packaging/Output/
+uv run python scripts/build_installer.py   # -> packaging/dist/rebind/, packaging/Output/rebind-setup.exe
 ```
 Thomas installs and tests builds himself; **don't run the installer.**
+Never run PyInstaller and ISCC by hand: PyInstaller writes to `dist` under the folder it is run
+from, ISCC reads `packaging/dist`, and 1.13.0 was nearly shipped from a 1.7.0 bundle that way. The
+script names one folder to both and refuses a bundle its own run did not write.
 If Windows keeps a handle on `packaging/dist/rebind` (search indexer/Defender, minutes at a time),
-don't wait: build with `--distpath packaging/dist_alt --workpath packaging/build_alt` and compile
-with `ISCC.exe /DDistDir=dist_alt packaging
-ebind.iss`.
+don't wait: pass `--alt` to build in `packaging/dist_alt` instead.
 
 ## Workflow
 

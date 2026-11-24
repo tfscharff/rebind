@@ -4,6 +4,15 @@ What changed in each release, newest first. Each entry is a summary; the full no
 [releases page](https://github.com/tfscharff/rebind/releases). Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.13.1 (2026-11-24)
+
+- A caption no longer runs on into the text under it when that text is set to a different
+  measure: a caption in a book's margin took the whole column of body text beneath it, and a
+  paper's caption took the page footer.
+- A caption set over the blank foot of its own image is found; the picture had come up
+  undescribed.
+- The installer is built by one script, from the bundle that script has just made.
+
 ## 1.13.0 (2026-11-24)
 
 - **Still needs you**, above the download: everything between the document and a pass, as things

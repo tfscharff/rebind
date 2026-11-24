@@ -348,6 +348,11 @@ def _figure_text(lines: list[TextLine], bbox: tuple) -> list[TextLine]:
         default=None,
     )
     prose = _paragraph_lines(lines)
+    # Nor its caption where that is set over the foot of the picture's own box: inside the box,
+    # but words to be read, not lettering.
+    caption: list[TextLine] = []
+    _figure_caption(lines, bbox, caption)
+    prose |= {id(ln) for ln in caption}
     candidates = [ln for ln in lines if (floor is None or ln.bbox[3] > floor)
                   and id(ln) not in prose]
     owned: list[TextLine] = []

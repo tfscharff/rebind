@@ -166,6 +166,12 @@ Never used as alt text: prose that merely sits under a picture, and a bare label
 satisfy a checker while telling a reader nothing. A bare label is offered in the editor as a
 starting point.
 
+A caption ends where its measure does, not only where the leading opens up: body text starting
+close under a caption set in a narrow margin, or a page footer off to one side a line below, is not
+part of it. A caption set over the blank foot of its own image -- a placed image's box is its whole
+bitmap, margin included -- is found inside the box, when it opens in the lower half and runs down
+to the bottom edge.
+
 A bare label is matched to its full caption elsewhere in the document by kind and whole number:
 "Scheme 1." is never given the caption of Fig. 1, nor "Exhibit 7.5" that of Exhibit 7.19.
 
