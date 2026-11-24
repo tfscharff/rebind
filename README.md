@@ -162,7 +162,7 @@ Rebind is not on PyPI. For tests and the installer build, see [CONTRIBUTING.md](
 
 ## Status
 
-The current version is **1.12.2**. Scanned and born-digital PDFs both work from start to finish,
+The current version is **1.13.0**. Scanned and born-digital PDFs both work from start to finish,
 and the output validates as PDF/UA-2 with zero failures. [CHANGELOG.md](CHANGELOG.md) lists what
 changed in each release.
 

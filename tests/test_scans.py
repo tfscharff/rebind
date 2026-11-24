@@ -74,3 +74,62 @@ def test_a_title_set_over_five_lines_stays_one_heading():
 
     assert _demote_heading_bursts([1, 1, 1, 1, 1, 2, 0], title_level=1) == [1, 1, 1, 1, 1, 2, 0]
     assert _demote_heading_bursts([2, 2, 2, 0]) == [0, 0, 0, 0]          # a byline still is not
+
+
+def _plain(text: str, box: tuple):
+    from rebind.extract import TextLine
+
+    return TextLine(text=text, page=1, bbox=box, font="F", size=10, bold=False, italic=False)
+
+
+def _described(lines, bbox, elsewhere):
+    """The description `describe_figures` gives one placed image, with `elsewhere` standing for
+    the lines of another page of the document."""
+    from rebind.captions import _document_captions
+    from rebind.figures import PageFigures, describe_figures
+
+    figs = PageFigures([("p1f0", bbox)])
+    captions = _document_captions([(None, lines, False), (None, elsewhere, False)])
+    describe_figures(figs, lines, {}, captions, set(), 612.0 * 792.0)
+    return figs.alt["p1f0"]
+
+
+def test_a_scheme_is_not_described_with_the_caption_of_the_figure_of_the_same_number():
+    # A chemistry paper numbers its schemes and its figures separately. "Scheme 1." under a
+    # reaction scheme is a bare label, so the caption was looked for elsewhere by number alone --
+    # and the scheme was described, wrongly, as "FIG. 1. Potential energy diagram...".
+    scheme = (86.0, 588.0, 528.0, 729.0)
+    label = _plain("Scheme 1.", (286.0, 570.0, 328.0, 580.0))
+    figure_caption = _plain("FIG. 1. Potential energy diagram for the formation of 2 from HCN.",
+                            (62.0, 550.0, 552.0, 560.0))
+
+    assert _described([label], scheme, [figure_caption]) is None
+
+
+def test_a_bare_label_still_finds_its_own_caption_on_another_page():
+    # What looking elsewhere is for, and it must keep working however the label is spelled.
+    picture = (86.0, 588.0, 528.0, 729.0)
+    label = _plain("Fig. 8 (Continued)", (86.0, 570.0, 200.0, 580.0))
+    caption = _plain("Figure 8. The apparatus, with its two glass syringes.",
+                     (62.0, 550.0, 552.0, 560.0))
+
+    assert _described([label], picture, [caption]) == caption.text
+
+
+def test_a_chapter_numbered_exhibit_is_matched_by_its_whole_number():
+    # "Exhibit 7.5" was read as number 7, and so was "Exhibit 7.19": one exhibit took the other's
+    # words.
+    picture = (86.0, 588.0, 528.0, 729.0)
+    label = _plain("Exhibit 7.5", (86.0, 570.0, 160.0, 580.0))
+    other = _plain("Exhibit 7.19 Interview Guide for the Wilderness Program",
+                   (62.0, 550.0, 552.0, 560.0))
+
+    assert _described([label], picture, [other]) is None
+
+
+def test_a_sentence_that_goes_on_about_a_figure_is_not_its_caption():
+    from rebind.captions import _is_caption_marker
+
+    assert not _is_caption_marker("Fig. 1, which is derived from the CBS-QB3 energies at 0 K.")
+    assert _is_caption_marker("Figure 4a, 4b, & 4c.  Prime focus height mask.")
+    assert _is_caption_marker("Fig. 9.  Denarius of C. M. Limetanus. Rome, 82 B.C.")

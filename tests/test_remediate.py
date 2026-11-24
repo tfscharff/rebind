@@ -1887,7 +1887,7 @@ def test_split_caption_is_found_on_a_different_page(tmp_path: Path):
         # Indented well past the image's right edge -- reproduces the real sample exactly: the
         # marker line does NOT horizontally overlap the image, so _figure_caption's (deliberately
         # stricter, for building an actual caption block) alignment check finds nothing at all,
-        # and only the more lenient _nearby_caption_number locates it.
+        # and only the more lenient _nearby_caption_key locates it.
         f"<p style='font-size:8pt; margin-left:200pt'>Fig. 8 (Continued)</p>"
         f"<p style='page-break-before:always; font-size:8pt'>"
         f"Fig. 8 Mounting zebrafish embryos and larvae for time-lapse imaging, showing the "

@@ -144,7 +144,9 @@ Found five ways:
 5. **Regions of a scan, from its pixels**, for whatever the model did not box. OCR says where the
    words are, those are masked out, and the remaining ink is closed into blobs. A blob qualifies if
    it covers ≥1.5% of the page, is solid enough to be a picture, is not mostly text, and does not
-   reach three page edges (what does is the scanner's dark strip at the spine or platen edge).
+   reach three page edges (what does is the scanner's dark strip at the spine or platen edge),
+   and is not a narrow strip from one edge to the opposite one (the binding's shadow down the
+   middle of a book scanned open).
 
 A picture the model boxed is kept whether or not anything captions it: an uncaptioned one goes to
 the editor to be described. A pixel region is a guess — on a page of plans it is mostly hatching —
@@ -163,6 +165,14 @@ sits beside the figure. Line-break hyphens are healed, so the alt text reads "ic
 Never used as alt text: prose that merely sits under a picture, and a bare label ("Fig. 8"). Both
 satisfy a checker while telling a reader nothing. A bare label is offered in the editor as a
 starting point.
+
+A bare label is matched to its full caption elsewhere in the document by kind and whole number:
+"Scheme 1." is never given the caption of Fig. 1, nor "Exhibit 7.5" that of Exhibit 7.19.
+
+A line of a scan's own OCR layer that runs across two columns — the second lines of two captions
+set side by side, read as one — is split at the gutter before anything reads it: where the lines
+above and below both leave the same strip clear, a word starts at the second column's edge, and the
+line has no letter or digit for a line's height before it.
 
 A figure's callout labels ("A", "B", "3 mm") belong to the figure, described or not, and are drawn
 inside it rather than left loose in the reading order — so do the scraps a recogniser makes of

@@ -33,6 +33,17 @@ legend below. Pressing a key sets the type and moves to the next element. `?` (o
 button) opens a list of every key on whatever you are on, a picture included; `Enter` opens it
 too, except on a picture or formula, where `Enter` writes the description.
 
+Above **Download PDF** is **Still needs you**: everything between this document and a pass, as
+things to do, each with how many — "Describe 7 pictures", "Check the reading order of 9 pages",
+"1 table has rows with differing numbers of cells". Activating one goes to the first of them. The
+next thing to do is spelled out; the list folds down to its count while a description is being
+written, and reads **Nothing is left for you** when every check passes. A picture stops counting
+once it is described or marked not read (`x`). The download is never blocked: a PDF taken early is
+tagged and valid, with the undescribed pictures silent.
+
+In a window narrower than 80rem the report gives way to the document, and this list is where what
+it found is shown.
+
 On a figure, the right column becomes its description with the caption pre-filled. Landing on it
 does not take focus: `Tab` accepts the guess and moves on, `Enter` or any character goes into the
 box, and from the box `Enter` or `Tab` accepts while `Esc` returns to the page. `x` still takes the

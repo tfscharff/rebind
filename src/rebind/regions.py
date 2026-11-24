@@ -20,7 +20,9 @@ hand, and a fabricated one is a picture that does not exist being announced to a
 * it must not be **mostly text**: a region overlapping recognized lines by more than
   `MAX_TEXT_OVERLAP` is a paragraph the mask failed to cover, not a diagram;
 * it must not reach three **page edges**, where a scan's dark border lives -- anything printed on
-  the sheet has a margin on at least two adjacent sides.
+  the sheet has a margin on at least two adjacent sides;
+* it must not be a **strip from one edge to the opposite one**: the shadow down the spine of a
+  book scanned open.
 """
 
 from __future__ import annotations
@@ -45,6 +47,12 @@ MIN_INK_DENSITY = 0.04
 # the left third of the sheet, then vetoed the photograph sitting inside it. A page lost its first
 # figure to a mark that was not on the page. Reaching three edges is the whole test now.
 BORDER_EDGES = 3
+# A strip from one edge of the sheet to the opposite one, no wider than this share of the page, is
+# the shadow down the spine of a book scanned open, two pages to the sheet. It reaches only two
+# edges, so the rule above let it through: on seven pages of a real chapter the binding was
+# announced as a figure. A plate printed the full height of the sheet reaches both edges too, and
+# is wide.
+SPINE_MAX_SHARE = 0.15
 # A region this much covered by recognized text is text, whatever shape its ink makes.
 MAX_TEXT_OVERLAP = 0.30
 # Text boxes are grown by this (in page points) before masking, so ascenders, descenders and the
@@ -135,6 +143,10 @@ def find_picture_regions(page_image: np.ndarray, text_boxes: list[tuple], *,
                  + (x + bw >= w - margin_x) + (y + bh >= h - margin_y))
         if edges >= BORDER_EDGES:
             continue        # the sheet's own edge, or the scan itself -- not a picture on it
+        top_to_bottom = y <= margin_y and y + bh >= h - margin_y and bw <= SPINE_MAX_SHARE * w
+        side_to_side = x <= margin_x and x + bw >= w - margin_x and bh <= SPINE_MAX_SHARE * h
+        if top_to_bottom or side_to_side:
+            continue        # the binding of a book scanned open
         covered = float(np.count_nonzero(text_mask[y:y + bh, x:x + bw])) / float(max(bw * bh, 1))
         if covered > MAX_TEXT_OVERLAP:
             continue

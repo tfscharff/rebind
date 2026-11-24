@@ -4,6 +4,22 @@ What changed in each release, newest first. Each entry is a summary; the full no
 [releases page](https://github.com/tfscharff/rebind/releases). Versions follow
 [Semantic Versioning](https://semver.org/).
 
+## 1.13.0 (2026-11-24)
+
+- **Still needs you**, above the download: everything between the document and a pass, as things
+  to do with how many of each ("Describe 7 pictures", "Check the reading order of 9 pages"), each
+  taking you to the first one. It reads "Nothing is left for you" when every check passes. The
+  page no longer announces "Your accessible PDF is ready" while pictures are undescribed.
+- In a narrow window the report now gives way to the document, as it was meant to; it had been
+  taking half a column and pushing the download off the page.
+- The shadow down the spine of a book scanned open is no longer found as a picture.
+- A bare label is matched to its caption by kind and whole number: "Scheme 1." was described with
+  the caption of Fig. 1, and "Exhibit 7.5" with that of Exhibit 7.19.
+- "Fig. 1, which is derived from…" is a sentence, not a caption.
+- A line a scan's own OCR layer ran across two captions set side by side is split at the gutter,
+  so each picture keeps its own caption.
+- The report's sentences agree with their counts ("1 table has", not "1 tables have").
+
 ## 1.12.2 (2026-11-10)
 
 - Block quote and Footnote are no longer offered as types. Neither is known to be announced by

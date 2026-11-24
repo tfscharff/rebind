@@ -443,7 +443,8 @@ def _alt_text_checks(pdf: pikepdf.Pdf, tree: _Tree, undescribed: tuple) -> list[
         out.append(Check(ALT_TEXT, "Figures alternate text", NEEDS_YOU,
                          f"{count} image{'s' if count > 1 else ''} on page"
                          f"{'s' if len(pages) > 1 else ''} {', '.join(str(p) for p in pages)} "
-                         "carry no description, so they are marked decorative.",
+                         + ("carry no description, so they are marked decorative." if count > 1
+                            else "carries no description, so it is marked decorative."),
                          need="Rebind asks you to describe each one as you reach it in the reading "
                               "order, with its own guess ready to accept. A described image is "
                               "read out; one left blank stays decoration, honest but silent.",
@@ -488,7 +489,8 @@ def _alt_text_checks(pdf: pikepdf.Pdf, tree: _Tree, undescribed: tuple) -> list[
     out.append(Check(ALT_TEXT, "Other elements alternate text",
                      PASS if not needs_alt else NEEDS_YOU,
                      "Everything else that needs a description has one." if not needs_alt
-                     else f"{len(needs_alt)} formulas have no description.",
+                     else ("1 formula has no description." if len(needs_alt) == 1
+                           else f"{len(needs_alt)} formulas have no description."),
                      need="" if not needs_alt else "Describe each one: on a formula, Enter opens "
                                                    "its description.",
                      action="" if not needs_alt else "goto", locations=_where(tree, needs_alt)))
@@ -534,8 +536,8 @@ def _table_checks(tree: _Tree) -> list[Check]:
               action="" if headers else "goto", locations=_where(tree, tables)),
         Check(TABLES, "Regularity", PASS if not ragged else NEEDS_YOU,
               "Every row of every table has the same number of cells." if not ragged
-              else f"{len(ragged)} tables have rows with differing numbers of cells, so the grid "
-                   "is irregular.",
+              else ("1 table has" if len(ragged) == 1 else f"{len(ragged)} tables have")
+              + " rows with differing numbers of cells, so the grid is irregular.",
               need="" if not ragged else retag,
               action="" if not ragged else "goto", locations=_where(tree, ragged)),
         Check(TABLES, "Summary", PASS if not no_summary else NEEDS_YOU,
@@ -580,7 +582,8 @@ def _heading_checks(tree: _Tree) -> list[Check]:
     skipped = [headings[i + 1] for i, (a, b) in enumerate(zip(levels, levels[1:])) if b > a + 1]
     return [Check(HEADINGS, "Appropriate nesting", PASS if not skipped else NEEDS_YOU,
                   f"{len(levels)} headings, nested without skipping a level." if not skipped
-                  else f"{len(skipped)} headings skip a level.",
+                  else ("1 heading skips a level." if len(skipped) == 1
+                        else f"{len(skipped)} headings skip a level."),
                   need="" if not skipped else "Go to each one and press the digit for the level it "
                                               "should be — a heading may not jump from 1 to 3.",
                   action="" if not skipped else "goto", locations=_where(tree, skipped))]

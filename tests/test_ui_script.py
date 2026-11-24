@@ -350,3 +350,26 @@ def test_page_up_and_page_down_turn_the_page():
     assert "key==='PageDown'||key===']'? 1 : key==='PageUp'||key==='['? -1 : 0" in script
     assert script.count("turnPage(pageKey(key))") == 2, "on an element, and on an empty page"
     assert "<b>PgUp</b> <b>PgDn</b> turn the page" in script
+
+
+def test_what_still_needs_the_person_is_listed_above_the_download():
+    # Ten real documents went through with no descriptions typed and eight came out short of
+    # WCAG 1.1.1, and the page said "Your accessible PDF is ready." What is left for the person is
+    # now listed -- as things to do, with how many -- as the last thing before the download.
+    page = index_html()
+    script = _script()
+    assert "accessible PDF is ready" not in page
+    assert page.index('id="remaining"') < page.index('id="dl"')
+    for name in ("remaining", "remainingSummary", "drawRemaining"):
+        assert re.search(rf"function\s+{name}\s*\(", script), name
+    # Kept current as the person works: after a page is walked, an edit, and a rebuild.
+    assert script.count("drawRemaining();") >= 4
+
+
+def test_a_narrow_window_really_does_hide_the_report():
+    # The rule that hides it was written above the rule that sets every column to flex, which has
+    # the same weight, so it never applied: the report took half of a column in a page that does
+    # not scroll, and the download went off the bottom.
+    page = index_html()
+    assert page.index(".col-report,.col-todo,.col-stage{min-height:0") < page.index(
+        ".col-report{display:none}")

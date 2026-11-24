@@ -101,9 +101,11 @@ body.wide #work{flex:1;min-height:0;display:flex}
 body.wide .panel{margin-top:0}
 .workspace{flex:1;min-height:0;display:grid;
   grid-template-columns:minmax(13rem,1fr) minmax(0,2.2fr) minmax(14rem,1fr);gap:1rem}
+.col-report,.col-todo,.col-stage{min-height:0;height:100%;display:flex;flex-direction:column}
+/* In a narrow window the report gives way, and what it found that needs the person is listed with
+   the way out (`.remaining`). After the rule above, which would otherwise show it again. */
 @media (max-width:80rem){ .workspace{grid-template-columns:minmax(0,1.6fr) minmax(13rem,1fr)}
   .col-report{display:none} }
-.col-report,.col-todo,.col-stage{min-height:0;height:100%;display:flex;flex-direction:column}
 .col-report>.panel{flex:1;min-height:0;overflow-y:auto}
 /* The right column stacks what you have landed on, what you can press, and the way out. The first
    takes the room to spare. In a short window it is the list of keys that gives way and scrolls,
@@ -279,6 +281,26 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
 /* The last block on the page: take the document, or start another. */
 .finish{display:flex;flex-direction:column;align-items:stretch;gap:.15rem}
 .finish #dl{text-align:center}
+/* What is still the person's to do, directly above the way out: the left column's report is hidden
+   in a narrow window, and nobody should take the document without having been told what is left. */
+.remaining{margin:0 0 .7rem}
+.remaining h2{font-size:1rem;margin:0 0 .15rem}
+.remaining .verdict{margin:0 0 .35rem;font-size:.82rem;color:var(--muted)}
+.remaining.clear h2{color:var(--pass)}
+.remaining ul{list-style:none;margin:0;padding:0;max-height:min(11rem,24vh);overflow-y:auto}
+.remaining.folded ul{display:none}
+.remaining.folded .verdict{margin-bottom:0}
+.remaining li{border-top:1px solid var(--line)}
+.remaining .left{display:grid;grid-template-columns:1.1rem 1fr;gap:0 .4rem;width:100%;
+  font:inherit;text-align:left;background:none;border:none;color:inherit;padding:.25rem .1rem;
+  border-radius:4px}
+.remaining .left{position:relative}
+.remaining button.left{cursor:pointer}
+.remaining button.left:hover .task{text-decoration:underline}
+.remaining button.left:focus-visible{outline:3px solid var(--stamp);outline-offset:-2px}
+.remaining .mark{color:var(--attention);font-weight:700;text-align:center}
+.remaining .task{font-weight:600;font-size:.88rem}
+.remaining .how{grid-column:2;font-size:.78rem;color:var(--muted)}
 .finish a.reset{margin-top:.5rem;text-align:center}
 .struct-badge{font-family:var(--mono);font-size:.74rem;text-transform:uppercase;
   letter-spacing:.03em;margin:.2rem 0 .6rem}
@@ -419,7 +441,6 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     // The right column is drawn by loadEditor, once the page list is known: the reading-order
     // block counts pages, and it cannot count them before they have arrived.
     loadEditor(id, name);
-    say('Done. Your accessible PDF is ready.');
   }
 
   // Only the save state lives in the header. The download used to sit here too, which put a tab
@@ -448,15 +469,13 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     var host=document.getElementById('report');
     if(!host) return;
     ed.reportSig=reportSignature();
-    var passed=0, total=0;
-    ed.checks.forEach(function(c){ if(c.status!=='n/a'){ total++; if(c.status==='pass') passed++; } });
     var groups=[], byGroup={};
     ed.checks.forEach(function(c){
       if(!byGroup[c.group]){ byGroup[c.group]=[]; groups.push(c.group); }
       byGroup[c.group].push(c);
     });
     var h='<section class="panel report"><h2 id="rep-h">Accessibility report</h2>'+
-      '<p class="score">'+passed+' of '+total+' checks pass</p>';
+      '<p class="score" id="score">'+esc(scoreText())+'</p>';
     groups.forEach(function(g){
       h+='<div class="group"><h3>'+esc(g)+'</h3><ul class="checks">';
       byGroup[g].forEach(function(c){ h+=checkRow(c); });
@@ -513,6 +532,16 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     } else { ed.revealed=true; revealChecks(host); }
   }
 
+  // Counted as the rows are marked: reading order passes once every page has been walked.
+  function scoreText(){
+    var passed=0, total=0;
+    ed.checks.forEach(function(c){
+      var status=effectiveStatus(c);
+      if(status!=='n/a'){ total++; if(status==='pass') passed++; }
+    });
+    return passed+' of '+total+' checks pass';
+  }
+
   function checkRow(c){
     var status=effectiveStatus(c);
     var cls=status==='n/a'?'na':status;
@@ -565,6 +594,9 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
     }
     var progress=document.getElementById('roprogress');
     if(progress) progress.textContent=readingOrderProgress();
+    var score=document.getElementById('score');
+    if(score) score.textContent=scoreText();
+    drawRemaining();
     if(allPagesWalked()) say('Every page walked — reading order checked off.');
   }
 
@@ -612,10 +644,112 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       // Last on the page, and last in the tab order, because they are what you do when the work is
       // finished. Taking the document is the second-to-last stop and starting over is the last:
       // nobody should reach "do another document" without passing the download first.
-      '<section class="panel finish"><h2 class="visually-hidden">When you are done</h2>'+
+      '<section class="panel finish"><div class="remaining" id="remaining"></div>'+
       '<a class="btn primary" id="dl" href="/jobs/'+ed.id+'/pdf" download>Download PDF</a>'+
       '<a class="reset" href="/">Do another document</a></section>';
     host.innerHTML=h;
+    ed.remainingSig=null;
+    drawRemaining();
+  }
+
+  // ---- What is still the person's to do -------------------------------------------------------
+  // Everything between this document and a pass, as things to do rather than rules that failed:
+  // each with how many, in plain words, and a press that takes you to the first of them. The
+  // report on the left says which checks did not pass; this says what to do about it, and it is
+  // the last thing before the download.
+  function remaining(){
+    var out=[];
+    var pictures=ed.figures.filter(function(f){ return !ed.alts[f.id] && !ed.removed[f.id]; });
+    if(pictures.length){
+      var notRead=ed.artifact&&ed.artifact.key? ', or press '+ed.artifact.key+
+        ' on one that is only decoration' : '';
+      out.push({text:'Describe '+pictures.length+(pictures.length===1?' picture':' pictures'),
+        how:'A screen reader passes over a picture with no description. Type what each shows'+
+          notRead+'.',
+        go:function(){ goToPage(pictures[0].page); focusBox(pictures[0].id); }});
+    }
+    var unwalked=ed.pageList.filter(function(p){ return !ed.walked[p]; });
+    if(unwalked.length){
+      out.push({text:'Check the reading order of '+unwalked.length+
+          (unwalked.length===1?' page':' pages'),
+        how:'Tab through each page: the numbers are the order a screen reader reads in.',
+        go:function(){ goToPage(unwalked[0]); }});
+    }
+    ed.checks.forEach(function(c){
+      var status=effectiveStatus(c);
+      if(status!=='needs-you' && status!=='manual') return;
+      if(c.key==='logical-reading-order' || ASKED_IN_THE_WALK[c.key]) return;
+      var page=(c.locations&&c.locations.length)? c.locations[0].page : null;
+      // What is wrong in the report's own words -- "4 tables have rows with differing numbers of
+      // cells" -- rather than the name of Adobe's rule for it ("Regularity").
+      var wrong=(c.detail||'').split(/\.\s/)[0].replace(/\.$/,'');
+      out.push({text:wrong||c.title, how:c.need||'',
+        go:function(){
+          if(page){ goToPage(page); return; }
+          var item=document.getElementById('item-'+c.key);
+          var field=item? item.querySelector('input, textarea, button') : null;
+          // The field that sets it is in the report, which a narrow window does not show.
+          if(field && field.offsetParent){ item.scrollIntoView({block:'nearest'}); field.focus(); }
+          else say(c.title+': '+(c.need||c.detail)+
+                   (field? ' Widen the window to see the report, where this is set.' : ''));
+        }});
+    });
+    if(ed.status && !ed.status.structure_ok){
+      out.push({text:'The tags did not pass the structure check',
+        how:(ed.status.structure_issues||[]).join(', '), go:null});
+    }
+    return out;
+  }
+
+  function remainingSummary(left){
+    if(!left.length) return 'Nothing is left for you: every check passes.';
+    return (left.length===1? 'One thing still needs you: ' : left.length+' things still need you: ')+
+      left.map(function(t){ return t.text; }).join('; ')+'.';
+  }
+
+  function drawRemaining(){
+    var host=document.getElementById('remaining');
+    if(!host) return;
+    var left=remaining();
+    var signature=JSON.stringify(left.map(function(t){ return [t.text, t.how]; }));
+    if(signature===ed.remainingSig) return;     // nothing changed: keep focus where it is
+    var held=document.activeElement&&host.contains(document.activeElement)
+      ? document.activeElement.getAttribute('data-left') : null;
+    ed.remainingSig=signature;
+    if(!left.length){
+      host.className='remaining clear'+(host.classList.contains('folded')?' folded':'');
+      host.innerHTML='<h2>Nothing is left for you</h2>'+
+        '<p class="verdict">Every check passes. The PDF is ready to download.</p>';
+      return;
+    }
+    host.className='remaining'+(host.classList.contains('folded')?' folded':'');
+    var h='<h2>Still needs you</h2><p class="verdict">'+
+      (left.length===1? 'One thing stands' : left.length+' things stand')+
+      ' between this PDF and a pass.</p><ul>';
+    left.forEach(function(t,i){
+      // Only the first is spelled out, as the thing to do next: the column is shared with the
+      // element being worked on, and four explanations left no room to write a description in.
+      // The rest keep theirs for a screen reader and on hover.
+      var body='<span class="mark" aria-hidden="true">!</span><span class="task">'+esc(t.text)+
+        '</span>'+(t.how? '<span class="'+(i===0?'how':'visually-hidden')+'">'+
+        (i===0?'':' ')+esc(t.how)+'</span>' : '');
+      var tip=(i>0&&t.how)? ' title="'+esc(t.how)+'"' : '';
+      h+='<li>'+(t.go? '<button type="button" class="left" data-left="'+i+'"'+tip+'>'+body+
+                        '</button>'
+                      : '<div class="left"'+tip+'>'+body+'</div>')+'</li>';
+    });
+    host.innerHTML=h+'</ul>';
+    Array.prototype.slice.call(host.querySelectorAll('button.left')).forEach(function(b){
+      b.addEventListener('click', function(){
+        var task=remaining()[parseInt(b.getAttribute('data-left'),10)];
+        if(task && task.go) task.go();
+      });
+    });
+    if(held!==null){
+      var again=host.querySelector('button.left[data-left="'+held+'"]')||
+        host.querySelector('button.left');
+      if(again) again.focus();
+    }
   }
 
   // Every open item gets a control. A fix Rebind can perform is a button; a fault that can only
@@ -702,6 +836,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   var saveTimer=null, saving=false, pending=false;
 
   function applyEdits(){
+    drawRemaining();
     if(saveTimer) clearTimeout(saveTimer);
     setSaveState('Saving…', true);
     saveTimer=setTimeout(sendEdits, 900);
@@ -753,6 +888,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       refreshFocused();
       var progress=document.getElementById('roprogress');
       if(progress) progress.textContent=readingOrderProgress();
+      drawRemaining();
       setSaveState('All changes saved', false);
       if(pending) sendEdits();
     }).catch(function(){ setSaveState('All changes saved', false); });
@@ -781,6 +917,7 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
       if(ed.pageList.indexOf(ed.page)<0) ed.page=ed.pageList[0]||1;
       drawStage();
       drawTodo();
+      say('Done. '+remainingSummary(remaining()));
     }).catch(function(){ host.innerHTML=''; });
   }
 
@@ -1622,6 +1759,10 @@ a.reset{display:inline-block;margin-top:1rem;color:var(--cloth);font-size:.9rem}
   function setKeysCollapsed(collapsed){
     var keys=document.getElementById('keys');
     if(keys) keys.classList.toggle('folded', !!collapsed);
+    // The list of what is left folds away with them, down to its count: a description is being
+    // written, and the box to write it in needs the room more.
+    var left=document.getElementById('remaining');
+    if(left) left.classList.toggle('folded', !!collapsed);
   }
 
   // The next element in the walk, carrying on to the next page at the end of this one -- what Tab

@@ -13,10 +13,10 @@ from .captions import (
     _caption_block,
     _caption_block_bottom,
     _caption_is_substantial,
-    _caption_number,
+    _caption_key,
     _figure_caption,
     _is_caption_marker,
-    _nearby_caption_number,
+    _nearby_caption_key,
     _side_captions,
 )
 from .extract import TextLine
@@ -570,8 +570,8 @@ def describe_figures(figs: PageFigures, lines: list[TextLine], alt_texts: dict[s
             if used:
                 figs.caption_blocks.append(used)
             return local
-        number = (_caption_number(local) if local else None) or _nearby_caption_number(lines, bbox)
-        elsewhere = document_captions.get(number) if number else None
+        key = (_caption_key(local) if local else None) or _nearby_caption_key(lines, bbox)
+        elsewhere = document_captions.get(key) if key else None
         if elsewhere and _caption_is_substantial(elsewhere):
             return elsewhere
         return None

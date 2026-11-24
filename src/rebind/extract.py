@@ -350,6 +350,102 @@ def _join_split_lines(raws: list[_Raw]) -> list[_Raw]:
         del raws[b]
 
 
+# The lines above and below show a gutter where they leave at least this much paper clear between
+# them, in line heights, and they sit within GUTTER_NEIGHBOUR_REACH line heights of the line.
+GUTTER_MIN_WIDTH = 1.5
+GUTTER_NEIGHBOUR_REACH = 1.0
+# The line itself must be clear of letters and digits for this far, in line heights, before the
+# column that starts at the gutter's far side. Ordinary word spaces are a third of this.
+GUTTER_CLEAR_IN_LINE = 1.0
+# A column's first character starts within this of the column's edge, in line heights.
+GUTTER_EDGE_TOLERANCE = 0.25
+
+
+def _ink(raw: _Raw) -> tuple[float, float]:
+    """Where the line's characters start and end, leaving out the spaces at either end."""
+    inked = [char for _s, _e, char in raw.chars if not char.get_text().isspace()]
+    return (inked[0].x0, inked[-1].x1) if inked else (raw.bbox[0], raw.bbox[2])
+
+
+def _gutters(row: list[_Raw], width: float) -> list[tuple[float, float]]:
+    """The clear paper between the lines of one row, wherever it is at least `width` wide."""
+    spans = sorted(_ink(raw) for raw in row)
+    return [(left[1], right[0]) for left, right in zip(spans, spans[1:])
+            if right[0] - left[1] >= width]
+
+
+def _split_at_gutters(raws: list[_Raw]) -> list[_Raw]:
+    """Split a line that runs across two columns back into each column's line.
+
+    A scan's own OCR layer read the second lines of two captions set side by side as one line, with
+    the marks it made of the gutter in the middle: "...near the end of his  ~~  B.C.). The original
+    of this type was made". Each caption then took the whole line as its own, and Pompey's portrait
+    was described as "the dictator near the end of his".
+
+    The line is split where the lines directly above it and directly below it both leave the same
+    strip of paper clear, a word of the line starts at that strip's far edge -- where the second
+    column's lines start -- and the line has no letter or digit for a line's height before it. A
+    heading set across two columns has its words running through the gutter and is left whole.
+    Marks left in the strip become a line of their own, which on a scan is dropped as a speck.
+    """
+    out: list[_Raw] = []
+    for raw in raws:
+        height = raw.bbox[3] - raw.bbox[1]
+        if raw.turn or height <= 0:
+            out.append(raw)
+            continue
+
+        def beside(other: _Raw, raw: _Raw = raw) -> bool:
+            return (other is not raw and not other.turn
+                    and other.bbox[0] < raw.bbox[2] and other.bbox[2] > raw.bbox[0])
+
+        def near(gap: float, height: float = height) -> bool:
+            return -0.3 * height <= gap <= GUTTER_NEIGHBOUR_REACH * height
+
+        above = [o for o in raws if beside(o) and near(o.bbox[1] - raw.bbox[3])]
+        below = [o for o in raws if beside(o) and near(raw.bbox[1] - o.bbox[3])]
+        width = GUTTER_MIN_WIDTH * height
+        edges = sorted(max(a1, b1) for a0, a1 in _gutters(above, width)
+                       for b0, b1 in _gutters(below, width)
+                       if min(a1, b1) - max(a0, b0) >= width
+                       and abs(a1 - b1) <= GUTTER_EDGE_TOLERANCE * height)
+        pieces = [raw]
+        for edge in edges:
+            last = pieces.pop()
+            start = edge - GUTTER_EDGE_TOLERANCE * height
+            right = [c for c in last.chars if c[2].x0 >= start]
+            before = [c for c in last.chars if c[2].x0 < start]
+            words = [i for i, c in enumerate(before) if c[2].get_text().isalnum()]
+            opens = next((c[2] for c in right if not c[2].get_text().isspace()), None)
+            if (not words or opens is None or opens.x0 > edge + GUTTER_EDGE_TOLERANCE * height
+                    or edge - before[words[-1]][2].x1 < GUTTER_CLEAR_IN_LINE * height):
+                pieces.append(last)
+                continue
+            end = words[-1] + 1
+            while end < len(before) and not before[end][2].get_text().isspace():
+                end += 1        # the punctuation closing the last word
+            pieces += [piece for piece in (_part(last, part)
+                                           for part in (before[:end], before[end:], right))
+                       if piece is not None]
+        out += pieces
+    return out
+
+
+def _part(raw: _Raw, chars: list[tuple[int, int, LTChar]]) -> _Raw | None:
+    """The line made of some of `raw`'s characters, which are consecutive in it."""
+    if not chars:
+        return None
+    start, end = chars[0][0], chars[-1][1]
+    text = raw.text[start:end]
+    lead = len(text) - len(text.lstrip())
+    text = text.strip()
+    kept = [(s - start - lead, e - start - lead, char) for s, e, char in chars
+            if start + lead <= s and e <= start + lead + len(text)]
+    if not text or not kept:
+        return None
+    return _Raw(text, kept, (kept[0][2].x0, raw.bbox[1], kept[-1][2].x1, raw.bbox[3]), raw.turn)
+
+
 # A paragraph's first letter set this many times the size of the rest of its line is a drop cap.
 DROP_CAP_SCALE = 1.8
 
@@ -644,7 +740,7 @@ def extract_pages(source: Path, only: set[int] | None = None,
                             bbox=(element.x0, element.y0, element.x1, element.y1),
                         )
                     )
-            raws = _close_drop_caps(_join_split_lines(raws))
+            raws = _close_drop_caps(_join_split_lines(_split_at_gutters(raws)))
             lines = [_finish(raw, index) for raw in raws]
             turns = {id(line): raw.turn for line, raw in zip(lines, raws)}
             yield Page(

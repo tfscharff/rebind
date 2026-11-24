@@ -122,3 +122,29 @@ def test_two_pictures_side_by_side_are_found_left_to_right():
 
     assert len(regions) == 2, regions
     assert regions[0].bbox[0] < regions[1].bbox[0], "the left-hand picture is read first"
+
+
+def test_the_shadow_down_the_spine_of_an_open_book_is_not_a_picture():
+    # Two pages of a book scanned as one sheet: the binding leaves a dark strip down the middle,
+    # from the top edge to the bottom. It reaches only two edges, so the rule for the sheet's own
+    # border let it through, and on seven pages of a real chapter it was announced as a figure --
+    # with whatever line beside it began "Exhibit" as its description.
+    page = _blank_page()
+    _draw(page, (296, 0, 316, PAGE_H))         # the spine, top edge to bottom edge
+    picture = (360, 300, 560, 520)
+    _draw(page, picture)
+
+    regions = _find(page, [])
+
+    assert len(regions) == 1, regions
+    x0, y0, x1, y1 = regions[0].bbox
+    assert 350 < x0 < 370 and 550 < x1 < 570, "the picture, not the binding"
+
+
+def test_a_plate_the_full_height_of_the_sheet_is_still_a_picture():
+    # The guard: reaching the top and the bottom is not enough. A plate printed the full height of
+    # a tightly cropped sheet does too, and it is wide where a spine's shadow is a strip.
+    page = _blank_page()
+    _draw(page, (150, 0, 460, PAGE_H))
+
+    assert len(_find(page, [])) == 1

@@ -23,15 +23,21 @@ from .geometry import _horizontally_overlaps
 # unnumbered "Photograph of the reading room." below a picture is still that picture's caption.
 # What is NOT accepted is ordinary prose that merely happens to sit under an image -- alt text has
 # to be the document's own description of the figure, and a paragraph that follows one is not that.
+#
+# The number is the whole of it -- "Exhibit 7.19", numbered by chapter, is not exhibit 7.
 CAPTION_MARKER_RE = re.compile(
-    r"^(?:fig(?:ure)?s?|plate|chart|graph|diagram|scheme|illus(?:tration)?|image|photo(?:graph)?"
-    r"|exhibit|map|panel)\b\.?\s*(\d+)?",
+    r"^(fig(?:ure)?s?|plate|chart|graph|diagram|scheme|illus(?:tration)?|image|photo(?:graph)?"
+    r"|exhibit|map|panel)\b\.?\s*(\d+(?:\.\d+)*)?",
     re.IGNORECASE)
-# "Figure 3 shows..." is prose that names a figure; a caption never goes on with a verb.
+# The same kind of thing under its different spellings, for matching a label to its caption.
+CAPTION_KINDS = {"figure": "fig", "figs": "fig", "figures": "fig", "illustration": "illus",
+                 "photograph": "photo"}
+# "Figure 3 shows..." and "Fig. 1, which is derived from..." are prose that names a figure; a
+# caption never goes on with a verb or a "which".
 CAPTION_PROSE_VERBS = frozenset(
     "is are was were shows show showed shown illustrates illustrate depicts depict presents present "
     "displays display gives give summarizes summarises compares demonstrates reveals indicates "
-    "represents contains has have can could may will".split())
+    "represents contains has have can could may will which".split())
 CAPTION_MAX_GAP_PT = 20.0
 # How far into the margin beside a figure its caption may sit. Much wider than the gap allowed
 # above or below, for two reasons: a caption set in the outer margin is separated by the margin
@@ -77,19 +83,29 @@ def _is_caption_marker(text: str) -> bool:
     rest = text.strip()[match.end():].split()
     if rest and re.fullmatch(r"\(?[A-Za-z]?\)?[.:]?", rest[0]):
         rest = rest[1:]         # a panel letter: "Figure 3A." / "Fig. 2 (b)"
+    elif rest and rest[0] == ",":
+        rest = rest[1:]         # "Fig. 1, which is derived from..."
     return not (rest and rest[0].lower() in CAPTION_PROSE_VERBS)
 
 
-def _caption_number(text: str) -> str | None:
-    """The figure number a line's caption marker names ("Fig. 8" -> "8").
+def _caption_key(text: str) -> str | None:
+    """Which figure a line's caption marker names: its kind and number ("Fig. 8" and "Figure 8"
+    are both "fig 8").
 
     None when the line is not a caption *or* when it is an unnumbered one ("Photograph of the
-    reading room."). The number's only job is matching a caption to its figure across a page
+    reading room."). The key's only job is matching a caption to its figure across a page
     break, which an unnumbered caption cannot do anyway -- so the two cases are the same answer
     to this question, and `_is_caption_marker` is what asks whether a line is a caption at all.
+
+    The kind is part of it because a paper numbers its schemes, its figures and its plates each
+    from 1: by number alone a reaction scheme labelled "Scheme 1." was described with the caption
+    of Fig. 1, a potential energy diagram two pages on.
     """
     match = CAPTION_MARKER_RE.match(text.strip())
-    return match.group(1) if match and _is_caption_marker(text) else None
+    if match is None or match.group(2) is None or not _is_caption_marker(text):
+        return None
+    kind = match.group(1).lower()
+    return f"{CAPTION_KINDS.get(kind, kind)} {match.group(2)}"
 
 
 def _caption_block(ordered: list[TextLine], used: list | None = None) -> str | None:
@@ -252,7 +268,7 @@ def _side_captions(lines: list[TextLine], bbox: tuple[float, float, float, float
     return out
 
 
-def _nearby_caption_number(lines: list[TextLine],
+def _nearby_caption_key(lines: list[TextLine],
                            bbox: tuple[float, float, float, float]) -> str | None:
     """A more lenient search than _figure_caption: the closest "Fig. N" line within vertical range
     of the figure, WITHOUT requiring horizontal alignment -- used only to identify which figure
@@ -273,14 +289,14 @@ def _nearby_caption_number(lines: list[TextLine],
         if gap <= CAPTION_MAX_GAP_PT:
             candidates.append((gap, ln))
     for _gap, line in sorted(candidates, key=lambda item: item[0]):
-        number = _caption_number(line.text)
-        if number:
-            return number
+        key = _caption_key(line.text)
+        if key:
+            return key
     return None
 
 
 def _document_captions(per_page: list[tuple]) -> dict[str, str]:
-    """Map figure number -> the fullest caption text found ANYWHERE in the document, regardless of
+    """Map figure (`_caption_key`) -> the fullest caption text found ANYWHERE in the document, regardless of
     proximity to any image. Backs the fallback for a multi-part figure whose image sits on one
     page while its real caption sits on another -- confirmed on a real sample: an image with only
     a bare "Fig. 8 (Continued)" nearby (a page-break artifact, no descriptive content), while the
@@ -292,10 +308,10 @@ def _document_captions(per_page: list[tuple]) -> dict[str, str]:
     best: dict[str, str] = {}
     for _src_page, lines, _used_ocr in per_page:
         for i, line in enumerate(lines):
-            number = _caption_number(line.text)
-            if number is None:
+            key = _caption_key(line.text)
+            if key is None:
                 continue
             block = _caption_block(lines[i:])
-            if block and (number not in best or len(block) > len(best[number])):
-                best[number] = block
+            if block and (key not in best or len(block) > len(best[key])):
+                best[key] = block
     return best

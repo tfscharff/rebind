@@ -196,3 +196,53 @@ def test_a_line_broken_at_a_charge_is_put_back_together(tmp_path: Path):
 def test_text_on_one_baseline_has_no_scripts(tmp_path: Path):
     source = born_digital_pdf("<p>Plain words, 1996 and 42 and x-ray.</p>", tmp_path / "p.pdf")
     assert all(not ln.scripts for ln in list(extract_pages(source))[0].lines)
+
+
+def _courier_page(tmp_path: Path, pieces: list[tuple[float, float, str]]) -> Path:
+    """A page of Courier at 10pt -- every character 6pt wide -- with each piece drawn at (x, y)."""
+    def show(x: float, y: float, text: str) -> str:
+        escaped = text.replace("\\", r"\\").replace("(", r"\(").replace(")", r"\)")
+        return f"BT /F1 10 Tf 1 0 0 1 {x} {y} Tm ({escaped}) Tj ET"
+
+    pdf = pikepdf.Pdf.new()
+    page = pikepdf.Dictionary(
+        Type=pikepdf.Name.Page, MediaBox=pikepdf.Array([0, 0, 612, 792]),
+        Resources=pikepdf.Dictionary(Font=pikepdf.Dictionary(F1=pikepdf.Dictionary(
+            Type=pikepdf.Name.Font, Subtype=pikepdf.Name.Type1, BaseFont=pikepdf.Name.Courier))),
+        Contents=pdf.make_stream(" ".join(show(*piece) for piece in pieces).encode("latin-1")))
+    pdf.pages.append(pikepdf.Page(pdf.make_indirect(page)))
+    target = tmp_path / "courier.pdf"
+    pdf.save(target)
+    return target
+
+
+def test_a_line_an_ocr_layer_ran_across_two_columns_is_split_at_the_gutter(tmp_path: Path):
+    # A scan's own OCR layer read the second lines of two captions set side by side as one line,
+    # with the marks it made of the gutter between them: "...near the end of his  ~~  B.C.). The
+    # original of this type was made". Each caption then took the whole line, so Pompey's portrait
+    # was described as "the dictator near the end of his". The lines above and below both leave the
+    # gutter clear, and nothing of the line but those marks is in it.
+    source = _courier_page(tmp_path, [
+        (100, 700, "Fig. 5. C. Julius Caesar."), (316, 700, "Fig. 6. Cn. Pompeius (106-48"),
+        (100, 688, "Portrait of the dictator, late  ~~  B.C.). The original was made"),
+        (100, 676, "in life."), (316, 676, "about 55 B.C."),
+    ])
+    lines = list(extract_pages(source))[0].lines
+    texts = [ln.text for ln in lines]
+
+    assert "Portrait of the dictator, late" in texts, texts
+    assert "B.C.). The original was made" in texts, texts
+    right = next(ln for ln in lines if ln.text.startswith("B.C.)."))
+    assert abs(right.bbox[0] - 316) < 1, right.bbox
+
+
+def test_a_line_printed_across_both_columns_is_left_whole(tmp_path: Path):
+    # The guard: a heading over two columns has columns above and below it too, but its own words
+    # run through the gutter.
+    heading = "A heading set across the full width of both of the columns"
+    source = _courier_page(tmp_path, [
+        (100, 700, "The left column, one line."), (316, 700, "The right column, one line."),
+        (100, 688, heading),
+        (100, 676, "The left column again."), (316, 676, "The right column again."),
+    ])
+    assert heading in [ln.text for ln in list(extract_pages(source))[0].lines]
