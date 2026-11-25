@@ -22,7 +22,7 @@ quotes, marginalia, OCR, and image restoration. Only the column-block region typ
 Layout analysis and reading order operate on *positioned text regions*, which both the born-digital
 and scanned branches produce. The born-digital spine already emits positioned lines and already
 *flags* multi-column pages without reconstructing them, so this slice needs no CV or OCR stack, is
-testable against samples we hold today (the 1905 Wheaton Bulletin is multi-column; the Bullock
+testable against samples we hold today (the 1905 Wheaton Bulletin is multi-column; a sample
 thesis is a real long single-column document), and immediately upgrades the shipping output. It also
 builds the reading-order interface that OCR will plug into, satisfying the governing design's
 principle of designing interfaces against something real.

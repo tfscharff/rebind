@@ -302,7 +302,7 @@ Azure Artifact Signing (~$9.99/month) as the fallback. See ADR 0004.
 | PDF/UA generation from HTML has unacceptable Windows bundling cost | High | Spike first, before any pipeline work |
 | Reading order on complex layouts is worse than hoped | High | Flag aggressively; measure honestly; it is the primary research problem |
 | Confidence scores are not well calibrated | High | Measure flag precision/recall early; recalibrate per stage |
-| Institutional endpoint protection blocks the installer outright on managed library machines | High | Not mitigable by Rebind alone if it occurs — the remedy lies with the institution's IT. Test on a real managed machine early, via Allie at Wheaton, before the installer design is settled (ADR 0004) |
+| Institutional endpoint protection blocks the installer outright on managed library machines | High | Not mitigable by Rebind alone if it occurs — the remedy lies with the institution's IT. Test on a real managed machine early, via a colleague at Wheaton, before the installer design is settled (ADR 0004) |
 | Unsigned binary triggers SmartScreen warnings that read as "this is malware" to a librarian | Medium | No option grants instant trust, so treat as a documentation problem: say exactly what warning appears and what to click. Pursue free OSS signing via SignPath Foundation once a CI-built release exists (ADR 0004) |
 | Installer engineering consumes the schedule | Medium | Spike packaging early with a trivial payload |
 | Math/chemistry recognizers underperform on degraded input | Medium | Round-trip verification catches failures; flags absorb them |
