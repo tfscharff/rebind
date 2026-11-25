@@ -245,6 +245,69 @@ def test_a_report_fix_is_applied_and_survives_a_later_rebuild(tmp_path: Path):
         assert str(pdf.open_metadata()["dc:title"]) == "A Better Title"
 
 
+def test_an_empty_upload_is_refused_with_a_message():
+    response = TestClient(create_app()).post("/convert?filename=in.pdf", content=b"")
+
+    assert response.status_code == 400
+    assert "No file was received" in response.json()["error"]
+
+
+def test_a_file_that_is_not_a_pdf_ends_in_an_error_the_page_can_show(tmp_path: Path):
+    # The worker thread must turn any failure into a job error; a job left "running" forever is a
+    # spinner the librarian can only close.
+    client = TestClient(create_app())
+    job_id = client.post("/convert?filename=notes.pdf",
+                         content=b"Just some text with a .pdf name.").json()["job_id"]
+
+    status = _run(client, job_id)
+    assert status["status"] == "error"
+    assert status["error"]
+    assert client.get(f"/jobs/{job_id}/pdf").status_code == 404
+
+
+def test_an_unknown_job_is_not_found_on_every_route():
+    client = TestClient(create_app())
+
+    assert client.get("/jobs/nope").status_code == 404
+    assert client.get("/jobs/nope/elements").status_code == 404
+    assert client.post("/jobs/nope/edits", json={}).status_code == 404
+    assert client.post("/jobs/nope/fix", json={"fix": "set-title", "value": "T"}).status_code == 404
+    assert client.get("/jobs/nope/pages/1").status_code == 404
+    assert client.get("/jobs/nope/pdf").status_code == 404
+
+
+def test_a_blank_language_is_refused_and_a_missing_page_is_not_found(tmp_path: Path):
+    source = born_digital_pdf("<h1>Title</h1><p>Body text.</p>", tmp_path / "in.pdf")
+    client = TestClient(create_app())
+    job_id = client.post("/convert?filename=in.pdf", content=source.read_bytes()).json()["job_id"]
+    assert _run(client, job_id)["status"] == "done"
+
+    response = client.post(f"/jobs/{job_id}/fix", json={"fix": "set-language", "value": "  "})
+    assert response.status_code == 400
+    assert client.get(f"/jobs/{job_id}/pages/99").status_code == 404
+    assert client.get(f"/jobs/{job_id}").json()["status"] == "done"   # nothing was re-run
+
+
+def test_uploading_a_result_opens_the_editor_with_its_saved_corrections(tmp_path: Path):
+    # What the README promises: "If you open a downloaded file in Rebind later, your corrections
+    # are still there."
+    source = born_digital_pdf("<h1>Title</h1><p>First paragraph.</p><p>Second paragraph.</p>",
+                              tmp_path / "in.pdf")
+    client = TestClient(create_app())
+    job_id = client.post("/convert?filename=in.pdf", content=source.read_bytes()).json()["job_id"]
+    assert _run(client, job_id)["status"] == "done"
+    first = client.get(f"/jobs/{job_id}/elements").json()["elements"][1]["id"]
+    client.post(f"/jobs/{job_id}/edits", json={"tags": {first: "H2"}})
+    assert _run(client, job_id)["status"] == "done"
+    downloaded = client.get(f"/jobs/{job_id}/pdf").content
+
+    again = client.post("/convert?filename=in.accessible.pdf", content=downloaded).json()["job_id"]
+    assert _run(client, again)["status"] == "done"
+    body = client.get(f"/jobs/{again}/elements").json()
+    assert body["edits"]["tags"] == {first: "H2"}
+    assert [e["kind"] for e in body["elements"]] == ["H1", "H2", "P"]
+
+
 def test_working_copies_from_earlier_sessions_are_cleared(tmp_path, monkeypatch):
     # Nothing ever removed them: every document opened stayed in the temp folder, whole.
     import os
