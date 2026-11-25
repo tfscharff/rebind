@@ -181,6 +181,63 @@ def test_every_correction_survives_uploading_the_result(tmp_path):
     assert saved_corrections(tmp_path / "again.pdf")["edits"]["tags"] == edits.tags
 
 
+def _with_saved(path, corrections) -> None:
+    """A one-page PDF whose /Root /PieceInfo /Rebind holds `corrections` as its saved string, or
+    no /PieceInfo at all for None -- what any file can claim, written by Rebind or not."""
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(612, 792))
+    if corrections is not None:
+        pdf.Root.PieceInfo = Dictionary({"/Rebind": Dictionary(
+            LastModified=String("D:20260101000000Z"),
+            Private=Dictionary(Corrections=String(corrections)))})
+    pdf.save(path)
+
+
+@pytest.mark.parametrize("corrections", [
+    None,                       # an ordinary PDF
+    "{not json",                # damaged
+    '["a", "list"]',            # well-formed JSON that is not a payload
+    '"a string"',
+])
+def test_saved_corrections_that_do_not_read_are_none(tmp_path, corrections):
+    from rebind.existing import saved_corrections
+
+    _with_saved(tmp_path / "in.pdf", corrections)
+    assert saved_corrections(tmp_path / "in.pdf") is None
+
+
+def test_saved_corrections_of_a_file_that_is_not_a_pdf_are_none(tmp_path):
+    from rebind.existing import saved_corrections
+
+    (tmp_path / "in.pdf").write_bytes(b"this is not a PDF")
+    assert saved_corrections(tmp_path / "in.pdf") is None
+    assert saved_corrections(tmp_path / "missing.pdf") is None
+
+
+def test_saved_corrections_read_back_what_was_saved(tmp_path):
+    from rebind.existing import save_corrections, saved_corrections
+
+    payload = {"edits": Edits(tags={"p1n0": "H2"}, alts={"p1f0": "Ünïcödé — alt"}).to_payload()}
+    pdf = pikepdf.new()
+    pdf.add_blank_page(page_size=(612, 792))
+    save_corrections(pdf, payload)
+    pdf.save(tmp_path / "saved.pdf")
+    assert saved_corrections(tmp_path / "saved.pdf") == payload
+
+
+def test_a_file_with_damaged_saved_corrections_still_converts(tmp_path):
+    # A damaged payload must cost the person their old corrections, never the conversion.
+    source = born_digital_pdf("<h1>Title</h1><p>Body text of the document.</p>",
+                              tmp_path / "plain.pdf")
+    with pikepdf.open(source) as pdf:
+        pdf.Root.PieceInfo = Dictionary({"/Rebind": Dictionary(
+            Private=Dictionary(Corrections=String("{not json")))})
+        pdf.save(tmp_path / "in.pdf")
+
+    result = remediate(tmp_path / "in.pdf", tmp_path / "out.pdf")
+    assert [e["kind"] for e in result.elements] == ["H1", "P"]
+
+
 def test_a_page_redrawn_from_a_picture_comes_back_as_it_was(tmp_path, verapdf_exe):
     from rebind.validate import validate_pdf_ua
 

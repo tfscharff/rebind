@@ -53,6 +53,54 @@ def test_missing_source_is_reported_cleanly(tmp_path: Path, capsys):
     assert "nope.pdf" in capsys.readouterr().err
 
 
+def _no_download(monkeypatch):
+    monkeypatch.setattr("rebind.weights.ensure_weights", lambda report=None: True)
+
+
+def test_a_missing_command_is_a_usage_error(capsys):
+    import pytest
+
+    with pytest.raises(SystemExit) as stopped:
+        main([])
+    assert stopped.value.code == 2
+    assert "usage: rebind" in capsys.readouterr().err
+
+
+def test_title_and_language_reach_the_pdf(tmp_path: Path, monkeypatch):
+    _no_download(monkeypatch)
+    source = born_digital_pdf("<h1>T</h1><p>body</p>", tmp_path / "in.pdf")
+    target = tmp_path / "out.pdf"
+
+    assert main(["convert", str(source), str(target), "--title", "Course Catalog",
+                 "--lang", "fr"]) == 0
+    with pikepdf.open(target) as pdf:
+        assert str(pdf.Root.Lang) == "fr"
+        assert str(pdf.open_metadata()["dc:title"]) == "Course Catalog"
+
+
+def test_a_password_protected_pdf_is_an_error_not_a_crash(tmp_path: Path, capsys, monkeypatch):
+    # Interlibrary-loan files do arrive locked. Rebind has no way to ask for the password.
+    _no_download(monkeypatch)
+    source = born_digital_pdf("<h1>T</h1><p>body</p>", tmp_path / "plain.pdf")
+    with pikepdf.open(source) as pdf:
+        pdf.save(tmp_path / "locked.pdf",
+                 encryption=pikepdf.Encryption(user="secret", owner="secret"))
+
+    code = main(["convert", str(tmp_path / "locked.pdf"), str(tmp_path / "out.pdf")])
+
+    err = capsys.readouterr().err
+    assert code == 1
+    assert err.startswith("error:")
+    assert "Traceback" not in err
+    assert "invalid password" in err
+    # CURRENT BEHAVIOUR (suspected bug): `extract_pages` turns an encrypted PDF into an
+    # ExtractionError that says so plainly, but `existing.existing_descriptions` opens the file with
+    # pikepdf first and its PasswordError escapes as an unknown failure, so a locked file -- an
+    # expected case -- is reported as "unexpected and worth reporting".
+    assert "unexpected and worth reporting" in err
+    assert not (tmp_path / "out.pdf").exists()
+
+
 def test_unexpected_exception_is_reported_not_raised(tmp_path: Path, capsys, monkeypatch):
     source = born_digital_pdf("<h1>T</h1><p>body</p>", tmp_path / "in.pdf")
 

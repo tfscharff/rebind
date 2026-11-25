@@ -880,6 +880,48 @@ def test_edits_accepts_only_well_formed_frames():
     assert edits.frames == {"p1n0": (10.0, 20.0, 30.0, 5.0)}
 
 
+def test_edits_rejects_frames_that_are_not_finite_or_have_no_area():
+    # JSON from the editor (or from a file's saved corrections) can carry NaN or Infinity, which
+    # Python's json reads as floats. A frame built from one would hold no line, or every line.
+    from rebind.edits import Edits
+
+    edits = Edits.from_payload({"frames": {
+        "p1n0": [float("nan"), 1, 1, 1], "p1n1": [1, 1, float("inf"), 1],
+        "p1n2": [1, 1, 0, 5], "p1n3": [1, 1, 5, 0], "p1n4": None, "p1n5": "1,2,3,4",
+        "p1n6": ["1.5", "2", "3", "4"]}})
+    assert edits.frames == {"p1n6": (1.5, 2.0, 3.0, 4.0)}
+
+
+def test_edits_from_an_empty_or_missing_payload_is_no_corrections():
+    from rebind.edits import Edits
+
+    for payload in (None, {}, {"tags": None, "removed": None, "alts": None, "frames": None,
+                               "after": None}):
+        assert Edits.from_payload(payload) == Edits()
+
+
+def test_a_blank_description_is_no_description():
+    # A figure is promoted to /Figure by its description; one that is only whitespace would make a
+    # /Figure whose /Alt says nothing, which is worse than leaving it decorative.
+    from rebind.edits import Edits
+
+    edits = Edits.from_payload({"alts": {"p1f0": "  A map of the campus.  ", "p1f1": "   ",
+                                         "p1f2": ""}})
+    assert edits.alts == {"p1f0": "A map of the campus."}
+
+
+def test_corrections_survive_the_round_trip_through_the_editor_form():
+    # `to_payload` is what is saved into the file and sent to the editor; `from_payload` reads it
+    # back on the next upload. Anything lost here is a correction the person has to make again.
+    from rebind.edits import Edits
+
+    edits = Edits(tags={"p1n0": "H2", "p2n3r0": "TH"}, removed={"p1n4", "p1n2"},
+                  alts={"p1f0": "A chart."}, frames={"p1a0": (10.0, 20.0, 30.0, 5.0)},
+                  after={"p1a0": "p1n0"})
+    assert Edits.from_payload(edits.to_payload()) == edits
+    assert edits.to_payload()["removed"] == ["p1n2", "p1n4"]
+
+
 def test_a_container_saved_by_an_earlier_version_reads_as_a_paragraph():
     # Containers are no longer offered: a screen reader announces one as nothing, so a /Div or a
     # /Sect holding a paragraph always sounded like the paragraph. A file saved with one opens.
