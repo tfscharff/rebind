@@ -175,7 +175,7 @@ def _tagged_text_stream(lines: list[TextLine], font: OverlayFont, mcids: list[in
     A line with an MCID is wrapped in `/P <</MCID n>> BDC ... EMC` so the structure tree can point
     at it. A line with `None` is wrapped in `/Artifact BMC ... EMC` instead: page furniture -- a
     running header, a footer, a folio -- which PDF/UA requires be marked as an artifact rather than
-    tagged as content, so a screen reader does not announce "Makoto Kamei et al., 34" in the middle
+    tagged as content, so a screen reader does not announce "Author et al., 34" in the middle
     of the prose on every single page. The text is still drawn, so it stays selectable and
     searchable; it simply is not part of the document's content.
 
